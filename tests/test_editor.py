@@ -30,6 +30,22 @@ class Editor(unittest.TestCase):
     self.assertLess(pixel[1 if present else 0],40)
    r=self.c.post(f'/api/jobs/{ident}/export',json=dict(start=0,end=5,title='',subtitles='',logo=logo,logo_start=2,logo_end=8))
    self.assertEqual(r.status_code,400)
+ def test_full_width_logo_and_title_visible_after_six_seconds(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   folder=Path(tmp);source=folder/'source.mp4'
+   command(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=c=lime:size=320x180:rate=1','-t','10','-c:v','libx264',str(source)])
+   ident=self.upload(source)
+   raw=io.BytesIO();Image.new('RGBA',(100,10),(255,0,0,255)).save(raw,format='PNG')
+   logo=self.c.post('/api/logos/custom',files={'file':('wide.png',raw.getvalue(),'image/png')}).json()['id']
+   r=self.c.post(f'/api/jobs/{ident}/export',json=dict(start=0,end=10,title='Una sorpresa inesperada',subtitles='',title_x=50,title_y=50,logo=logo,logo_width=100,logo_x=0,logo_y=0))
+   self.assertEqual(r.status_code,200,r.text)
+   output=folder/'out.mp4';output.write_bytes(r.content)
+   frame=folder/'late.png';command(['ffmpeg','-v','error','-y','-ss','8','-i',str(output),'-frames:v','1',str(frame)])
+   im=Image.open(frame).convert('RGB')
+   self.assertGreater(im.getpixel((1000,20))[0],200)
+   self.assertLess(im.getpixel((1000,20))[1],40)
+   white=sum(1 for r,g,b in im.crop((100,850,980,1070)).getdata() if min(r,g,b)>220)
+   self.assertGreater(white,1000,'Title background must still be visible after 6 seconds')
  def test_duration_is_enforced_on_export(self):
   with tempfile.TemporaryDirectory() as tmp:
    source=Path(tmp)/'source.mp4'
@@ -54,7 +70,7 @@ class Editor(unittest.TestCase):
    self.assertIn('&H00FF0000',text)
    title_line=next(line for line in text.splitlines() if ',Title,,' in line)
    self.assertLessEqual(title_line.count(r'\N'),1)
-   self.assertIn('0:00:06.00',title_line)
+   self.assertIn('0:00:20.00',title_line)
  def test_clip_relative_captions_progress_through_middle_of_video(self):
   transcript=[dict(start=100,end=140,text=' '.join(str(i) for i in range(40)),words=[dict(start=100+i,end=100+i+.45,text=str(i)) for i in range(40)])]
   cues=make_cues(transcript,110,130)

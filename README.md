@@ -37,9 +37,9 @@ Los videos y trabajos se recuperan tras reiniciar desde **Reutilizar un video gu
 - Carga un video de hasta **120 minutos / 12 GB**.
 - Escribe el contexto de ese video, identifica al hablante si lo conoces y elige el rango de duración.
 - Guarda criterios y ejemplos de tu canal si quieres orientar el estilo editorial.
-- El analista evalúa el contexto y compara posibles historias, exige evidencia literal, puntúa gancho, remate, novedad, emoción y conversación. Selecciona sin solapamientos, reduce duplicados, limita la cobertura y puede devolver cero clips. Luego revisa los límites y redacta títulos específicos.
+- El analista evalúa el contexto y compara posibles historias, exige evidencia literal, puntúa gancho, remate, novedad, emoción y conversación. Identifica los destacados y completa al menos el 75% de los segundos únicos del video con clips para revisar. La cantidad se calcula automáticamente, respetando el rango. Todos reciben títulos; Mayor potencial distingue los destacados. Puede haber solapamientos en los bordes para respetar el mínimo, pero no cuentan doble en la cobertura. Un video más corto que el mínimo requiere reducir ese mínimo.
 - En el editor, cambia entre **Título, Subtítulos, Logo y Encuadre**. La descarga queda visible en escritorio. Arrastra las capas o usa sus controles de posición/tamaño.
-- Los títulos automáticos tienen hasta 64 caracteres y 10 palabras. Los manuales aceptan hasta 96 caracteres y se ajustan a un máximo de dos líneas. Fondo blanco y texto negro; aparecen los primeros seis segundos.
+- Los títulos automáticos tienen hasta 64 caracteres y 10 palabras. Los manuales aceptan hasta 96 caracteres y se ajustan a un máximo de dos líneas. Fondo blanco y texto negro; permanecen durante todo el clip.
 - Los subtítulos comparten la misma lista de frases con tiempos relativos al clip en la vista previa y el MP4. Se dividen en frases cortas, respetan silencios y permiten editar texto y tiempos. Si cambias mucho la transcripción, revisa el ajuste de las palabras nuevas.
 - Carga cualquier logo PNG/JPG/WebP de hasta 5 MB. Ajusta ancho, posición y segundos de aparición, por ejemplo 2→final o 10→20. El PNG transparente es preferible. Las opciones Kick/Roobet/Rainbet requieren tus archivos; no se incluyen logos oficiales.
 - Las fuentes Montserrat, Poppins, Anton, Bebas Neue, Oswald y Barlow Condensed están incluidas con sus licencias SIL OFL. Título y subtítulos tienen fuentes independientes. Los contornos de título y subtítulos admiten color y grosor; el título conserva el fondo blanco.
@@ -83,3 +83,5 @@ La IA analiza texto y contexto proporcionado: no interpreta gestos visuales ni c
 ## Actualizar sin perder tus datos
 
 Cierra la app con Ctrl+C. Conserva tu carpeta anterior. Descarga el ZIP nuevo en una carpeta nueva y ejecuta INICIAR_WINDOWS.bat. Si necesitas conservar logos/modelos, copia la carpeta `data` anterior a la nueva con la app cerrada. No copies la `.venv` antigua: el iniciador instalará el entorno adecuado.
+
+Los logos pueden ocupar del 5% al 100% del ancho, conservando su proporción y una altura máxima del 75% del cuadro. La generación de títulos para más clips requiere más inferencias; no se garantiza una duración fija.

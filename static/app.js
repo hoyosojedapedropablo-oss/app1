@@ -27,7 +27,7 @@ function paint(){
 function paintTime(){
  const t=$('video').currentTime-Number($('start').value),duration=Number($('end').value)-Number($('start').value);
  const editing=$('video').paused&&$('editLayers').checked&&selected;const active=cues.find(c=>t>=c.start&&t<c.end);$('previewCaption').textContent=active?.text||(editing?cues[0]?.text||'Subtítulos de ejemplo':'');
- $('previewTitle').hidden=!selected||!$('title').value||(!editing&&(t<0||t>=Math.min(6,duration)));
+ $('previewTitle').hidden=!selected||!$('title').value||(!editing&&(t<0||t>=duration));
  $('seek').value=Math.max(0,t);$('clock').textContent=`${Math.max(0,t).toFixed(1)} / ${Math.max(0,duration).toFixed(1)} s`;
  const logoEnd=$('logo_end').value?Number($('logo_end').value):duration;$('previewLogo').hidden=!selected||$('logo').value==='none'||(!editing&&(t<Number($('logo_start').value)||t>=logoEnd));
  if(selected&&$('video').currentTime>=Number($('end').value)&&!$('video').paused){$('video').pause();$('play').textContent='▶ Reproducir clip';}
@@ -82,9 +82,9 @@ async function poll(token,jobId){
  setTimeout(()=>poll(token,jobId),1500);
 }
 function render(){
- $('clips').replaceChildren();$('empty').textContent=job.clips.length?`${job.clips.length} momentos · rango ${job.analysis_range.minimum}–${job.analysis_range.maximum} s · selecciona uno para revisar`:'El analista no encontró momentos suficientemente fuertes dentro del rango. No se generan clips de relleno.';
+ $('clips').replaceChildren();$('empty').textContent=job.clips.length?`${job.clips.length} momentos · rango ${job.analysis_range.minimum}–${job.analysis_range.maximum} s · selecciona uno para revisar`:'Aún no hay clips. Analiza el video para completar su cobertura.';
  for(const c of job.clips){const el=document.createElement('article');el.className='clip';el.dataset.id=c.id;
- const score=document.createElement('div');score.className='score';score.textContent=`${c.category} · evaluación editorial ${c.score}/100`;
+ const score=document.createElement('div');score.className='score';score.textContent=`${c.potential?'★ Mayor potencial':c.potential===false?'Para revisar':c.category}${c.score!=null?' · '+c.score+'/100':''}`;
  const h=document.createElement('h3');h.textContent=c.title;const times=document.createElement('p');times.textContent=`${c.start.toFixed(1)}–${c.end.toFixed(1)} s · ${(c.end-c.start).toFixed(1)} segundos`;
  const reason=document.createElement('p');reason.textContent=c.reason;el.append(score,h,times,reason);el.onclick=()=>choose(c);$('clips').append(el);}
  $('all').classList.toggle('hidden',!job.clips.length);if(job.clips.length)choose(job.clips[0]);

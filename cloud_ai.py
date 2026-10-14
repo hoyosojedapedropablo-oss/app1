@@ -37,6 +37,7 @@ def complete(payload,transport=None,cancel=None):
     if not token:raise ValueError('Falta conectar la clave de API.')
     # Only transcript/context go to the API. No file paths, video bytes or credentials enter the prompt.
     body={'model':MODEL,'messages':[{'role':'system','content':SYSTEM+' Usa exclusivamente IDs de frases existentes. Respeta los segundos mínimo/máximo. Cada propuesta debe incluir first, last, category, hook, payoff, novelty, emotion, discussion, coherent, reason, evidence y titles. Devuelve {"moments": [...]} con hasta 4 propuestas; para relleno devuelve {"moments": []}. Escribe títulos específicos con el tema concreto.'},{'role':'user','content':json.dumps(payload,ensure_ascii=False)}],'response_format':{'type':'json_object'},'temperature':.2,'max_tokens':1500}
+    if payload.get('task')=='coverage_titles':body['messages'][0]['content']=SYSTEM+' En esta tarea genera títulos para todos los clips, sin seleccionar ni puntuar. Sigue el esquema clips/id/titles del usuario.'
     try:
         with httpx.Client(timeout=httpx.Timeout(90,connect=10),transport=transport) as client:
             response=client.post('https://api.openai.com/v1/chat/completions',headers={'Authorization':f'Bearer {token}'},json=body)

@@ -45,11 +45,13 @@ def unload(transport=None):
 def complete(payload,transport=None,cancel=None):
     from intelligence import SYSTEM,Proposals
     if cancel and cancel.is_set():raise AnalysisCancelled()
-    schema=Proposals.model_json_schema()
+    from coverage import TitleBatch
+    schema=(TitleBatch if payload.get('task')=='coverage_titles' else Proposals).model_json_schema()
     count=len(payload.get('frases',[]))
     if count:
         for name in ['first','last']:schema['$defs']['Moment']['properties'][name].update(minimum=0,maximum=count-1)
     body={'model':MODEL,'messages':[{'role':'system','content':SYSTEM+' En este modo first y last son IDs inclusivos de frases. Respeta el rango. Devuelve {"moments": [...]} con hasta tres propuestas; cada una incluye first,last,category,hook,payoff,novelty,emotion,discussion,coherent,reason,evidence,titles. reason y evidence deben ser breves. No copies la transcripción como título.'},{'role':'user','content':json.dumps(payload,ensure_ascii=False)}],'format':schema,'stream':True,'keep_alive':'10m','options':{'num_ctx':8192,'num_predict':1500,'temperature':.2}}
+    if payload.get('task')=='coverage_titles':body['messages'][0]['content']=SYSTEM+' En esta tarea genera títulos para todos los clips, sin seleccionar ni puntuar. Devuelve clips/id/titles.'
     try:
         parts=[];data={}
         with client(transport,timeout=180) as conn:

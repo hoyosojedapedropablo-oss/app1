@@ -130,7 +130,13 @@ def analyze(ident,options):
    clips=gpu_ai.select_gpu(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,max_clips=options.max_clips,on_progress=progress,cancel=event,diagnostics=job['selection_diagnostics'])
   else:
    clips=select_clips(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,quality=options.quality,max_clips=options.max_clips,on_progress=progress)
-  message=f'{len(clips)} momentos seleccionados. Las puntuaciones son evaluaciones editoriales, no probabilidades de viralidad.' if clips else 'La selección quedó vacía tras la revisión. Esto no demuestra que el video no tenga potencial. Revisa la transcripción y añade contexto para volver a analizar sin transcribir de nuevo.'
+  from coverage import complete_coverage,covered,TitleBatch
+  completion=gpu_ai.complete if options.engine=='gpu' else cloud_ai.complete if options.engine=='cloud' else lambda payload,**kwargs: __import__('intelligence').query_json(json.dumps(payload,ensure_ascii=False),TitleBatch.model_json_schema(),options.quality)
+  job.update(progress=98,message='Completando cobertura del 75% y títulos de todos los clips…')
+  def title_progress(done,total,stage):job.update(progress=98+round(done/max(1,total)),message=f'Títulos de clips para revisar · {done} de {total}')
+  clips=complete_coverage(clips,transcript,job['duration'],options.minimum,options.maximum,completion,speaker=options.speaker,context=options.context,profile=profile,cancel=event,on_progress=title_progress)
+  job['coverage_percent']=round(100*covered(clips)/job['duration'],2)
+  message=f'{len(clips)} clips · cobertura {job["coverage_percent"]}% del video. Mayor potencial identifica los destacados; el resto queda para tu revisión.' if clips else 'La selección quedó vacía tras la revisión. Esto no demuestra que el video no tenga potencial. Revisa la transcripción y añade contexto para volver a analizar sin transcribir de nuevo.'
   job.update(status='ready',progress=100,clips=clips,message=message)
  except cloud_ai.AnalysisCancelled:job.update(status='cancelled',message='Análisis cancelado. Puedes reutilizar la transcripción completa si ya se guardó.')
  except Exception as e: job.update(status='error',message=str(e))
@@ -278,7 +284,7 @@ class Export(BaseModel):
  clip_id:str|None=None
  captions:list[Caption]|None=Field(default=None,max_length=1000)
  logo:str='none'
- logo_width:int=Field(default=16,ge=5,le=45)
+ logo_width:int=Field(default=16,ge=5,le=100)
  logo_x:float=Field(default=90,ge=0,le=100)
  logo_y:float=Field(default=8,ge=0,le=100)
  logo_start:float=Field(default=0,ge=0)
@@ -337,8 +343,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   x=opts.title_x*10.8-width/2;y=opts.title_y*19.2-height/2
   box_tag=r'{\an7\pos('+f'{x:.1f},{y:.1f}'+r')\p1}'
   rectangle=f'm 0 0 l {width:.1f} 0 l {width:.1f} {height:.1f} l 0 {height:.1f}'
-  events.append(f'Dialogue: 1,0:00:00.00,{stamp(min(duration,6))},TitleBox,,0,0,0,,{box_tag}{rectangle}')
-  events.append(f'Dialogue: 2,0:00:00.00,{stamp(min(duration,6))},Title,,0,0,0,,{title_pos}{safe(title)}')
+  events.append(f'Dialogue: 1,0:00:00.00,{stamp(duration)},TitleBox,,0,0,0,,{box_tag}{rectangle}')
+  events.append(f'Dialogue: 2,0:00:00.00,{stamp(duration)},Title,,0,0,0,,{title_pos}{safe(title)}')
  for cue in caption_cues(opts,transcript or []):
   caption,point=title_layout(cue['text'],font,opts.caption_size)
   size_tag=r'{\fs'+str(point)+'}'

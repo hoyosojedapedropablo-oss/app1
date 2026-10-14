@@ -40,7 +40,7 @@ Hay cuatro pestanas: Titulo, Subtitulos, Logo y Encuadre.
 Puedes arrastrar las capas en el video, cambiar posicion y tamano,
 fuentes, colores y contorno de subtitulos. La descarga siempre esta abajo.
 Al reproducir se respetan los tiempos; Ver capas al editar permite acomodarlas en pausa.
-Los titulos aparecen los primeros 6 segundos y no superan dos lineas al exportar.
+Los titulos permanecen durante todo el clip y no superan dos lineas al exportar.
 
 LOGOS
 En Logo, abre Cargar desde mis archivos. Usa PNG transparente si puedes.
@@ -55,3 +55,7 @@ con ambas apps cerradas. No copies la .venv anterior.
 
 Cierra con Ctrl+C en la ventana negra. No publiques este servidor en Internet:
 esta version personal no tiene login.
+
+Cobertura fija: al menos 75% del video, sin contar dos veces solapamientos.
+La cantidad de clips se calcula segun el rango. Todos tienen titulos; Mayor potencial marca los destacados. Logos: ancho hasta 100%.
+Al actualizar conserva data y .venv, y copia tambien coverage.py.
