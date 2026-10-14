@@ -1,6 +1,6 @@
-# Clip Studio · Editor 2.1
+# Clip Studio · Editor 2.2 · GPU
 
-Aplicación personal para transformar videos largos en clips verticales. FastAPI, FFmpeg, Whisper para transcripción y análisis editorial en nube (OpenAI) o local (Qwen2.5). El modo rápido requiere clave de API y saldo.
+Aplicación personal para transformar videos largos en clips verticales. FastAPI, FFmpeg, Whisper para transcripción y análisis editorial local con GPU (Ollama/Qwen2.5), CPU opcional o API en nube. El modo GPU no requiere una clave ni genera cargos de API.
 
 ## Windows
 
@@ -8,13 +8,29 @@ Aplicación personal para transformar videos largos en clips verticales. FastAPI
 2. Extrae el ZIP de este repositorio y ejecuta **INICIAR_WINDOWS.bat**.
 3. Deja abierta la ventana de comandos. El navegador se abre cuando el servidor responde.
 
-El inicio normal no instala ni descarga un modelo editorial local. Para el modo rápido abre **Configurar IA rápida**, introduce tu clave en la app y verifica la conexión. ChatGPT Plus no incluye saldo de API. La clave introducida queda únicamente en memoria y hay que volver a conectarla tras cerrar la app. También se admite la variable `CLIP_AI_KEY` (o una `OPENAI_API_KEY` existente) del proceso.
+### GPU local en Windows (RTX 5060 Ti / 8 GB)
 
-En modo nube se envían únicamente la transcripción y el contexto a OpenAI, usando `gpt-4.1-mini`. El video, la transcripción de audio con Whisper y las exportaciones siguen en tu equipo. Los bloques de texto de unos seis minutos se procesan con hasta tres solicitudes concurrentes, sin repetir 16 versiones del mismo texto en cada solicitud ni añadir una segunda pasada editorial por cada clip. Cada solicitud tiene tiempos de espera limitados y no reintenta automáticamente cobros. La velocidad real necesita medirse con tu conexión y cuenta; no se garantiza una duración fija. La transcripción local y la exportación aún dependen de tu hardware.
+1. Mantén actualizado el driver NVIDIA.
+2. Ejecuta **INSTALAR_GPU_WINDOWS.bat**. Instala Ollama y descarga `qwen2.5:7b` (~4,7 GB). El ayudante verifica memoria GPU usada por el modelo: tener instalado Ollama no basta.
+3. Opcional, para acelerar también la transcripción: ejecuta **INSTALAR_TRANSCRIPCION_GPU_WINDOWS.bat**. Instala PyTorch CUDA 12.8 (2.7 o posterior) y openai-whisper, y realiza una operación real en CUDA. Descarga varios GB una sola vez.
+4. Ejecuta **INICIAR_WINDOWS.bat**, elige **Local GPU**, y pulsa **Comprobar GPU**. Debe indicar GPU activa y memoria asignada.
+5. Activa **Transcribir también con GPU** si instalaste ese componente. Cuando ya existe una transcripción completa se reutiliza sin repetir el audio.
 
-Para modo local ejecuta **INSTALAR_IA_LOCAL.bat** una vez. Preciso descarga Qwen 7B (~4,68 GB), requiere aproximadamente 16 GB de RAM y puede ser muy lento en CPU. Ligero descarga Qwen 3B (~1,93 GB), con menor precisión. Ambos conservan revisión y SHA-256 fijados. La transcripción usa Whisper small (~460 MB) y reutiliza transcripciones completas guardadas.
+La documentación oficial de [Ollama v0.12 sobre GPUs](https://github.com/ollama/ollama/blob/v0.12.0/docs/gpu.md) enumera la RTX 5060 Ti. Se usa Ollama actualizado, no el antiguo wheel CPU de llama-cpp-python. El modelo se guarda normalmente en `%USERPROFILE%\.ollama\models`; no se copia automáticamente desde los GGUF del motor CPU anterior. Los pesos PyTorch Whisper están en `data/models/whisper-torch` y se verifican con el mecanismo original de Whisper.
 
-Puedes cancelar el análisis en nube; una solicitud ya enviada puede terminar y consumir saldo aunque canceles. Para detener inmediatamente el modelo local, cierra su ventana de comandos. Los videos se recuperan tras reiniciar desde **Reutilizar un video guardado**. Copia tu carpeta `data` anterior al actualizar para conservar el video y su transcripción y evitar repetir trabajo.
+Ollama atiende únicamente la conexión local `127.0.0.1:11434` de esta app. Los textos no se envían a OpenAI en este modo. Se procesa un bloque por vez para evitar varias copias del contexto en una tarjeta de 8 GB. Las respuestas se leen en streaming para cerrar la solicitud al cancelar. Si el modelo solo está en CPU, la comprobación devuelve un error en lugar de iniciar silenciosamente otro análisis lento.
+
+La transcripción CUDA corre en un proceso separado. La app descarga el modelo de Ollama de la GPU antes de transcribir y lo carga de nuevo cuando termina; al salir el proceso de transcripción se libera su VRAM. Así Whisper y Qwen no se mantienen juntos en la tarjeta. La transcripción CPU optimizada sigue disponible si no instalas el componente CUDA.
+
+**Validación pendiente en hardware del usuario:** este entorno no dispone de una RTX 5060 Ti ni Windows. Las pruebas de integración con Ollama usan respuestas simuladas y comprueban el protocolo, la memoria reportada, el aislamiento del modo local y la cancelación. No prueban velocidad ni kernels CUDA reales. El instalador de transcripción comprueba CUDA en tu PC y Comprobar GPU verifica el modelo en Ollama; después hay que medir un video real. No se promete un tiempo fijo.
+
+### Alternativas
+
+**Local CPU:** INSTALAR_IA_LOCAL.bat instala el motor opcional. Preciso usa Qwen 7B y puede ser muy lento; Ligero usa Qwen 3B con menor calidad. No necesita API.
+
+**Nube:** se conserva como opción explícita. Configurar IA rápida permite introducir una clave en memoria; necesita saldo de API independiente de ChatGPT Plus y envía transcripción/contexto a OpenAI. `CLIP_AI_KEY` o una `OPENAI_API_KEY` existente también son compatibles. El modo GPU nunca usa estas claves ni hace solicitudes al proveedor.
+
+Los videos y trabajos se recuperan tras reiniciar desde **Reutilizar un video guardado**. Copia tu carpeta `data` al actualizar para conservar la transcripción de tu intento anterior.
 
 ## Usar
 
@@ -31,7 +47,7 @@ Puedes cancelar el análisis en nube; una solicitud ya enviada puede terminar y 
 
 ## Linux / entorno de nube
 
-Se necesitan Python 3.12, FFmpeg/ffprobe, acceso a PyPI y Hugging Face para la transcripción, y acceso a api.openai.com para el modo rápido. El motor local es opcional: necesita GCC/G++ para compilar llama-cpp-python desde requirements-local.txt en este entorno glibc.
+Se necesitan Python 3.12, FFmpeg/ffprobe, acceso a PyPI y Hugging Face para la transcripción, y Ollama con un modelo instalado para el modo GPU; api.openai.com se necesita únicamente para la opción en nube. El motor local es opcional: necesita GCC/G++ para compilar llama-cpp-python desde requirements-local.txt en este entorno glibc.
 
 ```bash
 cd /workspace/app1
@@ -50,7 +66,7 @@ HF_HOME=/workspace/app1/data/models .venv/bin/python iniciar.py
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-Las pruebas en nube usan transporte HTTP simulado: comprueban paralelismo, datos enviados, cancelación y manejo de saldo/límites; no prueban acceso a una cuenta real ni latencia del proveedor. Las pruebas de video ejercitan exportaciones reales, duración máxima y mínima, subtítulos a lo largo del clip, ausencia de solapamientos, posición/intervalo del logo, composición tipográfica y verificación de evidencia/títulos. No descargan el modelo editorial durante la suite rápida.
+Las pruebas en nube usan transporte HTTP simulado: comprueban paralelismo, datos enviados, cancelación y manejo de saldo/límites; no prueban acceso a una cuenta real ni latencia del proveedor. Las pruebas GPU usan un transporte Ollama simulado y no establecen rendimiento de hardware real. Las pruebas de video ejercitan exportaciones reales, duración máxima y mínima, subtítulos a lo largo del clip, ausencia de solapamientos, posición/intervalo del logo, composición tipográfica y verificación de evidencia/títulos. No descargan el modelo editorial durante la suite rápida.
 
 Validación editorial LOCAL opcional, con requirements-local.txt y los modelos instalados (puede tardar varios minutos):
 

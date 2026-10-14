@@ -22,6 +22,8 @@ JOBS={}; pool=ThreadPoolExecutor(max_workers=1)
 model=None
 CANCEL={}
 import cloud_ai
+import gpu_ai
+import gpu_transcribe
 
 def command(args, cwd=None):
  r=subprocess.run(args,capture_output=True,text=True,cwd=cwd)
@@ -73,7 +75,8 @@ class Analysis(BaseModel):
  speaker:str=Field(default='',max_length=120)
  context:str=Field(default='',max_length=4000)
  quality:Literal['quality','fast']='fast'
- engine:Literal['cloud','local']='cloud'
+ engine:Literal['gpu','cloud','local']='gpu'
+ transcribe_gpu:bool=False
  max_clips:int=Field(default=10,ge=1,le=20)
  @model_validator(mode='after')
  def validate_range(self):
@@ -87,9 +90,16 @@ def analyze(ident,options):
   job.update(clips=[],progress=0,analysis_range={'minimum':options.minimum,'maximum':options.maximum},status='transcribing',message='Transcribiendo con Whisper local. La primera ejecución descarga el modelo.')
   event=CANCEL.setdefault(ident,threading.Event())
   if event.is_set():raise cloud_ai.AnalysisCancelled()
+  if options.engine=='gpu':
+   job.update(message='Cargando el modelo local y comprobando memoria GPU…')
+   job['gpu_status']=gpu_ai.warmup()
   cached=DATA/ident/'transcript.json'
   if cached.exists():
    transcript=json.loads(cached.read_text(encoding='utf-8'))
+  elif options.transcribe_gpu:
+   if options.engine=='gpu':gpu_ai.unload()
+   transcript=gpu_transcribe.transcribe(DATA/ident/'source',DATA/ident,event,lambda percentage,message:job.update(progress=round(percentage*.6),message=message))
+   cached.write_text(json.dumps(transcript,ensure_ascii=False),encoding='utf-8')
   else:
    from faster_whisper import WhisperModel
    if model is None:model=WhisperModel(os.getenv('WHISPER_MODEL','small'),device='cpu',compute_type='int8',cpu_threads=4)
@@ -102,17 +112,20 @@ def analyze(ident,options):
     job['progress']=min(60,round(s.end/job['duration']*60))
    cached.write_text(json.dumps(transcript,ensure_ascii=False),encoding='utf-8')
   job['transcript']=transcript
+  if options.engine=='gpu':job['gpu_status']=gpu_ai.warmup()
   if event.is_set():raise cloud_ai.AnalysisCancelled()
-  job.update(status='selecting',progress=60,message='Analizando transcripción en la nube…' if options.engine=='cloud' else 'Preparando modelo local (primera descarga hasta 4,68 GB). Puede tardar en CPU.')
+  job.update(status='selecting',progress=60,message='Analizando transcripción en la nube…' if options.engine=='cloud' else 'Analizando con GPU local…' if options.engine=='gpu' else 'Preparando modelo local (primera descarga hasta 4,68 GB). Puede tardar en CPU.')
   profile=read_profile()['instructions']
   def progress(i,total,stage='selection'):
    if event.is_set():raise cloud_ai.AnalysisCancelled()
-   if stage=='cloud':
-    job.update(progress=60+round(38*i/max(1,total)),message=f'Análisis en nube · {i} de {total} bloques completados')
+   if stage in ['cloud','gpu']:
+    job.update(progress=60+round(38*i/max(1,total)),message=f"Análisis {'GPU local' if stage=='gpu' else 'en nube'} · {i} de {total} bloques completados")
     return
    job.update(progress=(60+round(25*i/max(1,total))) if stage=='selection' else (85+round(13*i/max(1,total))),message=f'Analizando contexto · bloque {i+1} de {total}' if stage=='selection' else f'Revisando cortes y títulos · clip {i+1} de {total}')
   if options.engine=='cloud':
    clips=cloud_ai.select_cloud(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,max_clips=options.max_clips,on_progress=progress,cancel=event)
+  elif options.engine=='gpu':
+   clips=gpu_ai.select_gpu(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,max_clips=options.max_clips,on_progress=progress,cancel=event)
   else:
    clips=select_clips(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,quality=options.quality,max_clips=options.max_clips,on_progress=progress)
   job.update(status='ready',progress=100,clips=clips,message=f'{len(clips)} momentos seleccionados. Se descartan relleno y solapamientos; las puntuaciones son estimaciones editoriales, no probabilidades de viralidad.')
@@ -126,6 +139,9 @@ def start(ident:str,options:Analysis):
  if options.minimum>options.maximum: raise HTTPException(400,'El mínimo no puede superar el máximo.')
  if JOBS[ident]['status'] in ['queued','transcribing','selecting']: raise HTTPException(409,'El análisis ya está en curso.')
  if options.engine=='cloud' and not cloud_ai.configured():raise HTTPException(400,'Conecta tu clave de API en Configurar IA antes de iniciar el modo rápido.')
+ if options.engine=='gpu':
+  info=gpu_ai.status()
+  if not info['available'] or not info['model_ready']:raise HTTPException(400,info['message'])
  if options.engine=='local':
   import importlib.util
   if importlib.util.find_spec('llama_cpp') is None:raise HTTPException(400,'Para usar IA local, ejecuta INSTALAR_IA_LOCAL y reinicia la app. El modo nube no necesita ese motor.')
@@ -155,6 +171,14 @@ def cancel_job(ident:str):
  CANCEL.setdefault(ident,threading.Event()).set()
  JOBS[ident]['message']='Cancelación solicitada. Puedes cerrar la app para detener inmediatamente un cálculo local.'
  return {'ok':True}
+
+@app.get('/api/gpu')
+def gpu_status():return dict(gpu_ai.status(),transcription_installed=gpu_transcribe.installed(),transcription_ready=gpu_transcribe.installed() and (DATA/'cuda-transcription-ready.json').exists())
+
+@app.post('/api/gpu/check')
+def check_gpu():
+ try:return gpu_ai.warmup()
+ except ValueError as e:raise HTTPException(400,str(e))
 
 class Connection(BaseModel):
  key:SecretStr

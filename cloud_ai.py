@@ -48,7 +48,7 @@ def complete(payload,transport=None,cancel=None):
     except httpx.TimeoutException:raise ValueError('La solicitud de IA superó 90 segundos. No se continuará esperando indefinidamente.') from None
     except httpx.HTTPError:raise ValueError('No se pudo conectar con la API. Revisa Internet y vuelve a intentarlo.') from None
 
-def select_cloud(transcript,minimum,maximum,duration,speaker='',context='',profile='',max_clips=10,on_progress=None,cancel=None,transport=None):
+def select_cloud(transcript,minimum,maximum,duration,speaker='',context='',profile='',max_clips=10,on_progress=None,cancel=None,transport=None,completion=None,workers=3,stage='cloud'):
     from timeline import timed_sentences
     from intelligence import accept_proposals,diverse_selection,Proposals
     phrases=timed_sentences(transcript)
@@ -62,7 +62,7 @@ def select_cloud(transcript,minimum,maximum,duration,speaker='',context='',profi
     def analyze_chunk(chunk):
         payload={'rango_segundos':[minimum,maximum],'hablante_identificado':speaker,'contexto_del_video':context,'criterios_del_editor':profile,'frases':[dict(id=i,**p) for i,p in enumerate(chunk)],'instruccion':'Selecciona historias completas y excepcionales. Usa first/last inclusivos. Recorta logística al inicio/final. No copies frases como títulos ni inventes hechos. Puede haber cero resultados.'}
         # No overlapping candidate transcripts: every source phrase is serialized once per block.
-        data=complete(payload,transport=transport,cancel=cancel)
+        data=(completion or complete)(payload,transport=transport,cancel=cancel)
         # The cloud path allows up to four proposals, then applies the same grounded filters.
         if not isinstance(data.get('moments'),list):raise ValueError('La IA devolvió una respuesta editorial inválida.')
         result=[]
@@ -71,7 +71,7 @@ def select_cloud(transcript,minimum,maximum,duration,speaker='',context='',profi
             except (ValueError,TypeError):continue
         for clip in result:clip['source']=f'{MODEL} · análisis de transcripción'
         return result
-    executor=ThreadPoolExecutor(max_workers=3)
+    executor=ThreadPoolExecutor(max_workers=workers)
     futures=[]
     try:
         futures=[executor.submit(analyze_chunk,chunk) for chunk in chunks]
@@ -82,7 +82,7 @@ def select_cloud(transcript,minimum,maximum,duration,speaker='',context='',profi
             done,pending=wait(pending,timeout=.5,return_when=FIRST_COMPLETED)
             for future in done:
                 candidates.extend(future.result());completed+=1
-                if on_progress:on_progress(completed,len(chunks),'cloud')
+                if on_progress:on_progress(completed,len(chunks),stage)
     finally:
         for future in futures:future.cancel()
         executor.shutdown(wait=False,cancel_futures=True)

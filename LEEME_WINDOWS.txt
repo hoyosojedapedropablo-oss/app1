@@ -1,4 +1,4 @@
-CLIP STUDIO - EDITOR 2.1
+CLIP STUDIO - EDITOR 2.2 - GPU
 
 1. Python 3.12 de 64 bits debe estar instalado.
 2. FFmpeg: en PowerShell, winget install --id Gyan.FFmpeg -e
@@ -6,16 +6,25 @@ CLIP STUDIO - EDITOR 2.1
 4. Haz doble clic en INICIAR_WINDOWS.bat.
    Instalara las dependencias. Deja abierta la ventana mientras usas la app.
 
-ANALIZAR RAPIDO
-Abre Configurar IA rapida e introduce la clave de API en la APP.
-No la compartas por chat. Necesitas una cuenta de OpenAI con saldo de API:
-ChatGPT Plus no incluye ese saldo. Verificar conexion comprueba acceso al modelo;
-la facturacion se comprueba al iniciar el primer analisis.
-Se envia solo la transcripcion y contexto; el video se queda en tu equipo.
-La clave queda en memoria hasta cerrar la app.
-Carga un video, agrega contexto, elige rango y pulsa Encontrar momentos.
-La transcripcion y exportacion locales siguen dependiendo de tu equipo.
-No se promete un tiempo fijo hasta medir tu video y conexion.
+ANALIZAR LOCAL CON GPU - SIN CLAVE NI PAGO DE API
+1. Actualiza el driver de NVIDIA.
+2. Ejecuta INSTALAR_GPU_WINDOWS.bat una vez. Instala Ollama y descarga
+   qwen2.5:7b (~4,7 GB). Debe decir GPU VERIFICADA.
+3. Opcional: INSTALAR_TRANSCRIPCION_GPU_WINDOWS.bat acelera tambien el audio.
+   Descarga PyTorch CUDA 12.8 y Whisper; realiza una prueba CUDA real.
+4. Abre INICIAR_WINDOWS y selecciona Local GPU.
+5. Pulsa Comprobar GPU. Solo se considera acelerado si Ollama informa memoria GPU.
+6. Activa Transcribir tambien con GPU si instalaste ese componente.
+
+La GPU se usa por turnos para transcribir y analizar; asi los dos modelos
+no se mantienen cargados a la vez en tus 8 GB de VRAM.
+Se necesita Internet para instalar y descargar modelos la primera vez.
+No se ha medido el rendimiento en tu RTX; prueba primero con un video corto.
+Si Ollama no detecta GPU, actualiza su version y el driver NVIDIA.
+
+API EN NUBE (OPCIONAL)
+La opcion en nube necesita una clave y saldo de OpenAI. El modo Local GPU
+no la necesita ni genera cargos de API. No compartas claves por chat.
 
 REUTILIZAR
 Conserva la carpeta data de la version anterior y copiala a esta version,
