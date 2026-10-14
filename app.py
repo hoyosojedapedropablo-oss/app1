@@ -1,4 +1,6 @@
 import json, os, re, subprocess, threading, uuid
+import tempfile
+import numpy as np
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -27,6 +29,16 @@ def command(args, cwd=None):
 
 def probe(path):
  return json.loads(command(['ffprobe','-v','error','-show_format','-show_streams','-of','json',str(path)]))
+
+def decode_audio(path):
+ # FFmpeg normalizes every input to the float32 mono 16 kHz waveform Whisper expects.
+ # Passing an array avoids faster-whisper's incompatible PyAV metadata_errors call.
+ with tempfile.TemporaryDirectory() as tmp:
+  pcm=Path(tmp)/'audio.f32'
+  command(['ffmpeg','-v','error','-y','-i',str(path),'-vn','-ac','1','-ar','16000','-f','f32le',str(pcm)])
+  audio=np.fromfile(pcm,dtype='<f4')
+ if not audio.size: raise ValueError('El video no contiene audio utilizable.')
+ return audio
 
 def select_clips(segments,minimum,maximum):
  candidates=[]
@@ -83,7 +95,8 @@ def analyze(ident,options):
   job.update(status='transcribing',message='Transcribiendo con Whisper local. La primera ejecución descarga el modelo.')
   from faster_whisper import WhisperModel
   if model is None: model=WhisperModel(os.getenv('WHISPER_MODEL','base'),device='cpu',compute_type='int8',cpu_threads=4)
-  segments,info=model.transcribe(str(DATA/ident/'source'),vad_filter=True,word_timestamps=True)
+  audio=decode_audio(DATA/ident/'source')
+  segments,info=model.transcribe(audio,vad_filter=True,word_timestamps=True)
   transcript=[]
   for s in segments:
    transcript.append(dict(start=s.start,end=s.end,text=s.text,words=[dict(start=w.start,end=w.end,text=w.word) for w in (s.words or [])]))
@@ -129,7 +142,9 @@ class Export(BaseModel):
  style:str='classic'
  font:str='DejaVu Sans'
  logo:str='none'
- framing:str='fit'
+ framing:str='crop'
+ focus_x:float=Field(default=50,ge=0,le=100)
+ focus_y:float=Field(default=50,ge=0,le=100)
 
 def stamp(seconds):
  c=round(max(0,seconds)*100); return f'{c//360000}:{c//6000%60:02}:{c//100%60:02}.{c%100:02}'
@@ -162,7 +177,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   phrases=[]
  for i,phrase in enumerate(phrases):
   events.append(f'Dialogue: 0,{stamp(i*duration/len(phrases))},{stamp((i+1)*duration/len(phrases))},Caption,,0,0,0,,{safe(phrase)}')
- path.write_text(header+'\n'.join(events))
+ path.write_text(header+'\n'.join(events),encoding='utf-8')
 
 @app.post('/api/jobs/{ident}/export')
 def export(ident:str,opts:Export):
@@ -173,7 +188,7 @@ def export(ident:str,opts:Export):
  logo=DATA/f'{opts.logo}.png'
  if opts.logo!='none' and not logo.exists(): raise HTTPException(400,'Primero carga el archivo del logo seleccionado.')
  folder=DATA/ident; token=uuid.uuid4().hex; ass=folder/f'{token}.ass'; output=folder/f'{token}.mp4'; ass_file(ass,opts,JOBS[ident].get('transcript',[]))
- geometry='scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black' if opts.framing=='fit' else 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920'
+ geometry='scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black' if opts.framing=='fit' else f'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(iw-ow)*{opts.focus_x/100}:(ih-oh)*{opts.focus_y/100}'
  filters=f'{geometry},setsar=1,ass={ass.name}'
  args=['ffmpeg','-v','error','-y','-ss',str(opts.start),'-i',str(folder/'source')]
  if opts.logo!='none':
