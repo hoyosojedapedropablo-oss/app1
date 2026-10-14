@@ -1,25 +1,36 @@
-CLIP STUDIO - PRIMERA VERSION PERSONAL
+CLIP STUDIO - EDITOR 2.0
 
-1. Instala Python 3.12 desde https://www.python.org/downloads/windows/
-2. Abre PowerShell y ejecuta:
-   winget install --id Gyan.FFmpeg -e
-3. Extrae TODO el ZIP en una carpeta de tu equipo.
+1. Python 3.12 de 64 bits debe estar instalado.
+2. FFmpeg: en PowerShell, winget install --id Gyan.FFmpeg -e
+3. Extrae TODO el ZIP en una carpeta.
 4. Haz doble clic en INICIAR_WINDOWS.bat.
-   La primera vez instalara dependencias. Necesita Internet.
-5. El navegador se abrira cuando la app este lista.
-   Deja abierta la ventana de comandos. Cierra con Ctrl+C.
+   Instalara las dependencias. Deja abierta la ventana mientras usas la app.
 
-PRUEBA RAPIDA
-Carga un video corto, pulsa Crear clip manual, configura los tiempos,
-escribe titulo y subtitulos y pulsa Descargar clip.
+ANALIZAR
+Carga un video, agrega CONTEXTO sobre quien aparece y lo que esta pasando,
+elige el rango (por ejemplo 20 a 60 segundos) y pulsa Encontrar momentos.
+Preciso: descarga un modelo de 4,68 GB, recomendado con 16 GB de RAM.
+Ligero: descarga 1,93 GB y es menos preciso. El analisis en CPU tarda bastante.
+La primera transcripcion tambien descarga Whisper small (~460 MB).
+No requiere una clave de API. Revisa las sugerencias: ninguna IA garantiza viralidad.
 
-ANALISIS AUTOMATICO
-Encontrar momentos descarga Whisper base la primera vez desde Hugging Face.
-El modelo corre localmente en CPU. No necesita una clave de API.
-Una descarga bloqueada o fallida impide el analisis automatico.
-La seleccion actual es basica; no es un analista experto de viralidad.
-Los subtitulos modificados requieren revisar sincronizacion.
+EDITAR
+Hay cuatro pestanas: Titulo, Subtitulos, Logo y Encuadre.
+Puedes arrastrar las capas en el video, cambiar posicion y tamano,
+fuentes, colores y contorno de subtitulos. La descarga siempre esta abajo.
+Al reproducir se respetan los tiempos; Ver capas al editar permite acomodarlas en pausa.
+Los titulos aparecen los primeros 6 segundos y no superan dos lineas al exportar.
 
-Los logos se cargan desde Tu biblioteca de logos antes de seleccionarlos.
-No se incluyen logos oficiales. Los videos y exportaciones quedan en data/.
-No publiques este servidor en Internet: esta version no tiene login.
+LOGOS
+En Logo, abre Cargar desde mis archivos. Usa PNG transparente si puedes.
+Ajusta ancho, posicion y el intervalo. Desde 2 y Hasta vacio significa
+segundo 2 hasta el final. Desde 10 Hasta 20 significa solo esos segundos.
+Los tiempos son relativos al clip, no al video original.
+
+ACTUALIZAR
+Conserva tu carpeta anterior y extrae el ZIP nuevo en otra carpeta.
+Puedes copiar la carpeta data anterior para conservar modelos y logos,
+con ambas apps cerradas. No copies la .venv anterior.
+
+Cierra con Ctrl+C en la ventana negra. No publiques este servidor en Internet:
+esta version personal no tiene login.

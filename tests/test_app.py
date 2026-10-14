@@ -1,7 +1,9 @@
 import tempfile, unittest
 from pathlib import Path
 from fastapi.testclient import TestClient
-from app import app, command, Export, ass_file, probe, select_clips
+from app import app, command, Export, ass_file, probe, JOBS
+from intelligence import accept_proposals, diverse_selection
+from timeline import make_cues
 from app import decode_audio
 import numpy as np
 from PIL import Image
@@ -55,17 +57,39 @@ class Workflow(unittest.TestCase):
    self.assertEqual((video['width'],video['height']),(1080,1920))
    opts['end']=10
    self.assertEqual(c.post(f'/api/jobs/{ident}/export',json=opts).status_code,400)
-   self.assertEqual(c.post(f'/api/jobs/{ident}/analyze',json={'minimum':60,'maximum':20}).status_code,400)
- def test_selection(self):
-  segments=[dict(start=i*5,end=(i+1)*5,text='Un dato increíble. ¿Sabías la verdad?') for i in range(12)]
-  clips=select_clips(segments,10,20)
-  self.assertTrue(clips)
-  self.assertTrue(all(10<=c['end']-c['start']<=20 for c in clips))
-  self.assertTrue(all(a['end']<=b['start'] for a,b in zip(clips,clips[1:])))
+   self.assertEqual(c.post(f'/api/jobs/{ident}/analyze',json={'minimum':60,'maximum':20}).status_code,422)
+ def test_selection_range_and_coverage(self):
+  candidates=[dict(id=str(i),start=i*30,end=i*30+25,score=90-i,text=f'Información concreta número {i} y tema {i}') for i in range(20)]
+  chosen=diverse_selection(candidates,600,20,60,10)
+  self.assertTrue(chosen)
+  self.assertTrue(all(20<=c['end']-c['start']<=60 for c in chosen))
+  self.assertLessEqual(sum(c['end']-c['start'] for c in chosen),180)
+  self.assertLessEqual(len(chosen),10)
+  self.assertFalse(diverse_selection([dict(candidates[0],end=120)],600,20,60))
+
+ def test_caption_progression_and_silence(self):
+  transcript=[dict(start=0,end=60,text='uno dos tres cuatro cinco seis siete ocho',words=[dict(text=str(i),start=i*4,end=i*4+.5) for i in range(12)])]
+  cues=make_cues(transcript,0,50)
+  self.assertGreater(len(cues),10)
+  self.assertTrue(all(c['end']-c['start']<1 for c in cues))
+  self.assertTrue(all(a['end']<=b['start'] for a,b in zip(cues,cues[1:])))
+  self.assertNotEqual(cues[0]['text'],cues[-1]['text'])
+  self.assertTrue(all(0<=c['start']<c['end']<=50 for c in cues))
+
+ def test_interpreted_titles_and_evidence(self):
+  phrases=[dict(start=0,end=25,text='Antes dormía cuatro horas. Ahora hago menos directos para cuidar mi salud.')]
+  data={'moments':[dict(first=0,last=0,category='Emoción',hook=5,payoff=4,novelty=4,emotion=5,discussion=4,coherent=True,reason='Contrasta dinero y salud',evidence='dormía cuatro horas',titles=['Westcol explica por qué hace menos directos'])]}
+  clips=accept_proposals(data,phrases,phrases,20,60,'Westcol')
+  self.assertEqual(len(clips),1)
+  self.assertLessEqual(len(clips[0]['title']),64)
+  data['moments'][0]['evidence']='Una pelea que nunca ocurrió'
+  self.assertFalse(accept_proposals(data,phrases,phrases,20,60))
+
  def test_original_caption_timing(self):
   with tempfile.TemporaryDirectory() as tmp:
    path=Path(tmp)/'captions.ass'
    ass_file(path,Export(start=10,end=15,title='Título',subtitles='Hola mundo.'),[dict(start=11,end=13,text='Hola mundo.')])
-   self.assertIn('0:00:01.00,0:00:03.00,Caption',path.read_text())
+   self.assertIn('0:00:01.00,0:00:02.00,Caption',path.read_text())
+   self.assertIn('0:00:02.00,0:00:03.08,Caption',path.read_text())
 
 if __name__=='__main__': unittest.main()

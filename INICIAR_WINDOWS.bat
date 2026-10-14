@@ -28,9 +28,24 @@ if not exist ".venv\Scripts\python.exe" (
  exit /b 1
  )
 )
+echo Instalando el motor local de analisis para Windows...
+".venv\Scripts\python.exe" -m pip install "https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.2/llama_cpp_python-0.3.2-cp312-cp312-win_amd64.whl"
+if errorlevel 1 (
+ echo No se pudo instalar el motor local. Necesita Python 3.12 de 64 bits y acceso a GitHub.
+ pause
+ exit /b 1
+)
 ".venv\Scripts\python.exe" -m pip install -r requirements.txt
 if errorlevel 1 (
  echo No se pudieron instalar las dependencias. Revisa el error de arriba y tu conexion.
+ pause
+ exit /b 1
+)
+".venv\Scripts\python.exe" -c "from llama_cpp import Llama"
+if errorlevel 1 (
+ echo El motor local no se puede cargar. Puede faltar Microsoft Visual C++ Runtime.
+ echo En PowerShell: winget install --id Microsoft.VCRedist.2015+.x64 -e
+ echo Despues vuelve a abrir este archivo. Conserva el mensaje de error si persiste.
  pause
  exit /b 1
 )

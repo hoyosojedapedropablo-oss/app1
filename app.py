@@ -1,26 +1,25 @@
 import json, os, re, subprocess, threading, uuid
 import tempfile
+from fractions import Fraction
+from typing import Literal
 import numpy as np
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+from timeline import make_cues, clip_words
+from intelligence import select_clips
+from styling import FONTS, ass_color, title_layout
 
 ROOT=Path(__file__).parent
 DATA=ROOT/'data'; DATA.mkdir(exist_ok=True)
+os.environ.setdefault('HF_HOME',str(DATA/'models'))
 app=FastAPI(title='Clip Studio')
 app.mount('/static',StaticFiles(directory=ROOT/'static'),name='static')
 JOBS={}; pool=ThreadPoolExecutor(max_workers=1)
 model=None
-CATEGORIES={
- 'Polémica':['mentira','verdad','nadie','equivocado','odio','polémica','controversia'],
- 'Curiosidad':['sabías','increíble','curioso','descubr','secreto','imagina'],
- 'Datos':['por ciento','millones','estudio','investigación','dato','científico'],
- 'Relato':['recuerdo','pasó','historia','cuando','un día','entonces'],
- 'Humor':['risa','jaja','gracioso','chiste','broma'],
- 'Emoción':['llor','triste','amor','miedo','perdí','feliz','sueño','familia']}
 
 def command(args, cwd=None):
  r=subprocess.run(args,capture_output=True,text=True,cwd=cwd)
@@ -40,30 +39,8 @@ def decode_audio(path):
  if not audio.size: raise ValueError('El video no contiene audio utilizable.')
  return audio
 
-def select_clips(segments,minimum,maximum):
- candidates=[]
- for i,s in enumerate(segments):
-  end=s['end']; chosen=[]
-  for t in segments[i:]:
-   if t['end']-s['start']>maximum: break
-   chosen.append(t); end=t['end']
-   if end-s['start']>=minimum and re.search(r'[.!?]$',t['text'].strip()): break
-  if end-s['start']<minimum: continue
-  text=' '.join(t['text'].strip() for t in chosen)
-  counts={k:sum(text.lower().count(w) for w in words) for k,words in CATEGORIES.items()}
-  cat=max(counts,key=counts.get)
-  score=min(95,35+sum(counts.values())*7+min(14,len(text.split())//8)+(8 if '?' in text else 0))
-  title=re.split(r'[.!?]',text)[0].strip()[:85] or 'Un momento para compartir'
-  candidates.append(dict(id=uuid.uuid4().hex,start=s['start'],end=end,title=title,text=text,segments=chosen,score=score,category=cat if counts[cat] else 'Conversación',reason='Señales de lenguaje y cierre de frase; revisa el contexto antes de publicar.'))
- result=[]
- for c in sorted(candidates,key=lambda c:c['score'],reverse=True):
-  if c['score']<49: continue
-  if any(min(c['end'],a['end'])>max(c['start'],a['start']) for a in result): continue
-  result.append(c)
- return sorted(result,key=lambda c:c['start'])
-
 @app.get('/')
-def home(): return FileResponse(ROOT/'static/index.html')
+def home(): return FileResponse(ROOT/'static/index.html',headers={'Cache-Control':'no-store'})
 
 @app.post('/api/upload')
 async def upload(file:UploadFile=File(...)):
@@ -78,7 +55,10 @@ async def upload(file:UploadFile=File(...)):
   info=probe(path); duration=float(info['format']['duration'])
   if duration>7200: raise ValueError('La duración máxima es 120 minutos.')
   if not any(s['codec_type']=='video' for s in info['streams']): raise ValueError('El archivo no contiene video.')
-  JOBS[ident]=dict(id=ident,name=file.filename,duration=duration,status='uploaded',clips=[])
+  stream=next(s for s in info['streams'] if s['codec_type']=='video')
+  try:fps=float(Fraction(stream.get('avg_frame_rate','30/1')))
+  except (ValueError,ZeroDivisionError):fps=30
+  JOBS[ident]=dict(id=ident,name=file.filename,duration=duration,fps=max(24,min(60,fps)),status='uploaded',clips=[])
   return JOBS[ident]
  except Exception as e:
   path.unlink(missing_ok=True)
@@ -87,30 +67,64 @@ async def upload(file:UploadFile=File(...)):
 class Analysis(BaseModel):
  minimum:int=Field(default=20,ge=5,le=180)
  maximum:int=Field(default=60,ge=5,le=180)
+ speaker:str=Field(default='',max_length=120)
+ context:str=Field(default='',max_length=4000)
+ quality:Literal['quality','fast']='quality'
+ max_clips:int=Field(default=10,ge=1,le=20)
+ @model_validator(mode='after')
+ def validate_range(self):
+  if self.minimum>self.maximum: raise ValueError('El mínimo no puede superar el máximo.')
+  return self
 
 def analyze(ident,options):
  global model
  job=JOBS[ident]
  try:
-  job.update(status='transcribing',message='Transcribiendo con Whisper local. La primera ejecución descarga el modelo.')
+  job.update(clips=[],progress=0,analysis_range={'minimum':options.minimum,'maximum':options.maximum},status='transcribing',message='Transcribiendo con Whisper local. La primera ejecución descarga el modelo.')
   from faster_whisper import WhisperModel
-  if model is None: model=WhisperModel(os.getenv('WHISPER_MODEL','base'),device='cpu',compute_type='int8',cpu_threads=4)
-  audio=decode_audio(DATA/ident/'source')
-  segments,info=model.transcribe(audio,vad_filter=True,word_timestamps=True)
-  transcript=[]
-  for s in segments:
-   transcript.append(dict(start=s.start,end=s.end,text=s.text,words=[dict(start=w.start,end=w.end,text=w.word) for w in (s.words or [])]))
-   job['progress']=min(99,round(s.end/job['duration']*100))
-  job.update(status='ready',progress=100,transcript=transcript,clips=select_clips(transcript,options.minimum,options.maximum),message='Análisis terminado. La puntuación es heurística, no una predicción de viralidad.')
+  if model is None: model=WhisperModel(os.getenv('WHISPER_MODEL','small'),device='cpu',compute_type='int8',cpu_threads=4)
+  cached=DATA/ident/'transcript.json'
+  if cached.exists():
+   transcript=json.loads(cached.read_text(encoding='utf-8'))
+  else:
+   audio=decode_audio(DATA/ident/'source')
+   segments,info=model.transcribe(audio,vad_filter=True,word_timestamps=True)
+   transcript=[]
+   for s in segments:
+    transcript.append(dict(start=s.start,end=s.end,text=s.text,words=[dict(start=w.start,end=w.end,text=w.word) for w in (s.words or [])]))
+    job['progress']=min(60,round(s.end/job['duration']*60))
+   cached.write_text(json.dumps(transcript,ensure_ascii=False),encoding='utf-8')
+  job['transcript']=transcript
+  job.update(status='selecting',progress=60,message='Cargando el analista local de contexto. La primera vez descarga 4,68 GB (preciso) o 1,93 GB (ligero).')
+  profile=read_profile()['instructions']
+  def progress(i,total,stage='selection'):
+   job.update(progress=(60+round(25*i/max(1,total))) if stage=='selection' else (85+round(13*i/max(1,total))),message=f'Analizando contexto · bloque {i+1} de {total}' if stage=='selection' else f'Revisando cortes y títulos · clip {i+1} de {total}')
+  clips=select_clips(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,quality=options.quality,max_clips=options.max_clips,on_progress=progress)
+  job.update(status='ready',progress=100,clips=clips,message=f'{len(clips)} momentos seleccionados. Se descartan relleno y solapamientos; las puntuaciones son estimaciones editoriales, no probabilidades de viralidad.')
  except Exception as e: job.update(status='error',message=str(e))
 
 @app.post('/api/jobs/{ident}/analyze')
 def start(ident:str,options:Analysis):
  if ident not in JOBS: raise HTTPException(404)
  if options.minimum>options.maximum: raise HTTPException(400,'El mínimo no puede superar el máximo.')
- if JOBS[ident]['status'] in ['queued','transcribing']: raise HTTPException(409,'El análisis ya está en curso.')
+ if JOBS[ident]['status'] in ['queued','transcribing','selecting']: raise HTTPException(409,'El análisis ya está en curso.')
  JOBS[ident]['status']='queued'; pool.submit(analyze,ident,options)
  return JOBS[ident]
+
+class Profile(BaseModel):
+ instructions:str=Field(default='Elige títulos según el contexto: para opiniones o anuncios, atribuye y resume (ejemplos: Westcol opina sobre la situación del país; Westcol anuncia la pelea más esperada de su evento). Para emociones compartidas usa identificación, sin inventar causas: si el hablante está triste por una derrota de Colombia, Todos somos Westcol después del partido, Westcol y yo estamos pasando por lo mismo o Mood Westcol. Usa nombres solo cuando estén identificados. No copiar la transcripción ni inventar polémicas. Las frases de identificación son recursos retóricos ligados a la emoción del fragmento; no inventes hechos.',max_length=3000)
+
+def read_profile():
+ path=DATA/'editorial-profile.json'
+ return json.loads(path.read_text(encoding='utf-8')) if path.exists() else Profile().model_dump()
+
+@app.get('/api/profile')
+def profile(): return read_profile()
+
+@app.put('/api/profile')
+def save_profile(options:Profile):
+ (DATA/'editorial-profile.json').write_text(options.model_dump_json(),encoding='utf-8')
+ return options
 
 @app.get('/api/jobs/{ident}')
 def status(ident:str):
@@ -124,24 +138,69 @@ def video(ident:str):
 
 @app.post('/api/logos/{brand}')
 async def logo(brand:str,file:UploadFile=File(...)):
- if brand not in ['kick','roobet','rainbet']: raise HTTPException(400)
+ if brand not in ['kick','roobet','rainbet','custom']: raise HTTPException(400)
  from PIL import Image
  raw=await file.read(5*1024*1024+1)
  if len(raw)>5*1024*1024: raise HTTPException(400,'Máximo 5 MB.')
  import io
  try:
-  im=Image.open(io.BytesIO(raw)); im.thumbnail((1024,1024)); im.convert('RGBA').save(DATA/f'{brand}.png')
+  im=Image.open(io.BytesIO(raw)); im.thumbnail((1024,1024))
+  logo_id=uuid.uuid4().hex if brand=='custom' else brand
+  im.convert('RGBA').save(DATA/f'{logo_id}.png')
  except Exception: raise HTTPException(400,'Usa un logo PNG, JPG o WebP válido.')
- return {'ok':True}
+ catalog_path=DATA/'logos.json'
+ catalog=json.loads(catalog_path.read_text(encoding='utf-8')) if catalog_path.exists() else {}
+ catalog[logo_id]=file.filename or logo_id
+ catalog_path.write_text(json.dumps(catalog,ensure_ascii=False),encoding='utf-8')
+ return {'ok':True,'id':logo_id,'name':catalog[logo_id]}
+
+@app.get('/api/logos')
+def logos():
+ path=DATA/'logos.json'
+ catalog=json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+ return [{'id':key,'name':value} for key,value in catalog.items() if (DATA/f'{key}.png').exists()]
+
+@app.get('/api/logos/{logo_id}/image')
+def logo_image(logo_id:str):
+ if not re.fullmatch(r'(kick|roobet|rainbet|[a-f0-9]{32})',logo_id) or not (DATA/f'{logo_id}.png').exists():raise HTTPException(404)
+ return FileResponse(DATA/f'{logo_id}.png',media_type='image/png')
+
+class Caption(BaseModel):
+ start:float=Field(ge=0)
+ end:float=Field(gt=0)
+ text:str=Field(max_length=100)
+ @model_validator(mode='after')
+ def validate_times(self):
+  if self.end<=self.start:raise ValueError('El final del subtítulo debe superar su inicio.')
+  return self
 
 class Export(BaseModel):
  start:float=Field(ge=0)
  end:float=Field(gt=0)
- title:str=Field(max_length=140)
+ title:str=Field(max_length=96)
  subtitles:str=Field(max_length=20000)
  style:str='classic'
- font:str='DejaVu Sans'
+ font:str='Montserrat'
+ title_font:str='Montserrat'
+ title_size:int=Field(default=48,ge=28,le=64)
+ title_outline_color:str=Field(default='#000000',pattern=r'^#[0-9A-Fa-f]{6}$')
+ title_outline_width:int=Field(default=0,ge=0,le=6)
+ title_x:float=Field(default=50,ge=0,le=100)
+ title_y:float=Field(default=12,ge=0,le=100)
+ caption_x:float=Field(default=50,ge=0,le=100)
+ caption_y:float=Field(default=81,ge=0,le=100)
+ caption_size:int=Field(default=64,ge=40,le=90)
+ caption_color:str=Field(default='#FFFFFF',pattern=r'^#[0-9A-Fa-f]{6}$')
+ outline_color:str=Field(default='#000000',pattern=r'^#[0-9A-Fa-f]{6}$')
+ outline_width:int=Field(default=4,ge=0,le=9)
+ clip_id:str|None=None
+ captions:list[Caption]|None=Field(default=None,max_length=1000)
  logo:str='none'
+ logo_width:int=Field(default=16,ge=5,le=45)
+ logo_x:float=Field(default=90,ge=0,le=100)
+ logo_y:float=Field(default=8,ge=0,le=100)
+ logo_start:float=Field(default=0,ge=0)
+ logo_end:float|None=Field(default=None,gt=0)
  framing:str='crop'
  focus_x:float=Field(default=50,ge=0,le=100)
  focus_y:float=Field(default=50,ge=0,le=100)
@@ -151,32 +210,57 @@ def stamp(seconds):
 
 def safe(text): return text.replace('\\','').replace('{','').replace('}','').replace('\n',r'\N')
 
+def caption_cues(opts,transcript):
+ if opts.captions is not None:
+  cues=[c.model_dump() for c in opts.captions]
+  duration=opts.end-opts.start
+  if any(c['end']>duration+.001 for c in cues):raise ValueError('Un subtítulo termina fuera del clip.')
+  if any(a['end']>b['start']+.001 for a,b in zip(cues,cues[1:])):raise ValueError('Los subtítulos no deben solaparse y deben estar ordenados.')
+  return cues
+ return make_cues(transcript,opts.start,opts.end,opts.subtitles)
+
+@app.post('/api/jobs/{ident}/captions')
+def captions(ident:str,opts:Export):
+ if ident not in JOBS:raise HTTPException(404)
+ if opts.end<=opts.start or opts.end>JOBS[ident]['duration']:raise HTTPException(400,'Tiempos fuera del video.')
+ return {'captions':make_cues(JOBS[ident].get('transcript',[]),opts.start,opts.end,opts.subtitles)}
+
 def ass_file(path,opts,transcript=None):
- color={'classic':'&H00FFFFFF','bold':'&H0000FFFF','mint':'&H0085F5AA'}.get(opts.style,'&H00FFFFFF')
- font=opts.font if opts.font in ['DejaVu Sans','DejaVu Serif','Liberation Sans','Liberation Mono'] else 'DejaVu Sans'
+ font=opts.font if opts.font in FONTS else 'Montserrat'
+ title_font=opts.title_font if opts.title_font in FONTS else 'Montserrat'
+ title,title_size=title_layout(opts.title,title_font,opts.title_size)
+ color=ass_color(opts.caption_color);outline=ass_color(opts.outline_color)
  header=f'''[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
 PlayResY: 1920
+WrapStyle: 2
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Caption,{font},64,{color},&H00FFFFFF,&H00101010,&H80000000,-1,0,0,0,100,100,0,0,1,4,1,2,85,85,250,1
-Style: Title,{font},58,&H00000000,&H00000000,&H00FFFFFF,&H00FFFFFF,-1,0,0,0,100,100,0,0,3,20,0,8,95,95,180,1
+Style: Caption,{font},{opts.caption_size},{color},&H00FFFFFF,{outline},&H80000000,-1,0,0,0,100,100,0,0,1,{opts.outline_width},0,2,100,100,290,1
+Style: Title,{title_font},{title_size},&H00000000,&H00000000,{ass_color(opts.title_outline_color)},&H00FFFFFF,-1,0,0,0,100,100,0,0,1,{opts.title_outline_width},0,8,140,140,140,1
+Style: TitleBox,{title_font},1,&H00FFFFFF,&H00FFFFFF,&H00FFFFFF,&H00FFFFFF,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 '''
  duration=opts.end-opts.start
- events=[f'Dialogue: 1,0:00:00.00,{stamp(duration)},Title,,0,0,0,,{safe(opts.title)}'] if opts.title.strip() else []
- # Editable captions are divided into readable phrases and distributed across the clip.
- words=opts.subtitles.split(); phrases=[' '.join(words[i:i+7]) for i in range(0,len(words),7)]
- timed=[t for t in (transcript or []) if t['start']>=opts.start and t['end']<=opts.end]
- original=' '.join(t['text'].strip() for t in timed)
- if timed and original.strip()==opts.subtitles.strip():
-  for t in timed:
-   events.append(f"Dialogue: 0,{stamp(t['start']-opts.start)},{stamp(t['end']-opts.start)},Caption,,0,0,0,,{safe(t['text'].strip())}")
-  phrases=[]
- for i,phrase in enumerate(phrases):
-  events.append(f'Dialogue: 0,{stamp(i*duration/len(phrases))},{stamp((i+1)*duration/len(phrases))},Caption,,0,0,0,,{safe(phrase)}')
+ title_pos=r'{\an5\pos('+f'{opts.title_x*10.8:.1f},{opts.title_y*19.2:.1f}'+')}'
+ caption_pos=r'{\an5\pos('+f'{opts.caption_x*10.8:.1f},{opts.caption_y*19.2:.1f}'+')}'
+ events=[]
+ if title:
+  from PIL import ImageFont
+  face=ImageFont.truetype(str(ROOT/'static/fonts'/FONTS[title_font]),title_size)
+  width=max(face.getlength(line) for line in title.split('\n'))+24
+  height=title_size*1.35*len(title.split('\n'))+18
+  x=opts.title_x*10.8-width/2;y=opts.title_y*19.2-height/2
+  box_tag=r'{\an7\pos('+f'{x:.1f},{y:.1f}'+r')\p1}'
+  rectangle=f'm 0 0 l {width:.1f} 0 l {width:.1f} {height:.1f} l 0 {height:.1f}'
+  events.append(f'Dialogue: 1,0:00:00.00,{stamp(min(duration,6))},TitleBox,,0,0,0,,{box_tag}{rectangle}')
+  events.append(f'Dialogue: 2,0:00:00.00,{stamp(min(duration,6))},Title,,0,0,0,,{title_pos}{safe(title)}')
+ for cue in caption_cues(opts,transcript or []):
+  caption,point=title_layout(cue['text'],font,opts.caption_size)
+  size_tag=r'{\fs'+str(point)+'}'
+  events.append(f"Dialogue: 0,{stamp(cue['start'])},{stamp(cue['end'])},Caption,,0,0,0,,{caption_pos}{size_tag}{safe(caption)}")
  path.write_text(header+'\n'.join(events),encoding='utf-8')
 
 @app.post('/api/jobs/{ident}/export')
@@ -184,17 +268,30 @@ def export(ident:str,opts:Export):
  if ident not in JOBS: raise HTTPException(404)
  if opts.end<=opts.start or opts.end>JOBS[ident]['duration'] or opts.end-opts.start>180: raise HTTPException(400,'El clip debe durar entre 0 y 180 segundos y estar dentro del video.')
  if opts.framing not in ['fit','crop']: raise HTTPException(400)
- if opts.logo not in ['none','kick','roobet','rainbet']: raise HTTPException(400)
+ if not re.fullmatch(r'(none|kick|roobet|rainbet|[a-f0-9]{32})',opts.logo): raise HTTPException(400)
  logo=DATA/f'{opts.logo}.png'
  if opts.logo!='none' and not logo.exists(): raise HTTPException(400,'Primero carga el archivo del logo seleccionado.')
- folder=DATA/ident; token=uuid.uuid4().hex; ass=folder/f'{token}.ass'; output=folder/f'{token}.mp4'; ass_file(ass,opts,JOBS[ident].get('transcript',[]))
+ logo_end=opts.logo_end if opts.logo_end is not None else opts.end-opts.start
+ if opts.logo!='none' and (opts.logo_start>=logo_end or logo_end>opts.end-opts.start):raise HTTPException(400,'El intervalo del logo debe estar dentro del clip: inicio menor que final.')
+ if opts.clip_id:
+  limits=JOBS[ident].get('analysis_range')
+  if limits and not limits['minimum']<=opts.end-opts.start<=limits['maximum']:raise HTTPException(400,f"El clip debe respetar el rango {limits['minimum']}–{limits['maximum']} s del análisis.")
+ folder=DATA/ident; token=uuid.uuid4().hex; ass=folder/f'{token}.ass'; output=folder/f'{token}.mp4'
+ try:ass_file(ass,opts,JOBS[ident].get('transcript',[]))
+ except ValueError as e:raise HTTPException(400,str(e))
  geometry='scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black' if opts.framing=='fit' else f'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(iw-ow)*{opts.focus_x/100}:(ih-oh)*{opts.focus_y/100}'
- filters=f'{geometry},setsar=1,ass={ass.name}'
- args=['ffmpeg','-v','error','-y','-ss',str(opts.start),'-i',str(folder/'source')]
+ # Relative font directory avoids escaping Windows drive letters in FFmpeg filters.
+ import shutil
+ fonts=folder/'fonts'
+ if not fonts.exists():shutil.copytree(ROOT/'static/fonts',fonts)
+ filters=f'{geometry},setsar=1,setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=2,ass={ass.name}:fontsdir=fonts'
+ args=['ffmpeg','-v','error','-y','-ss',str(opts.start),'-t',str(opts.end-opts.start),'-i',str(folder/'source')]
  if opts.logo!='none':
-  args+=['-i',str(logo),'-filter_complex',f'[0:v]{filters}[v];[1:v]scale=150:-1[l];[v][l]overlay=W-w-45:80[out]','-map','[out]','-map','0:a?']
- else: args+=['-vf',filters]
- args+=['-t',str(opts.end-opts.start),'-c:v','libx264','-preset','fast','-crf','18','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-movflags','+faststart',str(output)]
+  from PIL import Image
+  with Image.open(logo) as image:logo_pixel_width=min(round(1080*opts.logo_width/100),round(1440*image.width/image.height))
+  args+=['-i',str(logo),'-filter_complex',f"[0:v]{filters}[v];[1:v]scale={max(1,logo_pixel_width)}:-1[l];[v][l]overlay=(W-w)*{opts.logo_x/100}:(H-h)*{opts.logo_y/100}:enable='gte(t,{opts.logo_start})*lt(t,{logo_end})'[out]",'-map','[out]','-map','0:a?']
+ else: args+=['-vf',filters,'-map','0:v:0','-map','0:a?']
+ args+=['-t',str(opts.end-opts.start),'-c:v','libx264','-preset','fast','-r',str(JOBS[ident].get('fps',30)),'-fps_mode','cfr','-crf','18','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-movflags','+faststart',str(output)]
  try: command(args,cwd=folder)
  except Exception as e: raise HTTPException(500,str(e))
  return FileResponse(output,media_type='video/mp4',filename=f'clip-{token[:6]}.mp4')

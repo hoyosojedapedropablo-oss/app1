@@ -3,3 +3,6 @@ uvicorn>=0.30,<1
 python-multipart>=0.0.18
 faster-whisper>=1.2,<2
 numpy>=1.26,<3
+Pillow>=10,<13
+huggingface-hub>=0.21,<3
+llama-cpp-python==0.3.2
