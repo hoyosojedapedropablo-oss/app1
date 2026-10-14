@@ -123,12 +123,15 @@ def analyze(ident,options):
     return
    job.update(progress=(60+round(25*i/max(1,total))) if stage=='selection' else (85+round(13*i/max(1,total))),message=f'Analizando contexto · bloque {i+1} de {total}' if stage=='selection' else f'Revisando cortes y títulos · clip {i+1} de {total}')
   if options.engine=='cloud':
-   clips=cloud_ai.select_cloud(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,max_clips=options.max_clips,on_progress=progress,cancel=event)
+   job['selection_diagnostics']=[]
+   clips=cloud_ai.select_cloud(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,max_clips=options.max_clips,on_progress=progress,cancel=event,diagnostics=job['selection_diagnostics'])
   elif options.engine=='gpu':
-   clips=gpu_ai.select_gpu(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,max_clips=options.max_clips,on_progress=progress,cancel=event)
+   job['selection_diagnostics']=[]
+   clips=gpu_ai.select_gpu(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,max_clips=options.max_clips,on_progress=progress,cancel=event,diagnostics=job['selection_diagnostics'])
   else:
    clips=select_clips(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,quality=options.quality,max_clips=options.max_clips,on_progress=progress)
-  job.update(status='ready',progress=100,clips=clips,message=f'{len(clips)} momentos seleccionados. Se descartan relleno y solapamientos; las puntuaciones son estimaciones editoriales, no probabilidades de viralidad.')
+  message=f'{len(clips)} momentos seleccionados. Las puntuaciones son evaluaciones editoriales, no probabilidades de viralidad.' if clips else 'La selección quedó vacía tras la revisión. Esto no demuestra que el video no tenga potencial. Revisa la transcripción y añade contexto para volver a analizar sin transcribir de nuevo.'
+  job.update(status='ready',progress=100,clips=clips,message=message)
  except cloud_ai.AnalysisCancelled:job.update(status='cancelled',message='Análisis cancelado. Puedes reutilizar la transcripción completa si ya se guardó.')
  except Exception as e: job.update(status='error',message=str(e))
  finally:save_job(job)

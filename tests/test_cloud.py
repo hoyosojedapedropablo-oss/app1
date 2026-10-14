@@ -28,7 +28,8 @@ class CloudAnalysis(unittest.TestCase):
    clips=cloud_ai.select_cloud(transcript,20,60,1100,transport=httpx.MockTransport(respond),on_progress=lambda i,total,stage:progress.append((i,total)))
   self.assertEqual(clips,[])
   self.assertEqual(maximum,3)
-  self.assertEqual(progress[-1],(len(payloads),len(payloads)))
+  self.assertEqual(progress[-1],(4,4))
+  self.assertEqual(len(payloads),8) # Four blocks, one bounded review for each empty result.
   self.assertLess(len(payloads),10)
   for body in payloads:
    payload=json.loads(body['messages'][1]['content'])

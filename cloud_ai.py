@@ -48,7 +48,7 @@ def complete(payload,transport=None,cancel=None):
     except httpx.TimeoutException:raise ValueError('La solicitud de IA superó 90 segundos. No se continuará esperando indefinidamente.') from None
     except httpx.HTTPError:raise ValueError('No se pudo conectar con la API. Revisa Internet y vuelve a intentarlo.') from None
 
-def select_cloud(transcript,minimum,maximum,duration,speaker='',context='',profile='',max_clips=10,on_progress=None,cancel=None,transport=None,completion=None,workers=3,stage='cloud'):
+def select_cloud(transcript,minimum,maximum,duration,speaker='',context='',profile='',max_clips=10,on_progress=None,cancel=None,transport=None,completion=None,workers=3,stage='cloud',diagnostics=None):
     from timeline import timed_sentences
     from intelligence import accept_proposals,diverse_selection,Proposals
     phrases=timed_sentences(transcript)
@@ -60,15 +60,20 @@ def select_cloud(transcript,minimum,maximum,duration,speaker='',context='',profi
         if chunk and chunk[-1]['end']-chunk[0]['start']>=minimum:chunks.append(chunk)
     candidates=[];completed=0
     def analyze_chunk(chunk):
-        payload={'rango_segundos':[minimum,maximum],'hablante_identificado':speaker,'contexto_del_video':context,'criterios_del_editor':profile,'frases':[dict(id=i,**p) for i,p in enumerate(chunk)],'instruccion':'Selecciona historias completas y excepcionales. Usa first/last inclusivos. Recorta logística al inicio/final. No copies frases como títulos ni inventes hechos. Puede haber cero resultados.'}
+        payload={'rango_segundos':[minimum,maximum],'hablante_identificado':speaker,'contexto_del_video':context,'criterios_del_editor':profile,'frases':[dict(id=i,**p) for i,p in enumerate(chunk)],'instruccion':'Selecciona las mejores historias completas de este bloque: reacciones con causa, humor con remate, descubrimientos, opiniones, relatos o datos útiles. Usa first/last inclusivos. Recorta logística al inicio/final. No copies frases como títulos ni inventes hechos. Puede haber cero resultados.'}
         # No overlapping candidate transcripts: every source phrase is serialized once per block.
         data=(completion or complete)(payload,transport=transport,cancel=cancel)
-        # The cloud path allows up to four proposals, then applies the same grounded filters.
         if not isinstance(data.get('moments'),list):raise ValueError('La IA devolvió una respuesta editorial inválida.')
-        result=[]
-        for moment in data['moments'][:4]:
-            try:result.extend(accept_proposals({'moments':[moment]},chunk,transcript,minimum,maximum,speaker))
-            except (ValueError,TypeError):continue
+        rejected=[]
+        result=accept_proposals(data,chunk,transcript,minimum,maximum,speaker,diagnostics=rejected)
+        # One targeted correction only: preserve grounding and duration, never fabricate a quota.
+        if not result:
+            repair=dict(payload)
+            repair['revision']={'propuestas_previas':data['moments'][:4],'motivos_de_descarte':rejected,'instruccion':'Revisa el mejor momento concreto del bloque. Corrige IDs, rango y títulos. Si no propusiste nada, busca reacción, humor, descubrimiento o relato con planteamiento y resolución. No exijas emoción, novedad y polémica simultáneamente. No inventes ni fuerces clips de relleno; puedes devolver cero.'}
+            corrected=(completion or complete)(repair,transport=transport,cancel=cancel)
+            result=accept_proposals(corrected,chunk,transcript,minimum,maximum,speaker,diagnostics=rejected)
+        if diagnostics is not None:
+            diagnostics.append(dict(start=chunk[0]['start'],end=chunk[-1]['end'],proposed=len(data['moments']),accepted=len(result),rejections=rejected))
         for clip in result:clip['source']=f'{MODEL} · análisis de transcripción'
         return result
     executor=ThreadPoolExecutor(max_workers=workers)
