@@ -73,11 +73,11 @@ $('manual').onclick=()=>{choose({id:'manual',title:'',text:'',start:0,end:Math.m
 $('analyze').onclick=async()=>{
  const minimum=Number($('minimum').value),maximum=Number($('maximum').value);
  if(minimum>maximum||minimum<5||maximum>180){say('Elige un rango válido entre 5 y 180 segundos.');return;}
- try{await request(`/api/jobs/${job.id}/analyze`,jsonOptions({minimum,maximum,speaker:$('speaker').value,context:$('videoContext').value,quality:$('quality').value,max_clips:Number($('maxClips').value)}));edits.clear();selected=null;cues=[];$('export').disabled=true;$('analyze').disabled=true;$('source').disabled=true;$('manual').disabled=true;$('all').classList.add('hidden');$('clips').replaceChildren();$('video').pause();paint();poll(++pollToken,job.id);}catch(e){say(e.message);}
+ try{await request(`/api/jobs/${job.id}/analyze`,jsonOptions({minimum,maximum,speaker:$('speaker').value,context:$('videoContext').value,quality:$('quality').value,engine:$('engine').value,max_clips:Number($('maxClips').value)}));edits.clear();selected=null;cues=[];$('export').disabled=true;$('analyze').disabled=true;$('source').disabled=true;$('manual').disabled=true;$('all').classList.add('hidden');$('clips').replaceChildren();$('video').pause();paint();$('cancelAnalysis').classList.remove('hidden');poll(++pollToken,job.id);}catch(e){say(e.message);}
 };
 async function poll(token,jobId){
  if(token!==pollToken)return;
- try{const next=await(await request(`/api/jobs/${jobId}`)).json();if(token!==pollToken)return;job=next;say((job.message||'Análisis en cola…')+(job.progress?` · ${job.progress}%`:''));$('progress').value=job.progress||0;if(['ready','error'].includes(job.status)){$('analyze').disabled=false;$('source').disabled=false;$('manual').disabled=false;if(job.status==='ready')render();return;}}
+ try{const next=await(await request(`/api/jobs/${jobId}`)).json();if(token!==pollToken)return;job=next;const elapsed=job.started_at?Math.round((Date.now()/1000-job.started_at)/60):0;say((job.message||'Análisis en cola…')+(job.progress?` · ${job.progress}%`:'')+(elapsed?` · ${elapsed} min transcurridos`:''));$('progress').value=job.progress||0;if(['ready','error','cancelled'].includes(job.status)){$('cancelAnalysis').classList.add('hidden');$('analyze').disabled=false;$('source').disabled=false;$('manual').disabled=false;if(job.status==='ready')render();return;}}
  catch(e){say(e.message);$('analyze').disabled=false;$('source').disabled=false;return;}
  setTimeout(()=>poll(token,jobId),1500);
 }
@@ -122,3 +122,12 @@ for(const [element,xKey,yKey,isLogo] of [['previewTitle','title_x','title_y',fal
  $(xKey).value=Math.max(0,Math.min(100,x));$(yKey).value=Math.max(0,Math.min(100,y));saveCurrent();paint();};
  node.onpointerup=node.onpointercancel=()=>{dragging=null;};
 }
+
+$('engine').onchange=()=>{$('localOptions').classList.toggle('hidden',$('engine').value!=='local');$('aiConnection').open=$('engine').value==='cloud';};
+async function aiState(){const state=await(await request('/api/ai')).json();$('aiState').textContent=state.configured?'Clave conectada · '+state.model:'Sin clave de API. Configura la conexión para usar el modo rápido.';}
+$('connectAI').onclick=async()=>{const button=$('connectAI');button.disabled=true;try{const state=await(await request('/api/ai',jsonOptions({key:$('apiKey').value}))).json();$('apiKey').value='';$('aiState').textContent=state.message;say('Conexión verificada. Puedes iniciar el análisis rápido.');}catch(e){$('aiState').textContent=e.message;}finally{button.disabled=false;}};
+$('disconnectAI').onclick=async()=>{try{await request('/api/ai',{method:'DELETE'});await aiState();}catch(e){say(e.message);}};
+$('cancelAnalysis').onclick=async()=>{try{await request(`/api/jobs/${job.id}/cancel`,{method:'POST'});say('Cancelación solicitada. El análisis en nube puede tener una solicitud en curso.');}catch(e){say(e.message);}};
+request('/api/jobs').then(r=>r.json()).then(list=>{if(!list.length)return;$('recoveredPanel').classList.remove('hidden');for(const j of list){const option=document.createElement('option');option.value=j.id;option.textContent=`${j.name} · ${(j.duration/60).toFixed(1)} min${j.cached?' · transcripción lista':''}`;$('recentJob').append(option);}}).catch(e=>say(e.message));
+$('reuseJob').onclick=async()=>{try{++pollToken;++cueVersion;job=await(await request('/api/jobs/'+$('recentJob').value)).json();selected=null;cues=[];edits.clear();$('filename').textContent=job.name;if(job.analysis_options){const opts=job.analysis_options;$('videoContext').value=opts.context||'';$('speaker').value=opts.speaker||'';$('minimum').value=opts.minimum;$('maximum').value=opts.maximum;}$('video').src=`/api/jobs/${job.id}/video`;$('analyze').disabled=false;$('manual').disabled=false;$('goEditor').disabled=false;say('Video recuperado. Si tiene transcripción completa, no se volverá a transcribir.');if(job.status==='ready'&&job.clips.length)render();}catch(e){say(e.message);}};
+aiState().catch(e=>say(e.message));

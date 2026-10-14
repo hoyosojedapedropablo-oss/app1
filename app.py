@@ -5,10 +5,10 @@ from typing import Literal
 import numpy as np
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, SecretStr
 from timeline import make_cues, clip_words
 from intelligence import select_clips
 from styling import FONTS, ass_color, title_layout
@@ -20,6 +20,8 @@ app=FastAPI(title='Clip Studio')
 app.mount('/static',StaticFiles(directory=ROOT/'static'),name='static')
 JOBS={}; pool=ThreadPoolExecutor(max_workers=1)
 model=None
+CANCEL={}
+import cloud_ai
 
 def command(args, cwd=None):
  r=subprocess.run(args,capture_output=True,text=True,cwd=cwd)
@@ -59,6 +61,7 @@ async def upload(file:UploadFile=File(...)):
   try:fps=float(Fraction(stream.get('avg_frame_rate','30/1')))
   except (ValueError,ZeroDivisionError):fps=30
   JOBS[ident]=dict(id=ident,name=file.filename,duration=duration,fps=max(24,min(60,fps)),status='uploaded',clips=[])
+  save_job(JOBS[ident])
   return JOBS[ident]
  except Exception as e:
   path.unlink(missing_ok=True)
@@ -69,7 +72,8 @@ class Analysis(BaseModel):
  maximum:int=Field(default=60,ge=5,le=180)
  speaker:str=Field(default='',max_length=120)
  context:str=Field(default='',max_length=4000)
- quality:Literal['quality','fast']='quality'
+ quality:Literal['quality','fast']='fast'
+ engine:Literal['cloud','local']='cloud'
  max_clips:int=Field(default=10,ge=1,le=20)
  @model_validator(mode='after')
  def validate_range(self):
@@ -81,34 +85,53 @@ def analyze(ident,options):
  job=JOBS[ident]
  try:
   job.update(clips=[],progress=0,analysis_range={'minimum':options.minimum,'maximum':options.maximum},status='transcribing',message='Transcribiendo con Whisper local. La primera ejecución descarga el modelo.')
-  from faster_whisper import WhisperModel
-  if model is None: model=WhisperModel(os.getenv('WHISPER_MODEL','small'),device='cpu',compute_type='int8',cpu_threads=4)
+  event=CANCEL.setdefault(ident,threading.Event())
+  if event.is_set():raise cloud_ai.AnalysisCancelled()
   cached=DATA/ident/'transcript.json'
   if cached.exists():
    transcript=json.loads(cached.read_text(encoding='utf-8'))
   else:
+   from faster_whisper import WhisperModel
+   if model is None:model=WhisperModel(os.getenv('WHISPER_MODEL','small'),device='cpu',compute_type='int8',cpu_threads=4)
    audio=decode_audio(DATA/ident/'source')
    segments,info=model.transcribe(audio,vad_filter=True,word_timestamps=True)
    transcript=[]
    for s in segments:
+    if event.is_set():raise cloud_ai.AnalysisCancelled()
     transcript.append(dict(start=s.start,end=s.end,text=s.text,words=[dict(start=w.start,end=w.end,text=w.word) for w in (s.words or [])]))
     job['progress']=min(60,round(s.end/job['duration']*60))
    cached.write_text(json.dumps(transcript,ensure_ascii=False),encoding='utf-8')
   job['transcript']=transcript
-  job.update(status='selecting',progress=60,message='Cargando el analista local de contexto. La primera vez descarga 4,68 GB (preciso) o 1,93 GB (ligero).')
+  if event.is_set():raise cloud_ai.AnalysisCancelled()
+  job.update(status='selecting',progress=60,message='Analizando transcripción en la nube…' if options.engine=='cloud' else 'Preparando modelo local (primera descarga hasta 4,68 GB). Puede tardar en CPU.')
   profile=read_profile()['instructions']
   def progress(i,total,stage='selection'):
+   if event.is_set():raise cloud_ai.AnalysisCancelled()
+   if stage=='cloud':
+    job.update(progress=60+round(38*i/max(1,total)),message=f'Análisis en nube · {i} de {total} bloques completados')
+    return
    job.update(progress=(60+round(25*i/max(1,total))) if stage=='selection' else (85+round(13*i/max(1,total))),message=f'Analizando contexto · bloque {i+1} de {total}' if stage=='selection' else f'Revisando cortes y títulos · clip {i+1} de {total}')
-  clips=select_clips(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,quality=options.quality,max_clips=options.max_clips,on_progress=progress)
+  if options.engine=='cloud':
+   clips=cloud_ai.select_cloud(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,max_clips=options.max_clips,on_progress=progress,cancel=event)
+  else:
+   clips=select_clips(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,quality=options.quality,max_clips=options.max_clips,on_progress=progress)
   job.update(status='ready',progress=100,clips=clips,message=f'{len(clips)} momentos seleccionados. Se descartan relleno y solapamientos; las puntuaciones son estimaciones editoriales, no probabilidades de viralidad.')
+ except cloud_ai.AnalysisCancelled:job.update(status='cancelled',message='Análisis cancelado. Puedes reutilizar la transcripción completa si ya se guardó.')
  except Exception as e: job.update(status='error',message=str(e))
+ finally:save_job(job)
 
 @app.post('/api/jobs/{ident}/analyze')
 def start(ident:str,options:Analysis):
  if ident not in JOBS: raise HTTPException(404)
  if options.minimum>options.maximum: raise HTTPException(400,'El mínimo no puede superar el máximo.')
  if JOBS[ident]['status'] in ['queued','transcribing','selecting']: raise HTTPException(409,'El análisis ya está en curso.')
- JOBS[ident]['status']='queued'; pool.submit(analyze,ident,options)
+ if options.engine=='cloud' and not cloud_ai.configured():raise HTTPException(400,'Conecta tu clave de API en Configurar IA antes de iniciar el modo rápido.')
+ if options.engine=='local':
+  import importlib.util
+  if importlib.util.find_spec('llama_cpp') is None:raise HTTPException(400,'Para usar IA local, ejecuta INSTALAR_IA_LOCAL y reinicia la app. El modo nube no necesita ese motor.')
+ CANCEL[ident]=threading.Event()
+ JOBS[ident]['analysis_options']=options.model_dump()
+ JOBS[ident]['status']='queued'; JOBS[ident]['started_at']=__import__('time').time();save_job(JOBS[ident]); pool.submit(analyze,ident,options)
  return JOBS[ident]
 
 class Profile(BaseModel):
@@ -126,10 +149,42 @@ def save_profile(options:Profile):
  (DATA/'editorial-profile.json').write_text(options.model_dump_json(),encoding='utf-8')
  return options
 
+@app.post('/api/jobs/{ident}/cancel')
+def cancel_job(ident:str):
+ if ident not in JOBS:raise HTTPException(404)
+ CANCEL.setdefault(ident,threading.Event()).set()
+ JOBS[ident]['message']='Cancelación solicitada. Puedes cerrar la app para detener inmediatamente un cálculo local.'
+ return {'ok':True}
+
+class Connection(BaseModel):
+ key:SecretStr
+
+@app.get('/api/ai')
+def ai_status():return {'configured':cloud_ai.configured(),'model':cloud_ai.MODEL}
+
+@app.post('/api/ai')
+def connect_ai(options:Connection,request:Request):
+ if request.client and request.client.host not in ['127.0.0.1','::1','testclient']:raise HTTPException(403,'Configura la clave desde este equipo o mediante CLIP_AI_KEY.')
+ origin=request.headers.get('origin')
+ if origin and origin not in ['http://127.0.0.1:8000','http://localhost:8000']:raise HTTPException(403)
+ try:cloud_ai.check_connection(options.key.get_secret_value().strip())
+ except Exception as e:raise HTTPException(400,str(e))
+ cloud_ai.configure(options.key.get_secret_value())
+ return {'configured':True,'model':cloud_ai.MODEL,'message':'Conexión verificada. La clave queda en memoria hasta cerrar la app. El análisis consume saldo de API.'}
+
+@app.delete('/api/ai')
+def disconnect_ai(request:Request):
+ if request.client and request.client.host not in ['127.0.0.1','::1','testclient']:raise HTTPException(403)
+ cloud_ai.configure('');return {'configured':False}
+
+@app.get('/api/jobs')
+def list_jobs():
+ return [dict(id=j['id'],name=j['name'],duration=j['duration'],cached=(DATA/j['id']/'transcript.json').exists()) for j in JOBS.values()]
+
 @app.get('/api/jobs/{ident}')
 def status(ident:str):
  if ident not in JOBS: raise HTTPException(404)
- return JOBS[ident]
+ return {key:value for key,value in JOBS[ident].items() if key!='transcript'}
 
 @app.get('/api/jobs/{ident}/video')
 def video(ident:str):
@@ -295,3 +350,24 @@ def export(ident:str,opts:Export):
  try: command(args,cwd=folder)
  except Exception as e: raise HTTPException(500,str(e))
  return FileResponse(output,media_type='video/mp4',filename=f'clip-{token[:6]}.mp4')
+
+
+def save_job(job):
+ path=DATA/job['id']/'job.json'
+ tmp=path.with_suffix('.tmp')
+ tmp.write_text(json.dumps(job,ensure_ascii=False),encoding='utf-8');tmp.replace(path)
+
+def recover_jobs():
+ for folder in DATA.iterdir():
+  if not folder.is_dir() or not re.fullmatch(r'[a-f0-9]{32}',folder.name) or not (folder/'source').exists():continue
+  try:
+   metadata=folder/'job.json'
+   if metadata.exists():job=json.loads(metadata.read_text(encoding='utf-8'))
+   else:
+    info=probe(folder/'source');job=dict(id=folder.name,name=f'Video recuperado {folder.name[:6]}',duration=float(info['format']['duration']),fps=30,clips=[],status='uploaded')
+   if job.get('status') in ['queued','selecting','transcribing']:job.update(status='uploaded',message='El análisis anterior se interrumpió. Puedes reutilizar su transcripción.')
+   job['id']=folder.name
+   JOBS[folder.name]=job
+  except (OSError,ValueError,RuntimeError):continue
+
+recover_jobs()

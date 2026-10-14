@@ -1,4 +1,4 @@
-CLIP STUDIO - EDITOR 2.0
+CLIP STUDIO - EDITOR 2.1
 
 1. Python 3.12 de 64 bits debe estar instalado.
 2. FFmpeg: en PowerShell, winget install --id Gyan.FFmpeg -e
@@ -6,13 +6,25 @@ CLIP STUDIO - EDITOR 2.0
 4. Haz doble clic en INICIAR_WINDOWS.bat.
    Instalara las dependencias. Deja abierta la ventana mientras usas la app.
 
-ANALIZAR
-Carga un video, agrega CONTEXTO sobre quien aparece y lo que esta pasando,
-elige el rango (por ejemplo 20 a 60 segundos) y pulsa Encontrar momentos.
-Preciso: descarga un modelo de 4,68 GB, recomendado con 16 GB de RAM.
-Ligero: descarga 1,93 GB y es menos preciso. El analisis en CPU tarda bastante.
-La primera transcripcion tambien descarga Whisper small (~460 MB).
-No requiere una clave de API. Revisa las sugerencias: ninguna IA garantiza viralidad.
+ANALIZAR RAPIDO
+Abre Configurar IA rapida e introduce la clave de API en la APP.
+No la compartas por chat. Necesitas una cuenta de OpenAI con saldo de API:
+ChatGPT Plus no incluye ese saldo. Verificar conexion comprueba acceso al modelo;
+la facturacion se comprueba al iniciar el primer analisis.
+Se envia solo la transcripcion y contexto; el video se queda en tu equipo.
+La clave queda en memoria hasta cerrar la app.
+Carga un video, agrega contexto, elige rango y pulsa Encontrar momentos.
+La transcripcion y exportacion locales siguen dependiendo de tu equipo.
+No se promete un tiempo fijo hasta medir tu video y conexion.
+
+REUTILIZAR
+Conserva la carpeta data de la version anterior y copiala a esta version,
+con la app cerrada. Reutilizar un video guardado permite recuperar la
+transcripcion completa de tu intento anterior sin esperar otra vez por ella.
+
+MODO LOCAL OPCIONAL
+Ejecuta INSTALAR_IA_LOCAL.bat para instalar el motor local.
+Qwen 7B en CPU puede ser muy lento; no es el modo recomendado para rapidez.
 
 EDITAR
 Hay cuatro pestanas: Titulo, Subtitulos, Logo y Encuadre.

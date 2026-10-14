@@ -160,24 +160,25 @@ def candidate_windows(chunk,minimum,maximum):
 def select_clips(transcript,minimum,maximum,duration,speaker='',context='',profile='',max_clips=10,quality='quality',on_progress=None):
     phrases=timed_sentences(transcript)
     if not phrases:return []
-    candidates=[];window=max(120,maximum+20);step=window-maximum
+    candidates=[];window=max(180,maximum+30);step=window-maximum
     chunks=[]
     for offset in range(0,int(duration)+1,step):
         chunk=[p for p in phrases if p['start']>=offset and p['end']<=offset+window]
         if chunk and chunk[-1]['end']-chunk[0]['start']>=minimum:chunks.append(chunk)
     for i,chunk in enumerate(chunks):
-        if on_progress:on_progress(i,len(chunks),'selection')
         spans=candidate_windows(chunk,minimum,maximum)
         if not spans:continue
         payload={'hablante_identificado':speaker,'contexto_del_video':context,'criterios_del_editor':profile,
                  'instruccion':'Compara estos posibles clips y elige como máximo DOS que cuenten una historia fuerte. Devuelve candidate_id existente. Si ninguno merece publicarse devuelve moments vacío. El texto y la evidencia de cada propuesta deben proceder de ESE candidato. No elijas dos versiones de la misma historia.',
-                 'candidatos':[{'candidate_id':j,'duracion':round(chunk[b]['end']-chunk[a]['start'],1),'texto':' '.join(p['text'] for p in chunk[a:b+1])} for j,(a,b) in enumerate(spans)]}
+                 'frases':[{'id':j,'texto':p['text']} for j,p in enumerate(chunk)],
+                 'candidatos':[{'candidate_id':j,'primera_frase':a,'ultima_frase':b,'duracion':round(chunk[b]['end']-chunk[a]['start'],1)} for j,(a,b) in enumerate(spans)]}
         with _lock:
             llm=local_model(quality)
             while len(payload['candidatos'])>1 and len(llm.tokenize((SYSTEM+'\n'+json.dumps(payload,ensure_ascii=False)).encode('utf-8')))+1300>llm.n_ctx():
                 options=payload['candidatos']
                 count=max(1,len(options)//2)
                 payload['candidatos']=[options[round(j*(len(options)-1)/max(1,count-1))] for j in range(count)]
+        if on_progress:on_progress(i,len(chunks),'selection')
         schema=Reviews.model_json_schema()
         schema['$defs']['CandidateReview']['properties']['candidate_id']['enum']=[c['candidate_id'] for c in payload['candidatos']]
         data=query_json(json.dumps(payload,ensure_ascii=False),schema,quality=quality)
