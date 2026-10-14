@@ -1,0 +1,25 @@
+CLIP STUDIO - PRIMERA VERSION PERSONAL
+
+1. Instala Python 3.12 desde https://www.python.org/downloads/windows/
+2. Abre PowerShell y ejecuta:
+   winget install --id Gyan.FFmpeg -e
+3. Extrae TODO el ZIP en una carpeta de tu equipo.
+4. Haz doble clic en INICIAR_WINDOWS.bat.
+   La primera vez instalara dependencias. Necesita Internet.
+5. El navegador se abrira cuando la app este lista.
+   Deja abierta la ventana de comandos. Cierra con Ctrl+C.
+
+PRUEBA RAPIDA
+Carga un video corto, pulsa Crear clip manual, configura los tiempos,
+escribe titulo y subtitulos y pulsa Descargar clip.
+
+ANALISIS AUTOMATICO
+Encontrar momentos descarga Whisper base la primera vez desde Hugging Face.
+El modelo corre localmente en CPU. No necesita una clave de API.
+Una descarga bloqueada o fallida impide el analisis automatico.
+La seleccion actual es basica; no es un analista experto de viralidad.
+Los subtitulos modificados requieren revisar sincronizacion.
+
+Los logos se cargan desde Tu biblioteca de logos antes de seleccionarlos.
+No se incluyen logos oficiales. Los videos y exportaciones quedan en data/.
+No publiques este servidor en Internet: esta version no tiene login.
