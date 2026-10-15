@@ -1,23 +1,25 @@
 const $=id=>document.getElementById(id);
+let trackingPoints=[],trackingRange=null,trackingRequest=0;
 let job=null,selected=null,cues=[],cueVersion=0,captionPending=false,captionTimer,pollToken=0;
 const edits=new Map();
 const numeric=['title_size','title_outline_width','title_x','title_y','caption_x','caption_y','caption_size','outline_width','focus_x','focus_y','start','end','logo_width','logo_x','logo_y','logo_start','logo_end'];
-const styleKeys=['style','font','title_font','title_outline_color','title_size','title_outline_width','title_x','title_y','caption_x','caption_y','caption_size','caption_color','outline_color','outline_width','logo','framing','focus_x','focus_y','logo_width','logo_x','logo_y','logo_start','logo_end'];
+const styleKeys=['auto_follow','style','font','title_font','title_outline_color','title_size','title_outline_width','title_x','title_y','caption_x','caption_y','caption_size','caption_color','outline_color','outline_width','logo','framing','focus_x','focus_y','logo_width','logo_x','logo_y','logo_start','logo_end'];
 async function request(url,options={}){const r=await fetch(url,options);if(!r.ok){let e;try{e=await r.json()}catch{e={detail:r.statusText}}throw Error(typeof e.detail==='string'?e.detail:'Revisa los campos y el rango de tiempos.')}return r;}
 const jsonOptions=value=>({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});
 function showView(name){$('analysisView').classList.toggle('hidden',name!=='analysis');$('editorView').classList.toggle('hidden',name!=='editor');$('goAnalyze').classList.toggle('active',name==='analysis');$('goEditor').classList.toggle('active',name==='editor');if(name==='editor')requestAnimationFrame(paint);}
 $('goAnalyze').onclick=()=>showView('analysis');$('goEditor').onclick=()=>showView('editor');
 for(const button of document.querySelectorAll('[data-tab]'))button.onclick=()=>{for(const b of document.querySelectorAll('[data-tab]')){b.classList.toggle('active',b===button);b.setAttribute('aria-selected',String(b===button));}for(const panel of document.querySelectorAll('.tab-panel'))panel.classList.toggle('hidden',panel.id!=='tab-'+button.dataset.tab);};
 function say(text){$('status').textContent=text;}
-function styles(){return Object.fromEntries(styleKeys.map(k=>[k,k==='logo_end'&&!$(k).value?null:numeric.includes(k)?Number($(k).value):$(k).value]));}
+function styles(){return Object.fromEntries(styleKeys.map(k=>[k,k==='auto_follow'?$('auto_follow').checked:k==='logo_end'&&!$(k).value?null:numeric.includes(k)?Number($(k).value):$(k).value]));}
 function settings(){return {...styles(),title:$('title').value,subtitles:$('subtitles').value,start:Number($('start').value),end:Number($('end').value),clip_id:selected&&selected.id!=='manual'?selected.id:null,captions:cues.map(c=>({...c}))};}
 function saveCurrent(){if(selected)edits.set(selected.id,settings());}
 function validRange(opts){const duration=opts.end-opts.start;if(!Number.isFinite(duration)||duration<=0||opts.start<0||opts.end>job.duration)throw Error('El inicio y final deben estar dentro del video.');if(opts.clip_id&&job.analysis_range&&(duration<job.analysis_range.minimum-.001||duration>job.analysis_range.maximum+.001))throw Error(`El clip debe durar ${job.analysis_range.minimum}–${job.analysis_range.maximum} segundos.`);return duration;}
 function paint(){
+ $('focus_x').disabled=$('auto_follow').checked;$('focus_y').disabled=$('auto_follow').checked;
  const preview=$('preview');if(!preview.clientWidth)return;const ratio=preview.clientWidth/1080;if(job)$('sourceSummary').textContent=job.name;
- const title=$('previewTitle');title.textContent=$('title').value;title.style.fontFamily=$('title_font').value;title.style.fontSize=(Number($('title_size').value)*ratio)+'px';
+ const title=$('previewTitle');const layout=balancedTitle($('title').value,$('title_font').value,Number($('title_size').value));title.textContent=layout.text;title.style.fontFamily=$('title_font').value;title.style.fontSize=(layout.size*ratio)+'px';
  title.style.webkitTextStroke=Number($('title_outline_width').value)*ratio+'px '+$('title_outline_color').value;title.style.padding=(10*ratio)+'px';title.style.top=$('title_y').value+'%';title.style.left=$('title_x').value+'%';title.style.right='auto';
- $('titleCount').textContent=`${$('title').value.length}/96 caracteres · recomendado: hasta 64 y 2 líneas`;
+ $('titleCount').textContent=`${$('title').value.length}/96 caracteres · recomendado: hasta 80 y 2 líneas`;
  const caption=$('previewCaption');caption.style.top=$('caption_y').value+'%';caption.style.left=$('caption_x').value+'%';caption.style.fontFamily=$('font').value;caption.style.fontSize=(Number($('caption_size').value)*ratio)+'px';caption.style.color=$('caption_color').value;caption.style.webkitTextStroke=(Number($('outline_width').value)*ratio)+'px '+$('outline_color').value;
  $('video').style.objectFit=$('framing').value==='crop'?'cover':'contain';$('video').style.objectPosition=`${$('focus_x').value}% ${$('focus_y').value}%`;
  paintLogo();
@@ -26,6 +28,7 @@ function paint(){
 }
 function paintTime(){
  const t=$('video').currentTime-Number($('start').value),duration=Number($('end').value)-Number($('start').value);
+ applyTracking(t);
  const editing=$('video').paused&&$('editLayers').checked&&selected;const active=cues.find(c=>t>=c.start&&t<c.end);$('previewCaption').textContent=active?.text||(editing?cues[0]?.text||'Subtítulos de ejemplo':'');
  $('previewTitle').hidden=!selected||!$('title').value||(!editing&&(t<0||t>=duration));
  $('seek').value=Math.max(0,t);$('clock').textContent=`${Math.max(0,t).toFixed(1)} / ${Math.max(0,duration).toFixed(1)} s`;
@@ -56,10 +59,10 @@ async function refreshCaptions(){
  try{const opts=settings();opts.captions=null;const body=await(await request(`/api/jobs/${jobId}/captions`,jsonOptions(opts))).json();if(version!==cueVersion||job?.id!==jobId||selected?.id!==clipId)return;cues=body.captions;captionPending=false;renderCueEditor();saveCurrent();paintTime();}
  catch(e){if(version===cueVersion){captionPending=false;say(e.message);throw e;}}
 }
-styleKeys.forEach(key=>$(key).addEventListener('input',()=>{if(key==='style'){const presets={classic:['#FFFFFF','#000000',4],bold:['#FFF200','#000000',5],mint:['#AAFF87','#18251C',4],clean:['#FFFFFF','#000000',2]};const p=presets[$('style').value];$('caption_color').value=p[0];$('outline_color').value=p[1];$('outline_width').value=p[2];}saveCurrent();paint();}));
+styleKeys.forEach(key=>$(key).addEventListener('input',()=>{if(key==='framing'&&$('framing').value!=='crop'){$('auto_follow').checked=false;++trackingRequest;}if(key==='style'){const presets={classic:['#FFFFFF','#000000',4],bold:['#FFF200','#000000',5],mint:['#AAFF87','#18251C',4],clean:['#FFFFFF','#000000',2]};const p=presets[$('style').value];$('caption_color').value=p[0];$('outline_color').value=p[1];$('outline_width').value=p[2];}saveCurrent();paint();}));
 $('titleChoices').onchange=()=>{if($('titleChoices').value){$('title').value=$('titleChoices').value;saveCurrent();paint();}};
 $('title').oninput=()=>{saveCurrent();paint();};
-for(const key of ['subtitles','start','end'])$(key).oninput=()=>{clearTimeout(captionTimer);++cueVersion;captionPending=true;saveCurrent();paint();captionTimer=setTimeout(()=>refreshCaptions().catch(()=>{}),500);};
+for(const key of ['subtitles','start','end'])$(key).oninput=()=>{if(key!=='subtitles'){++trackingRequest;trackingPoints=[];trackingRange=null;if($('auto_follow').checked)$('trackingState').textContent='Los tiempos cambiaron: pulsa Calcular seguimiento de nuevo.';}clearTimeout(captionTimer);++cueVersion;captionPending=true;saveCurrent();paint();captionTimer=setTimeout(()=>refreshCaptions().catch(()=>{}),500);};
 $('editLayers').onchange=paintTime;
 $('video').onplay=paintTime;$('video').onpause=paintTime;
 $('video').ontimeupdate=paintTime;$('video').onloadedmetadata=()=>{if(selected)$('video').currentTime=Number($('start').value);paint();};
@@ -90,14 +93,17 @@ function render(){
  $('all').classList.toggle('hidden',!job.clips.length);if(job.clips.length)choose(job.clips[0]);
 }
 function choose(c){
- showView('editor');saveCurrent();++cueVersion;clearTimeout(captionTimer);captionPending=false;selected=c;
- const e=edits.get(c.id)||{title:c.title,subtitles:c.text,start:c.start,end:c.end};for(const [k,v]of Object.entries(e))if($(k))$(k).value=v;
+ showView('editor');saveCurrent();
+ ++trackingRequest;trackingPoints=[];trackingRange=null;$('auto_follow').checked=false;$('trackingState').textContent='';
+++cueVersion;clearTimeout(captionTimer);captionPending=false;selected=c;
+ const e=edits.get(c.id)||{title:c.title,subtitles:c.text,start:c.start,end:c.end};for(const [k,v]of Object.entries(e))if($(k)){if(k==='auto_follow')$(k).checked=!!v;else $(k).value=v;}
+ if($('auto_follow').checked)prepareTracking().catch(e=>say(e.message));
  cues=(e.captions||c.captions||[]).map(cue=>({...cue}));$('video').pause();$('video').currentTime=Number($('start').value);$('play').textContent='▶ Reproducir clip';$('export').disabled=false;
  $('titleChoices').replaceChildren();const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent=c.titles?.length?'Elegir otra propuesta':'Sin propuestas automáticas';$('titleChoices').append(placeholder);$('titleChoices').disabled=!(c.titles?.length);for(const title of c.titles||[]){const option=document.createElement('option');option.value=title;option.textContent=title;$('titleChoices').append(option);}
  document.querySelectorAll('.clip').forEach(el=>el.classList.toggle('active',el.dataset.id===c.id));renderCueEditor();paint();saveCurrent();
 }
 async function download(opts){
- const duration=validRange(opts);say(`Exportando ${duration.toFixed(1)} segundos en 1080 × 1920…`);
+ const duration=validRange(opts);if(opts.auto_follow)await ensureExportTracking(opts);say(`Exportando ${duration.toFixed(1)} segundos en 1080 × 1920…`);
  const r=await request(`/api/jobs/${job.id}/export`,jsonOptions(opts));const blob=await r.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='clip-'+Math.round(opts.start)+'-'+Math.round(duration)+'s.mp4';a.click();setTimeout(()=>URL.revokeObjectURL(url),10000);
 }
 $('export').onclick=async()=>{
@@ -170,3 +176,60 @@ function paintYoutube(state){
 }
 
 $('youtubePanel').ontoggle=()=>{$('videoFileDrop').classList.toggle('hidden',$('youtubePanel').open);};
+
+function balancedTitle(value,font,size){
+ const words=value.trim().split(/\s+/).filter(Boolean);if(words.length<2)return {text:value,size};
+ const context=document.createElement('canvas').getContext('2d');
+ for(let point=size;point>=28;point--){
+  context.font=`700 ${point}px "${font}"`;let best=null;
+  for(let i=1;i<words.length;i++){
+   const a=words.slice(0,i).join(' '),b=words.slice(i).join(' '),wa=context.measureText(a).width,wb=context.measureText(b).width;
+   const cost=Math.max(wa,wb)+.25*Math.abs(wa-wb);if(!best||cost<best.cost)best={text:a+'\n'+b,cost,width:Math.max(wa,wb)};
+  }
+  if(best.width<=800||point===28)return {text:best.text,size:point};
+ }
+}
+function applyTracking(t){
+ if(!$('auto_follow').checked||$('framing').value!=='crop'||!trackingPoints.length||trackingRange?.start!==Number($('start').value)||trackingRange?.end!==Number($('end').value))return;
+ let a=trackingPoints[0],b=a;for(const point of trackingPoints){b=point;if(point.time>=t)break;a=point;}
+ const f=b.time>a.time?Math.max(0,Math.min(1,(t-a.time)/(b.time-a.time))):0;
+ $('video').style.objectPosition=`${a.x+(b.x-a.x)*f}% ${a.y+(b.y-a.y)*f}%`;
+}
+async function prepareTracking(){
+ if(!job||!selected)throw Error('Selecciona un clip primero.');
+ const token=++trackingRequest,id=job.id,clip=selected.id,start=Number($('start').value),end=Number($('end').value);
+ trackingPoints=[];trackingRange=null;$('framing').value='crop';$('trackingState').textContent='Detectando rostros, voz y movimiento de boca…';
+ let state=await(await request(`/api/jobs/${id}/tracking`,jsonOptions({start,end}))).json();
+ while(token===trackingRequest&&selected?.id===clip&&job?.id===id){
+  if(state.status==='error')throw Error(state.message);
+  if(state.status==='ready'){trackingPoints=state.points;trackingRange={start,end};$('trackingState').textContent='Seguimiento listo. '+state.method;saveCurrent();paint();return;}
+  $('trackingState').textContent=`Calculando seguimiento · ${state.progress||0}%`;
+  await new Promise(resolve=>setTimeout(resolve,800));if(token!==trackingRequest)return;
+  state=await(await request(`/api/jobs/${id}/tracking/${state.key}`)).json();
+ }
+}
+$('auto_follow').onchange=()=>{if($('auto_follow').checked)prepareTracking().catch(e=>{say(e.message);$('trackingState').textContent=e.message;$('auto_follow').checked=false;saveCurrent();paint();});else{++trackingRequest;saveCurrent();paint();}};
+$('calculateTracking').onclick=()=>{$('auto_follow').checked=true;prepareTracking().catch(e=>{$('trackingState').textContent=e.message;say(e.message);});};
+document.fonts.ready.then(paint);
+
+async function ensureExportTracking(opts){
+ if(trackingRange?.start===opts.start&&trackingRange?.end===opts.end&&trackingPoints.length)return;
+ const id=job.id;let state=await(await request(`/api/jobs/${id}/tracking`,jsonOptions({start:opts.start,end:opts.end}))).json();
+ while(state.status!=='ready'){
+  if(state.status==='error')throw Error(state.message);
+  say(`Preparando seguimiento para exportar · ${state.progress||0}%`);await new Promise(resolve=>setTimeout(resolve,800));
+  state=await(await request(`/api/jobs/${id}/tracking/${state.key}`)).json();
+ }
+}
+
+$('improveTitles').onclick=async()=>{
+ if(!job||!selected)return;
+ const id=job.id,clip=selected.id,start=Number($('start').value),end=Number($('end').value),button=$('improveTitles');button.disabled=true;$('titlesState').textContent='Analizando lo que dice este clip para crear títulos…';
+ try{
+  const result=await(await request(`/api/jobs/${id}/titles`,jsonOptions({start,end,text:$('subtitles').value}))).json();
+  if(job?.id!==id||selected?.id!==clip||Number($('start').value)!==start||Number($('end').value)!==end)return;
+  selected.titles=result.titles;$('title').value=result.titles[0];$('titleChoices').replaceChildren();
+  for(const title of result.titles){const option=document.createElement('option');option.value=title;option.textContent=title;$('titleChoices').append(option);}
+  $('titleChoices').disabled=false;$('titlesState').textContent='Propuestas listas. Puedes elegir otra o editarla.';saveCurrent();paint();
+ }catch(e){$('titlesState').textContent=e.message;}finally{button.disabled=false;}
+};

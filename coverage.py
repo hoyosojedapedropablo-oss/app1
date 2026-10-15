@@ -44,7 +44,7 @@ def complete_coverage(selected,transcript,duration,minimum,maximum,completion,sp
  for offset in range(0,len(missing),3):
   if cancel and cancel.is_set():raise AnalysisCancelled()
   batch=missing[offset:offset+3]
-  payload=dict(task='coverage_titles',hablante_identificado=speaker,contexto_del_video=context,criterios_del_editor=profile,clips=[dict(id=c['id'],text=c['text']) for c in batch],instruccion='Escribe títulos editoriales creativos y específicos para CADA clip, aunque sea cotidiano. Hasta 3 opciones, máximo 64 caracteres y 10 palabras. No copies el audio ni inventes hechos. No evalúes ni descartes clips. Para silencio describe honestamente la pausa, sin inventar diálogo. Devuelve {"clips":[{"id":"...","titles":["..."]}]} respetando todos los IDs.')
+  payload=dict(task='coverage_titles',hablante_identificado=speaker,contexto_del_video=context,criterios_del_editor=profile,clips=[dict(id=c['id'],text=c['text']) for c in batch],instruccion='Cuenta lo que sucede con sujeto + acción + detalle o contraste. Ejemplos respaldados por el audio: «Cuenta cómo delinquía antes de terminar en prisión» o «Westcol promete que su boxeo superará a todos». Dale fuerza al tono, sin exagerar los hechos, inventar identidades ni convertir opiniones en certezas. Evita preguntas genéricas. Escribe títulos editoriales creativos y específicos para CADA clip, aunque sea cotidiano. Hasta 3 opciones, máximo 80 caracteres y 14 palabras. No copies el audio ni inventes hechos. No evalúes ni descartes clips. Para silencio describe honestamente la pausa, sin inventar diálogo. Devuelve {"clips":[{"id":"...","titles":["..."]}]} respetando todos los IDs.')
   pending={c['id']:c for c in batch}
   for attempt in range(2):
    if cancel and cancel.is_set():raise AnalysisCancelled()

@@ -65,3 +65,11 @@ Abre "O pegar enlace de YouTube", pega el enlace y pulsa Descargar y agregar vid
 Espera a "Video listo". Puedes analizarlo sin subir de nuevo el archivo.
 Al actualizar incluye youtube_import.py y requirements.txt. INICIAR_WINDOWS instala yt-dlp.
 Algunos videos bloqueados, privados o con restricciones no pueden descargarse: usa el archivo local.
+
+TITULOS Y SEGUIMIENTO
+Los titulos cuentan lo que dice el hablante y se distribuyen en dos lineas.
+Puedes pulsar Mejorar titulos de este clip con IA sin repetir todo el analisis.
+En el editor, abre Encuadre y activa Seguir a quien habla.
+Espera Seguimiento listo y reproduce el clip antes de descargarlo.
+El seguimiento combina rostros, movimiento de boca y presencia de voz; es una estimacion y puede equivocarse. Puedes desactivarlo para ajustar manualmente.
+Al actualizar copia tracking.py, styling.py, requirements.txt y el resto de los archivos nuevos. Conserva data y .venv. INICIAR_WINDOWS instala OpenCV.

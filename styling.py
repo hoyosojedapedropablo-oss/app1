@@ -20,11 +20,16 @@ def wrap_text(text,font,size,max_width,max_lines=2):
     if current:lines.append(current)
     return lines,face
 
-def title_layout(text,font,size):
+def title_layout(text,font,size,two_lines=False):
     text=re.sub(r'\s+',' ',text).strip()
     if not text:return '',size
     for point in range(size,27,-1):
         lines,face=wrap_text(text,font,point,800)
+        words=text.split()
+        if two_lines and len(words)>1:
+            pairs=[(' '.join(words[:i]),' '.join(words[i:])) for i in range(1,len(words))]
+            left,right=min(pairs,key=lambda pair:max(face.getlength(pair[0]),face.getlength(pair[1]))+.25*abs(face.getlength(pair[0])-face.getlength(pair[1])))
+            lines=[left,right]
         if len(lines)<=2 and all(face.getlength(line)<=800 for line in lines):
             return '\n'.join(lines),point
     raise ValueError('El título es demasiado largo. Acórtalo para que quepa en dos líneas.')

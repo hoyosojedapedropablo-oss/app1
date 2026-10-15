@@ -25,6 +25,6 @@ if __name__=='__main__':
   else:
    assert clips,'Debe reconocer la historia sobre salud y directos.'
    assert all(20<=c['end']-c['start']<=60 for c in clips)
-   assert all(len(c['title'])<=64 and len(c['title'].split())<=10 for c in clips)
+   assert all(len(c['title'])<=80 and len(c['title'].split())<=14 for c in clips)
    assert all('salud' in c['title'].lower() or 'directos' in c['title'].lower() for c in clips)
   print(label,json.dumps([dict(start=c['start'],end=c['end'],title=c['title']) for c in clips],ensure_ascii=False),flush=True)

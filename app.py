@@ -329,6 +329,7 @@ class Export(BaseModel):
  caption_color:str=Field(default='#FFFFFF',pattern=r'^#[0-9A-Fa-f]{6}$')
  outline_color:str=Field(default='#000000',pattern=r'^#[0-9A-Fa-f]{6}$')
  outline_width:int=Field(default=4,ge=0,le=9)
+ auto_follow:bool=False
  clip_id:str|None=None
  captions:list[Caption]|None=Field(default=None,max_length=1000)
  logo:str='none'
@@ -355,6 +356,64 @@ def caption_cues(opts,transcript):
   return cues
  return make_cues(transcript,opts.start,opts.end,opts.subtitles)
 
+TRACKING={}
+tracking_pool=ThreadPoolExecutor(max_workers=1)
+class TrackingInput(BaseModel):
+ start:float=Field(ge=0)
+ end:float=Field(gt=0)
+
+def track_clip(ident,start,end,track_key):
+ import tracking
+ state=TRACKING[(ident,track_key)]
+ try:
+  state.update(status='running',progress=0)
+  result=tracking.analyze(DATA/ident/'source',start,end,lambda value:state.update(progress=value))
+  result.update(start=start,end=end,status='ready',progress=100)
+  target=DATA/ident/f'tracking-{track_key}.json';tmp=target.with_suffix('.tmp')
+  tmp.write_text(json.dumps(result),encoding='utf-8');tmp.replace(target)
+  state.update(result)
+ except Exception as e:state.update(status='error',message=str(e))
+
+@app.post('/api/jobs/{ident}/tracking')
+def start_tracking(ident:str,opts:TrackingInput):
+ import tracking
+ if ident not in JOBS:raise HTTPException(404)
+ if not opts.start<opts.end<=JOBS[ident]['duration'] or opts.end-opts.start>180:raise HTTPException(400,'Elige un clip válido de hasta 180 segundos.')
+ track_key=tracking.key(opts.start,opts.end);cache=DATA/ident/f'tracking-{track_key}.json'
+ if cache.exists():return dict(key=track_key,**json.loads(cache.read_text(encoding='utf-8')))
+ if (ident,track_key) not in TRACKING or TRACKING[(ident,track_key)]['status']=='error':
+  TRACKING[(ident,track_key)]=dict(status='queued',progress=0)
+  tracking_pool.submit(track_clip,ident,opts.start,opts.end,track_key)
+ return dict(key=track_key,**TRACKING[(ident,track_key)])
+
+@app.get('/api/jobs/{ident}/tracking/{track_key}')
+def tracking_status(ident:str,track_key:str):
+ if (ident,track_key) not in TRACKING:raise HTTPException(404)
+ return dict(key=track_key,**TRACKING[(ident,track_key)])
+
+class TitleInput(TrackingInput):
+ text:str=Field(default='',max_length=20000)
+
+@app.post('/api/jobs/{ident}/titles')
+def improve_titles(ident:str,opts:TitleInput):
+ from coverage import TitleBatch
+ from intelligence import clean_title,query_json
+ if ident not in JOBS:raise HTTPException(404)
+ job=JOBS[ident]
+ if not opts.start<opts.end<=job['duration'] or opts.end-opts.start>180:raise HTTPException(400,'Elige un clip válido de hasta 180 segundos.')
+ text=opts.text.strip() or ' '.join(w['text'] for w in clip_words(job.get('transcript',[]),opts.start,opts.end))
+ if not text:raise HTTPException(400,'Este clip aún no tiene transcripción. Analiza el video o escribe sus subtítulos primero.')
+ options=job.get('analysis_options',{});engine=options.get('engine','gpu')
+ payload=dict(task='coverage_titles',hablante_identificado=options.get('speaker',''),contexto_del_video=options.get('context',''),criterios_del_editor=read_profile()['instructions'],clips=[dict(id='clip',text=text)],instruccion='Cuenta lo que esta persona dice o hace: sujeto, verbo y detalle específico. Da tres opciones fuertes y diferentes, hasta 80 caracteres y 14 palabras cada una. Una narrativa, una con contraste y otra con intriga concreta. Puedes intensificar el tono; nunca los hechos. Ejemplos, solo si son ciertos en el clip: «Cuenta cómo delinquía antes de terminar en prisión»; «Westcol promete que su boxeo superará a todos». No copies frases ni hagas preguntas genéricas. Devuelve clips/id/titles. Usa el ID clip.')
+ try:
+  if engine=='gpu':gpu_ai.warmup()
+  completion=gpu_ai.complete if engine=='gpu' else cloud_ai.complete if engine=='cloud' else lambda value:query_json(json.dumps(value,ensure_ascii=False),TitleBatch.model_json_schema(),options.get('quality','fast'))
+  data=TitleBatch.model_validate(completion(payload))
+  titles=list(dict.fromkeys(title for item in data.clips if item.id=='clip' for title in (clean_title(t,text) for t in item.titles) if title))
+  if not titles:raise ValueError('La IA no devolvió títulos válidos. Intenta generar otras propuestas.')
+  return dict(titles=titles)
+ except (ValueError,RuntimeError) as e:raise HTTPException(400,str(e))
+
 @app.post('/api/jobs/{ident}/captions')
 def captions(ident:str,opts:Export):
  if ident not in JOBS:raise HTTPException(404)
@@ -364,7 +423,7 @@ def captions(ident:str,opts:Export):
 def ass_file(path,opts,transcript=None):
  font=opts.font if opts.font in FONTS else 'Montserrat'
  title_font=opts.title_font if opts.title_font in FONTS else 'Montserrat'
- title,title_size=title_layout(opts.title,title_font,opts.title_size)
+ title,title_size=title_layout(opts.title,title_font,opts.title_size,two_lines=True)
  color=ass_color(opts.caption_color);outline=ass_color(opts.outline_color)
  header=f'''[Script Info]
 ScriptType: v4.00+
@@ -416,6 +475,12 @@ def export(ident:str,opts:Export):
  try:ass_file(ass,opts,JOBS[ident].get('transcript',[]))
  except ValueError as e:raise HTTPException(400,str(e))
  geometry='scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black' if opts.framing=='fit' else f'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(iw-ow)*{opts.focus_x/100}:(ih-oh)*{opts.focus_y/100}'
+ if opts.auto_follow:
+  import tracking
+  if opts.framing!='crop':raise HTTPException(400,'El seguimiento necesita el encuadre Llenar pantalla.')
+  cache=folder/f'tracking-{tracking.key(opts.start,opts.end)}.json'
+  if not cache.exists():raise HTTPException(400,'Calcula el seguimiento del clip en el editor antes de exportarlo.')
+  geometry=tracking.commands(json.loads(cache.read_text(encoding='utf-8')),folder/f'{token}-tracking.cmd',opts.end-opts.start)
  # Relative font directory avoids escaping Windows drive letters in FFmpeg filters.
  import shutil
  fonts=folder/'fonts'
