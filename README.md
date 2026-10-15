@@ -85,3 +85,9 @@ La IA analiza texto y contexto proporcionado: no interpreta gestos visuales ni c
 Cierra la app con Ctrl+C. Conserva tu carpeta anterior. Descarga el ZIP nuevo en una carpeta nueva y ejecuta INICIAR_WINDOWS.bat. Si necesitas conservar logos/modelos, copia la carpeta `data` anterior a la nueva con la app cerrada. No copies la `.venv` antigua: el iniciador instalará el entorno adecuado.
 
 Los logos pueden ocupar del 5% al 100% del ancho, conservando su proporción y una altura máxima del 75% del cuadro. La generación de títulos para más clips requiere más inferencias; no se garantiza una duración fija.
+
+### Importar videos
+
+Puedes ingresar un archivo descargado o abrir «O pegar enlace de YouTube» y pulsar «Descargar y agregar video». La descarga sucede en el equipo donde corre la app, conserva video y audio y registra el resultado en los videos guardados para analizarlo o editarlo. Se admite un video individual público por descarga, hasta 120 minutos y 12 GB; se elimina el parámetro de playlist. Los directos en curso no se importan. El progreso se consulta sin bloquear la interfaz. Los archivos parciales se eliminan si falla.
+
+La función utiliza yt-dlp y FFmpeg, instalados por INICIAR_WINDOWS. YouTube puede bloquear videos o requerir inicio de sesión; en ese caso se muestra un error y se conserva la alternativa de archivo. No se extraen cookies del navegador. Si YouTube cambia su acceso, actualiza yt-dlp en la venv con `python -m pip install --upgrade yt-dlp`. El recorrido de importación se verifica con un proveedor simulado y un MP4 real; la red del entorno de desarrollo bloqueó la prueba directa de YouTube con HTTP 403.

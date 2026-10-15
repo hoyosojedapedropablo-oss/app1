@@ -59,3 +59,9 @@ esta version personal no tiene login.
 Cobertura fija: al menos 75% del video, sin contar dos veces solapamientos.
 La cantidad de clips se calcula segun el rango. Todos tienen titulos; Mayor potencial marca los destacados. Logos: ancho hasta 100%.
 Al actualizar conserva data y .venv, y copia tambien coverage.py.
+
+IMPORTAR DESDE YOUTUBE
+Abre "O pegar enlace de YouTube", pega el enlace y pulsa Descargar y agregar video.
+Espera a "Video listo". Puedes analizarlo sin subir de nuevo el archivo.
+Al actualizar incluye youtube_import.py y requirements.txt. INICIAR_WINDOWS instala yt-dlp.
+Algunos videos bloqueados, privados o con restricciones no pueden descargarse: usa el archivo local.

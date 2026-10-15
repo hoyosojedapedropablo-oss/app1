@@ -46,6 +46,54 @@ def decode_audio(path):
 @app.get('/')
 def home(): return FileResponse(ROOT/'static/index.html',headers={'Cache-Control':'no-store'})
 
+def register_video(ident,path,name):
+ info=probe(path);duration=float(info['format']['duration'])
+ if not 0<duration<=7200:raise ValueError('La duración máxima es 120 minutos.')
+ stream=next((s for s in info['streams'] if s['codec_type']=='video'),None)
+ if stream is None:raise ValueError('El archivo no contiene video.')
+ try:fps=float(Fraction(stream.get('avg_frame_rate','30/1')))
+ except (ValueError,ZeroDivisionError):fps=30
+ JOBS[ident]=dict(id=ident,name=name,duration=duration,fps=max(24,min(60,fps)),status='uploaded',clips=[])
+ save_job(JOBS[ident]);return JOBS[ident]
+
+IMPORTS={}
+import_pool=ThreadPoolExecutor(max_workers=1)
+class YouTubeInput(BaseModel):
+ url:str=Field(min_length=1,max_length=2000)
+
+def import_youtube(ident,url):
+ import shutil
+ from youtube_import import download
+ folder=DATA/ident;folder.mkdir(exist_ok=True)
+ def progress(value,message):IMPORTS[ident].update(status='downloading',progress=value,message=message)
+ try:
+  progress(0,'Consultando video de YouTube…')
+  path,name=download(url,folder,progress)
+  path.rename(folder/'source')
+  job=register_video(ident,folder/'source',name)
+  IMPORTS[ident].update(status='ready',progress=100,message='Video listo para analizar.',job=job)
+ except Exception as e:
+  message=str(e) if isinstance(e,ValueError) else 'YouTube no permitió completar la descarga. Puede requerir inicio de sesión o haber cambiado su acceso. Prueba con un video público o sube el archivo descargado.'
+  IMPORTS[ident].update(status='error',message=message)
+  JOBS.pop(ident,None)
+  shutil.rmtree(folder,ignore_errors=True)
+
+@app.post('/api/youtube')
+def start_youtube(options:YouTubeInput):
+ from youtube_import import canonical_url
+ try:url=canonical_url(options.url)
+ except ValueError as e:raise HTTPException(400,str(e))
+ if any(v['status'] in ('queued','downloading') for v in IMPORTS.values()):raise HTTPException(409,'Ya hay una descarga en curso. Espera a que termine.')
+ ident=uuid.uuid4().hex
+ IMPORTS[ident]=dict(id=ident,status='queued',progress=0,message='Preparando descarga…')
+ import_pool.submit(import_youtube,ident,url)
+ return IMPORTS[ident]
+
+@app.get('/api/youtube/{ident}')
+def youtube_status(ident:str):
+ if ident not in IMPORTS:raise HTTPException(404)
+ return IMPORTS[ident]
+
 @app.post('/api/upload')
 async def upload(file:UploadFile=File(...)):
  ident=uuid.uuid4().hex; folder=DATA/ident; folder.mkdir(); path=folder/'source'
@@ -56,15 +104,7 @@ async def upload(file:UploadFile=File(...)):
     total+=len(chunk)
     if total>12*1024**3: raise ValueError('El archivo supera 12 GB.')
     out.write(chunk)
-  info=probe(path); duration=float(info['format']['duration'])
-  if duration>7200: raise ValueError('La duración máxima es 120 minutos.')
-  if not any(s['codec_type']=='video' for s in info['streams']): raise ValueError('El archivo no contiene video.')
-  stream=next(s for s in info['streams'] if s['codec_type']=='video')
-  try:fps=float(Fraction(stream.get('avg_frame_rate','30/1')))
-  except (ValueError,ZeroDivisionError):fps=30
-  JOBS[ident]=dict(id=ident,name=file.filename,duration=duration,fps=max(24,min(60,fps)),status='uploaded',clips=[])
-  save_job(JOBS[ident])
-  return JOBS[ident]
+  return register_video(ident,path,file.filename)
  except Exception as e:
   path.unlink(missing_ok=True)
   raise HTTPException(400,str(e))

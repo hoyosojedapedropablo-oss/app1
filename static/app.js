@@ -67,7 +67,7 @@ $('play').onclick=async()=>{if(!selected)return;const v=$('video');if(v.paused){
 $('seek').oninput=()=>{$('video').currentTime=Number($('start').value)+Number($('seek').value);paintTime();};
 $('source').onchange=async()=>{
  const f=$('source').files[0];if(!f)return;++pollToken;++cueVersion;clearTimeout(captionTimer);$('analyze').disabled=true;$('manual').disabled=true;$('export').disabled=true;say('Subiendo video…');$('filename').textContent=f.name;
- try{const body=new FormData();body.append('file',f);job=await(await request('/api/upload',{method:'POST',body})).json();selected=null;cues=[];edits.clear();$('clips').replaceChildren();$('all').classList.add('hidden');$('video').src=`/api/jobs/${job.id}/video`;$('end').value=Math.min(30,job.duration);$('analyze').disabled=false;$('manual').disabled=false;$('goEditor').disabled=false;paint();say(`Video listo · ${(job.duration/60).toFixed(1)} minutos`);}catch(e){say(e.message);}
+ try{const body=new FormData();body.append('file',f);useImportedVideo(await(await request('/api/upload',{method:'POST',body})).json());}catch(e){say(e.message);}
 };
 $('manual').onclick=()=>{choose({id:'manual',title:'',text:'',start:0,end:Math.min(Number($('maximum').value),job.duration),captions:[]});say('Ajusta los tiempos y escribe los subtítulos de tu clip manual.');};
 $('analyze').onclick=async()=>{
@@ -135,3 +135,21 @@ aiState().catch(e=>say(e.message));
 function displayGPU(info){$('gpuState').textContent=info.message+(info.gpu_bytes?` · ${(info.gpu_bytes/1024**3).toFixed(2)} GB GPU`:'');}
 request('/api/gpu').then(r=>r.json()).then(info=>{displayGPU(info);$('transcribe_gpu').checked=!!info.transcription_ready;}).catch(e=>{$('gpuState').textContent=e.message;});
 $('checkGPU').onclick=async()=>{$('checkGPU').disabled=true;$('gpuState').textContent='Cargando modelo y comprobando GPU…';try{const info=await(await request('/api/gpu/check',{method:'POST'})).json();displayGPU(info);}catch(e){$('gpuState').textContent=e.message;}finally{$('checkGPU').disabled=false;}};
+
+function useImportedVideo(videoJob){
+ ++pollToken;++cueVersion;clearTimeout(captionTimer);job=videoJob;selected=null;cues=[];captionPending=false;edits.clear();$('clips').replaceChildren();$('all').classList.add('hidden');$('video').src=`/api/jobs/${job.id}/video`;$('filename').textContent=job.name;$('end').value=Math.min(30,job.duration);$('analyze').disabled=false;$('manual').disabled=false;$('goEditor').disabled=false;paint();say(`Video listo · ${(job.duration/60).toFixed(1)} minutos`);
+}
+$('downloadYoutube').onclick=async()=>{
+ const button=$('downloadYoutube');button.disabled=true;$('source').disabled=true;
+ const locked=['analyze','manual','reuseJob','export'];const before=locked.map(id=>$(id).disabled);locked.forEach(id=>$(id).disabled=true);let importedOK=false;
+ try{
+  const imported=await(await request('/api/youtube',jsonOptions({url:$('youtubeUrl').value}))).json();
+  while(true){
+   const state=await(await request('/api/youtube/'+imported.id)).json();
+   $('youtubeState').textContent=state.message+(state.status==='downloading'?` ${state.progress}%`:'');
+   if(state.status==='error')throw Error(state.message);
+   if(state.status==='ready'){useImportedVideo(state.job);importedOK=true;break;}
+   await new Promise(resolve=>setTimeout(resolve,1500));
+  }
+ }catch(e){$('youtubeState').textContent=e.message;}finally{button.disabled=false;$('source').disabled=false;$('reuseJob').disabled=before[2];if(!importedOK)locked.forEach((id,i)=>$(id).disabled=before[i]);}
+};
