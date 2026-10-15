@@ -76,8 +76,9 @@ def import_youtube(ident,url,quality="fast"):
   job['youtube_url']=url;job['youtube_quality']=quality;save_job(job)
   IMPORTS[ident].update(status='ready',progress=100,message='Video listo para analizar.',job=job)
  except Exception as e:
-  message=str(e) if isinstance(e,ValueError) else 'YouTube no permitió completar la descarga. Puede requerir inicio de sesión o haber cambiado su acceso. Prueba con un video público o sube el archivo descargado.'
-  IMPORTS[ident].update(status='error',message=message)
+  from youtube_import import diagnose_error
+  code,message=diagnose_error(e)
+  IMPORTS[ident].update(status='error',error_code=code,message=f'[{code}] {message}')
   JOBS.pop(ident,None)
   shutil.rmtree(folder,ignore_errors=True)
 

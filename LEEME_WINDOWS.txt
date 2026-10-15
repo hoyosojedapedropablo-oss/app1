@@ -73,3 +73,10 @@ En el editor, abre Encuadre y activa Seguir a quien habla.
 Espera Seguimiento listo y reproduce el clip antes de descargarlo.
 El seguimiento combina rostros, movimiento de boca y presencia de voz; es una estimacion y puede equivocarse. Puedes desactivarlo para ajustar manualmente.
 Al actualizar copia tracking.py, styling.py, requirements.txt y el resto de los archivos nuevos. Conserva data y .venv. INICIAR_WINDOWS instala OpenCV.
+
+SI FALLA YOUTUBE
+Cierra Clip Studio. Ejecuta REPARAR_YOUTUBE_WINDOWS y espera a que termine.
+Actualiza yt-dlp, EJS y Deno automaticamente dentro de la app.
+Despues abre INICIAR_WINDOWS y vuelve a probar el enlace.
+Si falla, el mensaje mostrara un codigo de causa (por ejemplo YT-403, YT-SESION o YT-RED).
+No hace falta compartir contrasenas ni cookies.

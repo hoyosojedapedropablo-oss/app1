@@ -60,6 +60,7 @@ class DownloadOptimizationTests(unittest.TestCase):
      path,name=youtube_import.download('https://www.youtube.com/watch?v=BaW_jenozKc',folder,lambda value,message,**meta:events.append((value,message,meta)),mode=mode)
     self.assertEqual(calls,['extract','download'])
     self.assertEqual(options['concurrent_fragment_downloads'],8)
+    self.assertIn('deno',options['js_runtimes'])
     self.assertEqual('[height<=1080]' in options['format'],limited)
     self.assertEqual(events[0][2]['title'],'Mi video')
     self.assertEqual(events[0][2]['thumbnail'],'https://i.ytimg.com/vi/BaW_jenozKc/hqdefault.jpg')
@@ -73,3 +74,37 @@ class DownloadOptimizationTests(unittest.TestCase):
     response=TestClient(backend.app).post('/api/youtube',json={'url':'https://youtu.be/BaW_jenozKc','quality':'fast'})
    self.assertEqual(response.status_code,200);self.assertEqual(response.json()['status'],'ready')
    self.assertEqual(response.json()['job']['id'],ident)
+
+
+class YouTubeRepairTests(unittest.TestCase):
+ def test_error_codes_preserve_cause_without_echoing_provider_secrets(self):
+  from youtube_import import diagnose_error
+  cases=[('Tunnel connection failed: 403 Forbidden','YT-RED'),('HTTP Error 403: Forbidden','YT-403'),('Sign in to confirm you are not a bot','YT-SESION'),('Sign in to confirm your age','YT-EDAD'),('Private video','YT-PRIVADO'),('Requested format is not available','YT-FORMATO'),('nsig extraction failed','YT-JAVASCRIPT'),('HTTP Error 429','YT-LIMITE'),('not available in your country','YT-REGION'),('ffmpeg: No space left on device','YT-DISCO'),('certificate verify failed','YT-CERTIFICADO')]
+  for text,expected in cases:
+   code,message=diagnose_error(RuntimeError(text+' https://provider.example?token=secret-value'))
+   self.assertEqual(code,expected);self.assertNotIn('secret-value',message)
+  for kind in [ValueError,RuntimeError]:
+   self.assertNotIn('secret-value',diagnose_error(kind('secret-value'))[1])
+ def test_bundled_runtime_is_explicitly_passed_to_downloader(self):
+  import subprocess
+  from youtube_import import javascript_options
+  options=javascript_options()
+  result=subprocess.run([options['deno']['path'],'--version'],capture_output=True,text=True,timeout=10)
+  self.assertEqual(result.returncode,0);self.assertIn('deno ',result.stdout)
+ def test_missing_js_component_is_actionable(self):
+  from youtube_import import javascript_options,diagnose_error
+  with patch('importlib.util.find_spec',return_value=None):
+   with self.assertRaisesRegex(ValueError,'REPARAR_YOUTUBE_WINDOWS') as error:javascript_options()
+  self.assertEqual(diagnose_error(error.exception)[0],'YT-JAVASCRIPT')
+ def test_actual_user_url_is_supported(self):
+  self.assertEqual(canonical_url('https://youtu.be/JCcuOv5y_9g?si=qh77ANX-0BeK650j'),'https://www.youtube.com/watch?v=JCcuOv5y_9g')
+
+ def test_download_failure_reports_specific_cause_in_job_status(self):
+  with tempfile.TemporaryDirectory() as tmp,patch.object(backend,'DATA',Path(tmp)),patch.dict(backend.IMPORTS,{},clear=True):
+   ident='d'*32;backend.IMPORTS[ident]={'status':'queued'}
+   with patch('youtube_import.download',side_effect=RuntimeError('HTTP Error 403: Forbidden https://provider.test?token=secret-value')):
+    backend.import_youtube(ident,'https://www.youtube.com/watch?v=JCcuOv5y_9g')
+   state=TestClient(backend.app).get('/api/youtube/'+ident).json()
+   self.assertEqual(state['error_code'],'YT-403')
+   self.assertIn('REPARAR_YOUTUBE_WINDOWS',state['message'])
+   self.assertNotIn('secret-value',state['message'])
