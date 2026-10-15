@@ -129,7 +129,7 @@ $('connectAI').onclick=async()=>{const button=$('connectAI');button.disabled=tru
 $('disconnectAI').onclick=async()=>{try{await request('/api/ai',{method:'DELETE'});await aiState();}catch(e){say(e.message);}};
 $('cancelAnalysis').onclick=async()=>{try{await request(`/api/jobs/${job.id}/cancel`,{method:'POST'});say('Cancelación solicitada. El análisis en nube puede tener una solicitud en curso.');}catch(e){say(e.message);}};
 request('/api/jobs').then(r=>r.json()).then(list=>{if(!list.length)return;$('recoveredPanel').classList.remove('hidden');for(const j of list){const option=document.createElement('option');option.value=j.id;option.textContent=`${j.name} · ${(j.duration/60).toFixed(1)} min${j.cached?' · transcripción lista':''}`;$('recentJob').append(option);}}).catch(e=>say(e.message));
-$('reuseJob').onclick=async()=>{try{++pollToken;++cueVersion;job=await(await request('/api/jobs/'+$('recentJob').value)).json();selected=null;cues=[];edits.clear();$('filename').textContent=job.name;if(job.analysis_options){const opts=job.analysis_options;$('videoContext').value=opts.context||'';$('speaker').value=opts.speaker||'';$('minimum').value=opts.minimum;$('maximum').value=opts.maximum;}$('video').src=`/api/jobs/${job.id}/video`;$('analyze').disabled=false;$('manual').disabled=false;$('goEditor').disabled=false;say('Video recuperado. Si tiene transcripción completa, no se volverá a transcribir.');if(job.status==='ready'&&job.clips.length)render();}catch(e){say(e.message);}};
+$('reuseJob').onclick=async()=>{try{++pollToken;++cueVersion;job=await(await request('/api/jobs/'+$('recentJob').value)).json();selected=null;cues=[];edits.clear();$('filename').textContent=job.name;if(job.youtube)paintYoutube({...job.youtube,status:'ready',progress:100});else $('youtubeCard').classList.add('hidden');if(job.analysis_options){const opts=job.analysis_options;$('videoContext').value=opts.context||'';$('speaker').value=opts.speaker||'';$('minimum').value=opts.minimum;$('maximum').value=opts.maximum;}$('video').src=`/api/jobs/${job.id}/video`;$('analyze').disabled=false;$('manual').disabled=false;$('goEditor').disabled=false;say('Video recuperado. Si tiene transcripción completa, no se volverá a transcribir.');if(job.status==='ready'&&job.clips.length)render();}catch(e){say(e.message);}};
 aiState().catch(e=>say(e.message));
 
 function displayGPU(info){$('gpuState').textContent=info.message+(info.gpu_bytes?` · ${(info.gpu_bytes/1024**3).toFixed(2)} GB GPU`:'');}
@@ -137,15 +137,18 @@ request('/api/gpu').then(r=>r.json()).then(info=>{displayGPU(info);$('transcribe
 $('checkGPU').onclick=async()=>{$('checkGPU').disabled=true;$('gpuState').textContent='Cargando modelo y comprobando GPU…';try{const info=await(await request('/api/gpu/check',{method:'POST'})).json();displayGPU(info);}catch(e){$('gpuState').textContent=e.message;}finally{$('checkGPU').disabled=false;}};
 
 function useImportedVideo(videoJob){
+ if(videoJob.youtube)paintYoutube({...videoJob.youtube,status:'ready',progress:100});else $('youtubeCard').classList.add('hidden');
  ++pollToken;++cueVersion;clearTimeout(captionTimer);job=videoJob;selected=null;cues=[];captionPending=false;edits.clear();$('clips').replaceChildren();$('all').classList.add('hidden');$('video').src=`/api/jobs/${job.id}/video`;$('filename').textContent=job.name;$('end').value=Math.min(30,job.duration);$('analyze').disabled=false;$('manual').disabled=false;$('goEditor').disabled=false;paint();say(`Video listo · ${(job.duration/60).toFixed(1)} minutos`);
 }
 $('downloadYoutube').onclick=async()=>{
+ $('youtubeCard').classList.add('hidden');
  const button=$('downloadYoutube');button.disabled=true;$('source').disabled=true;
  const locked=['analyze','manual','reuseJob','export'];const before=locked.map(id=>$(id).disabled);locked.forEach(id=>$(id).disabled=true);let importedOK=false;
  try{
-  const imported=await(await request('/api/youtube',jsonOptions({url:$('youtubeUrl').value}))).json();
+  const imported=await(await request('/api/youtube',jsonOptions({url:$('youtubeUrl').value,quality:$('youtubeQuality').value}))).json();
   while(true){
    const state=await(await request('/api/youtube/'+imported.id)).json();
+   paintYoutube(state);
    $('youtubeState').textContent=state.message+(state.status==='downloading'?` ${state.progress}%`:'');
    if(state.status==='error')throw Error(state.message);
    if(state.status==='ready'){useImportedVideo(state.job);importedOK=true;break;}
@@ -153,3 +156,17 @@ $('downloadYoutube').onclick=async()=>{
   }
  }catch(e){$('youtubeState').textContent=e.message;}finally{button.disabled=false;$('source').disabled=false;$('reuseJob').disabled=before[2];if(!importedOK)locked.forEach((id,i)=>$(id).disabled=before[i]);}
 };
+
+function paintYoutube(state){
+ if(!state.thumbnail)return;
+ $('youtubeCard').classList.remove('hidden');$('youtubeThumbnail').src=state.thumbnail;
+ $('youtubeTitle').textContent=state.title||'Video de YouTube';
+ const duration=state.duration?`${Math.floor(state.duration/60)}:${String(Math.floor(state.duration%60)).padStart(2,'0')} min`:'';
+ $('youtubeMeta').textContent=[state.channel,duration,state.quality].filter(Boolean).join(' · ');
+ $('youtubeProgress').value=state.progress||0;
+ const speed=state.speed?`${(state.speed/1024**2).toFixed(1)} MB/s`:'';
+ const eta=state.eta!=null?`Aprox. ${Math.ceil(state.eta/60)} min restantes`:'';
+ $('youtubeTransfer').textContent=state.status==='ready'?'✓ Listo para cortar':[speed,eta].filter(Boolean).join(' · ')||state.message||'Preparando…';
+}
+
+$('youtubePanel').ontoggle=()=>{$('videoFileDrop').classList.toggle('hidden',$('youtubePanel').open);};

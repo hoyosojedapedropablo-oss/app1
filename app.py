@@ -60,17 +60,20 @@ IMPORTS={}
 import_pool=ThreadPoolExecutor(max_workers=1)
 class YouTubeInput(BaseModel):
  url:str=Field(min_length=1,max_length=2000)
+ quality:Literal['fast','original']='fast'
 
-def import_youtube(ident,url):
+def import_youtube(ident,url,quality="fast"):
  import shutil
  from youtube_import import download
  folder=DATA/ident;folder.mkdir(exist_ok=True)
- def progress(value,message):IMPORTS[ident].update(status='downloading',progress=value,message=message)
+ def progress(value,message,**metadata):IMPORTS[ident].update(status='downloading',progress=value,message=message,**metadata)
  try:
   progress(0,'Consultando video de YouTube…')
-  path,name=download(url,folder,progress)
+  path,name=download(url,folder,progress,mode=quality)
   path.rename(folder/'source')
   job=register_video(ident,folder/'source',name)
+  job['youtube']={key:IMPORTS[ident][key] for key in ['title','channel','thumbnail','duration','quality'] if key in IMPORTS[ident]}
+  job['youtube_url']=url;job['youtube_quality']=quality;save_job(job)
   IMPORTS[ident].update(status='ready',progress=100,message='Video listo para analizar.',job=job)
  except Exception as e:
   message=str(e) if isinstance(e,ValueError) else 'YouTube no permitió completar la descarga. Puede requerir inicio de sesión o haber cambiado su acceso. Prueba con un video público o sube el archivo descargado.'
@@ -84,9 +87,14 @@ def start_youtube(options:YouTubeInput):
  try:url=canonical_url(options.url)
  except ValueError as e:raise HTTPException(400,str(e))
  if any(v['status'] in ('queued','downloading') for v in IMPORTS.values()):raise HTTPException(409,'Ya hay una descarga en curso. Espera a que termine.')
+ for job in JOBS.values():
+  if job.get('youtube_url')==url and job.get('youtube_quality')==options.quality and (DATA/job['id']/'source').exists():
+   ident=uuid.uuid4().hex
+   IMPORTS[ident]=dict(id=ident,status='ready',progress=100,message='Video recuperado: ya estaba descargado.',job=job,**job.get('youtube',{}))
+   return IMPORTS[ident]
  ident=uuid.uuid4().hex
- IMPORTS[ident]=dict(id=ident,status='queued',progress=0,message='Preparando descarga…')
- import_pool.submit(import_youtube,ident,url)
+ IMPORTS[ident]=dict(id=ident,status='queued',progress=0,message='Consultando título y duración…',thumbnail='https://i.ytimg.com/vi/'+url.split('v=')[1]+'/hqdefault.jpg',title='Preparando video de YouTube…')
+ import_pool.submit(import_youtube,ident,url,options.quality)
  return IMPORTS[ident]
 
 @app.get('/api/youtube/{ident}')
