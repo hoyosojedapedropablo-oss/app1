@@ -6,12 +6,12 @@ import numpy as np
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator, SecretStr
 from timeline import make_cues, clip_words
 from intelligence import select_clips
-from styling import FONTS, ass_color, title_layout
+from styling import FONTS, ass_color, title_layout, title_bitmap
 
 ROOT=Path(__file__).parent
 DATA=ROOT/'data'; DATA.mkdir(exist_ok=True)
@@ -25,8 +25,8 @@ import cloud_ai
 import gpu_ai
 import gpu_transcribe
 
-def command(args, cwd=None):
- r=subprocess.run(args,capture_output=True,text=True,cwd=cwd)
+def command(args, cwd=None, env=None):
+ r=subprocess.run(args,capture_output=True,text=True,cwd=cwd,env=env)
  if r.returncode: raise RuntimeError(r.stderr[-1800:])
  return r.stdout
 
@@ -160,6 +160,7 @@ def analyze(ident,options):
     transcript.append(dict(start=s.start,end=s.end,text=s.text,words=[dict(start=w.start,end=w.end,text=w.word) for w in (s.words or [])]))
     job['progress']=min(60,round(s.end/job['duration']*60))
    cached.write_text(json.dumps(transcript,ensure_ascii=False),encoding='utf-8')
+  if not any(segment.get('text','').strip() for segment in transcript):raise ValueError('No se detectó voz transcribible. Revisa el audio o crea un clip manual; no se forzarán fragmentos vacíos.')
   job['transcript']=transcript
   if options.engine=='gpu':job['gpu_status']=gpu_ai.warmup()
   if event.is_set():raise cloud_ai.AnalysisCancelled()
@@ -171,21 +172,29 @@ def analyze(ident,options):
     job.update(progress=60+round(38*i/max(1,total)),message=f"Análisis {'GPU local' if stage=='gpu' else 'en nube'} · {i} de {total} bloques completados")
     return
    job.update(progress=(60+round(25*i/max(1,total))) if stage=='selection' else (85+round(13*i/max(1,total))),message=f'Analizando contexto · bloque {i+1} de {total}' if stage=='selection' else f'Revisando cortes y títulos · clip {i+1} de {total}')
+  from editorial import cached_completion
+  from coverage import TitleBatch
+  base_completion=gpu_ai.complete if options.engine=='gpu' else cloud_ai.complete if options.engine=='cloud' else lambda payload,**kwargs: __import__('intelligence').query_json(json.dumps(payload,ensure_ascii=False),TitleBatch.model_json_schema(),options.quality)
+  job['analysis_cache_hits']=0
+  def cache_hit():job['analysis_cache_hits']+=1
+  completion=cached_completion(DATA/ident/'analysis-cache',options.engine+':'+options.quality,base_completion,cache_hit)
+  topics=[]
   if options.engine=='cloud':
    job['selection_diagnostics']=[]
-   clips=cloud_ai.select_cloud(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,max_clips=options.max_clips,on_progress=progress,cancel=event,diagnostics=job['selection_diagnostics'])
+   clips=cloud_ai.select_cloud(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,max_clips=options.max_clips,on_progress=progress,cancel=event,diagnostics=job['selection_diagnostics'],topic_ranges=topics,completion=completion)
   elif options.engine=='gpu':
    job['selection_diagnostics']=[]
-   clips=gpu_ai.select_gpu(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,max_clips=options.max_clips,on_progress=progress,cancel=event,diagnostics=job['selection_diagnostics'])
+   clips=gpu_ai.select_gpu(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,max_clips=options.max_clips,on_progress=progress,cancel=event,diagnostics=job['selection_diagnostics'],topic_ranges=topics,completion=completion)
   else:
    clips=select_clips(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,quality=options.quality,max_clips=options.max_clips,on_progress=progress)
   from coverage import complete_coverage,covered,TitleBatch
-  completion=gpu_ai.complete if options.engine=='gpu' else cloud_ai.complete if options.engine=='cloud' else lambda payload,**kwargs: __import__('intelligence').query_json(json.dumps(payload,ensure_ascii=False),TitleBatch.model_json_schema(),options.quality)
-  job.update(progress=98,message='Completando cobertura del 75% y títulos de todos los clips…')
+  job.update(progress=98,message='Separando conversaciones por tema y creando títulos…')
   def title_progress(done,total,stage):job.update(progress=98+round(done/max(1,total)),message=f'Títulos de clips para revisar · {done} de {total}')
-  clips=complete_coverage(clips,transcript,job['duration'],options.minimum,options.maximum,completion,speaker=options.speaker,context=options.context,profile=profile,cancel=event,on_progress=title_progress)
+  clips=complete_coverage(clips,transcript,job['duration'],options.minimum,options.maximum,completion,speaker=options.speaker,context=options.context,profile=profile,cancel=event,on_progress=title_progress,topics=topics)
+  job['topics']=topics
   job['coverage_percent']=round(100*covered(clips)/job['duration'],2)
   message=f'{len(clips)} clips · cobertura {job["coverage_percent"]}% del video. Mayor potencial identifica los destacados; el resto queda para tu revisión.' if clips else 'La selección quedó vacía tras la revisión. Esto no demuestra que el video no tenga potencial. Revisa la transcripción y añade contexto para volver a analizar sin transcribir de nuevo.'
+  if job['coverage_percent']<75:message+=f' Cobertura {job["coverage_percent"]}%: no se mezclaron temas ni se forzaron respuestas incompletas para llegar al 75%. Puedes reducir el mínimo o ampliar el máximo.'
   job.update(status='ready',progress=100,clips=clips,message=message)
  except cloud_ai.AnalysisCancelled:job.update(status='cancelled',message='Análisis cancelado. Puedes reutilizar la transcripción completa si ya se guardó.')
  except Exception as e: job.update(status='error',message=str(e))
@@ -320,6 +329,10 @@ class Export(BaseModel):
  font:str='Montserrat'
  title_font:str='Montserrat'
  title_size:int=Field(default=48,ge=28,le=64)
+ title_padding_x:int=Field(default=10,ge=0,le=100)
+ title_padding_y:int=Field(default=4,ge=0,le=70)
+ title_bg_color:str=Field(default='#FFFFFF',pattern=r'^#[0-9A-Fa-f]{6}$')
+ title_text_color:str=Field(default='#000000',pattern=r'^#[0-9A-Fa-f]{6}$')
  title_outline_color:str=Field(default='#000000',pattern=r'^#[0-9A-Fa-f]{6}$')
  title_outline_width:int=Field(default=0,ge=0,le=6)
  title_x:float=Field(default=50,ge=0,le=100)
@@ -405,7 +418,8 @@ def improve_titles(ident:str,opts:TitleInput):
  text=opts.text.strip() or ' '.join(w['text'] for w in clip_words(job.get('transcript',[]),opts.start,opts.end))
  if not text:raise HTTPException(400,'Este clip aún no tiene transcripción. Analiza el video o escribe sus subtítulos primero.')
  options=job.get('analysis_options',{});engine=options.get('engine','gpu')
- payload=dict(task='coverage_titles',hablante_identificado=options.get('speaker',''),contexto_del_video=options.get('context',''),criterios_del_editor=read_profile()['instructions'],clips=[dict(id='clip',text=text)],instruccion='Cuenta lo que esta persona dice o hace: sujeto, verbo y detalle específico. Da tres opciones fuertes y diferentes, hasta 80 caracteres y 14 palabras cada una. Una narrativa, una con contraste y otra con intriga concreta. Puedes intensificar el tono; nunca los hechos. Ejemplos, solo si son ciertos en el clip: «Cuenta cómo delinquía antes de terminar en prisión»; «Westcol promete que su boxeo superará a todos». No copies frases ni hagas preguntas genéricas. Devuelve clips/id/titles. Usa el ID clip.')
+ from editorial import TITLE_GUIDE
+ payload=dict(task='coverage_titles',hablante_identificado=options.get('speaker',''),contexto_del_video=options.get('context',''),criterios_del_editor=read_profile()['instructions'],clips=[dict(id='clip',text=text)],instruccion=TITLE_GUIDE+' Da tres alternativas distintas: una con duda concreta, otra con tensión o contraste y otra con una situación humana compartida, si el contenido las permite. No fuerces conflictos inexistentes. Devuelve clips/id/titles y usa el ID clip.')
  try:
   if engine=='gpu':gpu_ai.warmup()
   completion=gpu_ai.complete if engine=='gpu' else cloud_ai.complete if engine=='cloud' else lambda value:query_json(json.dumps(value,ensure_ascii=False),TitleBatch.model_json_schema(),options.get('quality','fast'))
@@ -423,8 +437,6 @@ def captions(ident:str,opts:Export):
 
 def ass_file(path,opts,transcript=None):
  font=opts.font if opts.font in FONTS else 'Montserrat'
- title_font=opts.title_font if opts.title_font in FONTS else 'Montserrat'
- title,title_size=title_layout(opts.title,title_font,opts.title_size,two_lines=True)
  color=ass_color(opts.caption_color);outline=ass_color(opts.outline_color)
  header=f'''[Script Info]
 ScriptType: v4.00+
@@ -434,30 +446,30 @@ WrapStyle: 2
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Caption,{font},{opts.caption_size},{color},&H00FFFFFF,{outline},&H80000000,-1,0,0,0,100,100,0,0,1,{opts.outline_width},0,2,100,100,290,1
-Style: Title,{title_font},{title_size},&H00000000,&H00000000,{ass_color(opts.title_outline_color)},&H00FFFFFF,-1,0,0,0,100,100,0,0,1,{opts.title_outline_width},0,8,140,140,140,1
-Style: TitleBox,{title_font},1,&H00FFFFFF,&H00FFFFFF,&H00FFFFFF,&H00FFFFFF,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 '''
  duration=opts.end-opts.start
- title_pos=r'{\an5\pos('+f'{opts.title_x*10.8:.1f},{opts.title_y*19.2:.1f}'+')}'
  caption_pos=r'{\an5\pos('+f'{opts.caption_x*10.8:.1f},{opts.caption_y*19.2:.1f}'+')}'
  events=[]
- if title:
-  from PIL import ImageFont
-  face=ImageFont.truetype(str(ROOT/'static/fonts'/FONTS[title_font]),title_size)
-  width=max(face.getlength(line) for line in title.split('\n'))+24
-  height=title_size*1.35*len(title.split('\n'))+18
-  x=opts.title_x*10.8-width/2;y=opts.title_y*19.2-height/2
-  box_tag=r'{\an7\pos('+f'{x:.1f},{y:.1f}'+r')\p1}'
-  rectangle=f'm 0 0 l {width:.1f} 0 l {width:.1f} {height:.1f} l 0 {height:.1f}'
-  events.append(f'Dialogue: 1,0:00:00.00,{stamp(duration)},TitleBox,,0,0,0,,{box_tag}{rectangle}')
-  events.append(f'Dialogue: 2,0:00:00.00,{stamp(duration)},Title,,0,0,0,,{title_pos}{safe(title)}')
  for cue in caption_cues(opts,transcript or []):
   caption,point=title_layout(cue['text'],font,opts.caption_size)
   size_tag=r'{\fs'+str(point)+'}'
   events.append(f"Dialogue: 0,{stamp(cue['start'])},{stamp(cue['end'])},Caption,,0,0,0,,{caption_pos}{size_tag}{safe(caption)}")
  path.write_text(header+'\n'.join(events),encoding='utf-8')
+
+def render_title(opts):
+ font=opts.title_font if opts.title_font in FONTS else 'Montserrat'
+ return title_bitmap(opts.title,font,opts.title_size,opts.title_padding_x,opts.title_padding_y,opts.title_bg_color,opts.title_text_color,opts.title_outline_color,opts.title_outline_width)
+
+@app.post('/api/title-preview')
+def title_preview(opts:Export):
+ import io
+ try:image=render_title(opts)
+ except ValueError as e:raise HTTPException(400,str(e))
+ if image is None:return Response(status_code=204)
+ buffer=io.BytesIO();image.save(buffer,format='PNG')
+ return Response(buffer.getvalue(),media_type='image/png',headers={'Cache-Control':'no-store'})
 
 @app.post('/api/jobs/{ident}/export')
 def export(ident:str,opts:Export):
@@ -471,9 +483,11 @@ def export(ident:str,opts:Export):
  if opts.logo!='none' and (opts.logo_start>=logo_end or logo_end>opts.end-opts.start):raise HTTPException(400,'El intervalo del logo debe estar dentro del clip: inicio menor que final.')
  if opts.clip_id:
   limits=JOBS[ident].get('analysis_range')
-  if limits and not limits['minimum']<=opts.end-opts.start<=limits['maximum']:raise HTTPException(400,f"El clip debe respetar el rango {limits['minimum']}–{limits['maximum']} s del análisis.")
+  if limits and not limits['minimum']-.001<=opts.end-opts.start<=limits['maximum']+.001:raise HTTPException(400,f"El clip debe respetar el rango {limits['minimum']}–{limits['maximum']} s del análisis.")
  folder=DATA/ident; token=uuid.uuid4().hex; ass=folder/f'{token}.ass'; output=folder/f'{token}.mp4'
- try:ass_file(ass,opts,JOBS[ident].get('transcript',[]))
+ try:
+  ass_file(ass,opts,JOBS[ident].get('transcript',[]))
+  image=render_title(opts)
  except ValueError as e:raise HTTPException(400,str(e))
  geometry='scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black' if opts.framing=='fit' else f'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(iw-ow)*{opts.focus_x/100}:(ih-oh)*{opts.focus_y/100}'
  if opts.auto_follow:
@@ -488,13 +502,31 @@ def export(ident:str,opts:Export):
  if not fonts.exists():shutil.copytree(ROOT/'static/fonts',fonts)
  filters=f'{geometry},setsar=1,setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=2,ass={ass.name}:fontsdir=fonts'
  args=['ffmpeg','-v','error','-y','-ss',str(opts.start),'-t',str(opts.end-opts.start),'-i',str(folder/'source')]
+ title_path=folder/f'{token}-title.png'
+ graph=[f'[0:v]{filters}[v0]'];last='v0';input_index=1
+ if image is not None:
+  image.save(title_path)
+  args+=['-i',str(title_path)]
+  graph.append(f'[{last}][{input_index}:v]overlay=x=W*{opts.title_x/100}-w/2:y=H*{opts.title_y/100}-h/2:eof_action=repeat[v1]')
+  last='v1';input_index+=1
  if opts.logo!='none':
   from PIL import Image
-  with Image.open(logo) as image:logo_pixel_width=min(round(1080*opts.logo_width/100),round(1440*image.width/image.height))
-  args+=['-i',str(logo),'-filter_complex',f"[0:v]{filters}[v];[1:v]scale={max(1,logo_pixel_width)}:-1[l];[v][l]overlay=(W-w)*{opts.logo_x/100}:(H-h)*{opts.logo_y/100}:enable='gte(t,{opts.logo_start})*lt(t,{logo_end})'[out]",'-map','[out]','-map','0:a?']
- else: args+=['-vf',filters,'-map','0:v:0','-map','0:a?']
+  with Image.open(logo) as mark:logo_pixel_width=min(round(1080*opts.logo_width/100),round(1440*mark.width/mark.height))
+  args+=['-i',str(logo)]
+  graph.append(f'[{input_index}:v]scale={max(1,logo_pixel_width)}:-1[l]')
+  graph.append(f"[{last}][l]overlay=(W-w)*{opts.logo_x/100}:(H-h)*{opts.logo_y/100}:enable='gte(t,{opts.logo_start})*lt(t,{logo_end})'[v2]")
+  last='v2'
+ args+=['-filter_complex',';'.join(graph),'-map',f'[{last}]','-map','0:a?']
  args+=['-t',str(opts.end-opts.start),'-c:v','libx264','-preset','fast','-r',str(JOBS[ident].get('fps',30)),'-fps_mode','cfr','-crf','18','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-movflags','+faststart',str(output)]
- try: command(args,cwd=folder)
+ export_env=None
+ if os.name!='nt':
+  # Keep host-wide font substitutions from replacing the bundled face used for measurements.
+  from xml.sax.saxutils import escape
+  cache=folder/'font-cache';cache.mkdir(exist_ok=True)
+  config=folder/'fontconfig.xml'
+  config.write_text(f'<fontconfig><dir>{escape(str(fonts.resolve()))}</dir><cachedir>{escape(str(cache.resolve()))}</cachedir></fontconfig>',encoding='utf-8')
+  export_env={**os.environ,'FONTCONFIG_FILE':str(config.resolve())}
+ try: command(args,cwd=folder,env=export_env)
  except Exception as e: raise HTTPException(500,str(e))
  return FileResponse(output,media_type='video/mp4',filename=f'clip-{token[:6]}.mp4')
 

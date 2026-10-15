@@ -36,7 +36,7 @@ def complete(payload,transport=None,cancel=None):
     token=key()
     if not token:raise ValueError('Falta conectar la clave de API.')
     # Only transcript/context go to the API. No file paths, video bytes or credentials enter the prompt.
-    body={'model':MODEL,'messages':[{'role':'system','content':SYSTEM+' Usa exclusivamente IDs de frases existentes. Respeta los segundos mínimo/máximo. Cada propuesta debe incluir first, last, category, hook, payoff, novelty, emotion, discussion, coherent, reason, evidence y titles. Devuelve {"moments": [...]} con hasta 4 propuestas; para relleno devuelve {"moments": []}. Escribe títulos específicos con el tema concreto.'},{'role':'user','content':json.dumps(payload,ensure_ascii=False)}],'response_format':{'type':'json_object'},'temperature':.2,'max_tokens':1500}
+    body={'model':MODEL,'messages':[{'role':'system','content':SYSTEM+' Usa exclusivamente IDs de frases existentes. Respeta los segundos mínimo/máximo. Cada propuesta debe incluir first, last, category, hook, payoff, novelty, emotion, discussion, coherent, reason, evidence y titles. Devuelve {"moments": [...]} con hasta 3 propuestas; para relleno devuelve {"moments": []}. Escribe títulos específicos con el tema concreto.'},{'role':'user','content':json.dumps(payload,ensure_ascii=False)}],'response_format':{'type':'json_object'},'temperature':.2,'max_tokens':2200 if payload.get('task')!='coverage_titles' else 1200}
     if payload.get('task')=='coverage_titles':body['messages'][0]['content']=SYSTEM+' En esta tarea genera títulos para todos los clips, sin seleccionar ni puntuar. Sigue el esquema clips/id/titles del usuario.'
     try:
         with httpx.Client(timeout=httpx.Timeout(90,connect=10),transport=transport) as client:
@@ -49,7 +49,7 @@ def complete(payload,transport=None,cancel=None):
     except httpx.TimeoutException:raise ValueError('La solicitud de IA superó 90 segundos. No se continuará esperando indefinidamente.') from None
     except httpx.HTTPError:raise ValueError('No se pudo conectar con la API. Revisa Internet y vuelve a intentarlo.') from None
 
-def select_cloud(transcript,minimum,maximum,duration,speaker='',context='',profile='',max_clips=10,on_progress=None,cancel=None,transport=None,completion=None,workers=3,stage='cloud',diagnostics=None):
+def select_cloud(transcript,minimum,maximum,duration,speaker='',context='',profile='',max_clips=10,on_progress=None,cancel=None,transport=None,completion=None,workers=3,stage='cloud',diagnostics=None,topic_ranges=None):
     from timeline import timed_sentences
     from intelligence import accept_proposals,diverse_selection,Proposals
     phrases=timed_sentences(transcript)
@@ -61,14 +61,24 @@ def select_cloud(transcript,minimum,maximum,duration,speaker='',context='',profi
         if chunk and chunk[-1]['end']-chunk[0]['start']>=minimum:chunks.append(chunk)
     candidates=[];completed=0
     def analyze_chunk(chunk):
-        payload={'rango_segundos':[minimum,maximum],'hablante_identificado':speaker,'contexto_del_video':context,'criterios_del_editor':profile,'frases':[dict(id=i,**p) for i,p in enumerate(chunk)],'instruccion':'Selecciona las mejores historias completas de este bloque: reacciones con causa, humor con remate, descubrimientos, opiniones, relatos o datos útiles. Usa first/last inclusivos. Recorta logística al inicio/final. No copies frases como títulos ni inventes hechos. Puede haber cero resultados.'}
+        payload={'rango_segundos':[minimum,maximum],'hablante_identificado':speaker,'contexto_del_video':context,'criterios_del_editor':profile,'frases':[dict(id=i,**p) for i,p in enumerate(chunk)],'instruccion':'Devuelve también topics, una lista de {first,last,label} que agrupe TODAS las frases por tema de conversación. Una pregunta y su respuesta del mismo tema van juntas; separa el cambio de tema aunque no sea viral. No cortes un tema solo porque cambie de hablante. Un único título principal por momento. Selecciona las mejores historias completas de este bloque: reacciones con causa, humor con remate, descubrimientos, opiniones, relatos o datos útiles. Usa first/last inclusivos. Recorta logística al inicio/final. No copies frases como títulos ni inventes hechos. Puede haber cero resultados.'}
         # No overlapping candidate transcripts: every source phrase is serialized once per block.
         data=(completion or complete)(payload,transport=transport,cancel=cancel)
         if not isinstance(data.get('moments'),list):raise ValueError('La IA devolvió una respuesta editorial inválida.')
+        topics=[]
+        from intelligence import Topic
+        last=-1
+        for raw in data.get('topics',[]):
+            try:topic=Topic.model_validate(raw)
+            except ValueError:continue
+            if not (0<=topic.first<=topic.last<len(chunk)) or topic.first<=last:continue
+            topics.append(dict(start=chunk[topic.first]['start'],end=chunk[topic.last]['end'],label=topic.label,boundary=bool(topics)))
+            last=topic.last
+        if topic_ranges is not None:topic_ranges.extend(topics)
         rejected=[]
         result=accept_proposals(data,chunk,transcript,minimum,maximum,speaker,diagnostics=rejected)
         # One targeted correction only: preserve grounding and duration, never fabricate a quota.
-        if not result:
+        if not result and not topics:
             repair=dict(payload)
             repair['revision']={'propuestas_previas':data['moments'][:4],'motivos_de_descarte':rejected,'instruccion':'Revisa el mejor momento concreto del bloque. Corrige IDs, rango y títulos. Si no propusiste nada, busca reacción, humor, descubrimiento o relato con planteamiento y resolución. No exijas emoción, novedad y polémica simultáneamente. No inventes ni fuerces clips de relleno; puedes devolver cero.'}
             corrected=(completion or complete)(repair,transport=transport,cancel=cancel)

@@ -64,13 +64,13 @@ class Editor(unittest.TestCase):
    opts=Export(start=0,end=20,title='Westcol explica por qué prioriza su salud sobre los directos',subtitles='',title_x=35,title_y=20,caption_x=60,caption_y=75,caption_color='#FF0000',outline_color='#0000FF',outline_width=6,captions=[dict(start=2,end=3,text='Un subtítulo de prueba')])
    ass_file(path,opts)
    text=path.read_text(encoding='utf-8')
-   self.assertIn(r'\pos(378.0,384.0)',text)
+   from app import render_title
+   bitmap=render_title(opts)
+   self.assertLess(bitmap.height,160)
+   self.assertLess(bitmap.width,900)
    self.assertIn(r'\pos(648.0,1440.0)',text)
    self.assertIn('&H000000FF',text)
    self.assertIn('&H00FF0000',text)
-   title_line=next(line for line in text.splitlines() if ',Title,,' in line)
-   self.assertLessEqual(title_line.count(r'\N'),1)
-   self.assertIn('0:00:20.00',title_line)
  def test_clip_relative_captions_progress_through_middle_of_video(self):
   transcript=[dict(start=100,end=140,text=' '.join(str(i) for i in range(40)),words=[dict(start=100+i,end=100+i+.45,text=str(i)) for i in range(40)])]
   cues=make_cues(transcript,110,130)

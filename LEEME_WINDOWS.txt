@@ -56,7 +56,7 @@ con ambas apps cerradas. No copies la .venv anterior.
 Cierra con Ctrl+C en la ventana negra. No publiques este servidor en Internet:
 esta version personal no tiene login.
 
-Cobertura fija: al menos 75% del video, sin contar dos veces solapamientos.
+Objetivo de cobertura: 75%, sin contar solapamientos. No se mezclan temas para forzar ese porcentaje.
 La cantidad de clips se calcula segun el rango. Todos tienen titulos; Mayor potencial marca los destacados. Logos: ancho hasta 100%.
 Al actualizar conserva data y .venv, y copia tambien coverage.py.
 
@@ -80,3 +80,12 @@ Actualiza yt-dlp, EJS y Deno automaticamente dentro de la app.
 Despues abre INICIAR_WINDOWS y vuelve a probar el enlace.
 Si falla, el mensaje mostrara un codigo de causa (por ejemplo YT-403, YT-SESION o YT-RED).
 No hace falta compartir contrasenas ni cookies.
+
+FONDO DEL TITULO Y TEMAS
+En Titulo > Fondo del titulo elige color y ajusta los margenes de lados y arriba/abajo.
+Puedes usar los deslizadores o la rueda del raton encima de ellos. Los valores son pixeles del MP4.
+La vista previa y la exportacion usan la misma imagen del titulo.
+La IA busca preguntas y respuestas del mismo tema y separa cambios de conversacion.
+Si no puede conservar respuestas completas dentro del rango, la cobertura puede ser menor al 75%.
+Se crea un titulo principal por clip; pide otras opciones con Mejorar titulos de este clip con IA.
+Repetir el mismo analisis reutiliza respuestas guardadas. Al actualizar incluye editorial.py y styling.py.

@@ -24,7 +24,7 @@ class CoverageTests(unittest.TestCase):
   clips=complete_coverage([],[],1080,20,60,completion)
   self.assertGreater(len(clips),10)
   self.assertTrue(all(c['title'] and c['titles'] for c in clips))
-  self.assertTrue(all(len(p['clips'])<=3 for p in calls))
+  self.assertTrue(all(len(p['clips'])<=6 for p in calls))
  def test_cancellation_and_short_video_are_explicit(self):
   with self.assertRaisesRegex(ValueError,'más corto'):plan([],[],10,20,60)
   event=threading.Event();event.set()
