@@ -61,7 +61,7 @@ import_pool=ThreadPoolExecutor(max_workers=1)
 class YouTubeInput(BaseModel):
  url:str=Field(min_length=1,max_length=2000)
  quality:Literal['fast','original']='fast'
- browser:Literal['none','managed','firefox','chrome','edge','brave']='managed'
+ browser:Literal['none','managed','firefox','chrome','edge','brave']='none'
 
 def require_local_youtube(request):
  from urllib.parse import urlsplit
@@ -83,9 +83,8 @@ def youtube_connection_status(request:Request):
 @app.post('/api/youtube-session/connect')
 def connect_youtube(request:Request):
  require_local_youtube(request)
- from youtube_session import session,SessionUnavailable
- try:return session.connect()
- except SessionUnavailable as e:raise HTTPException(400,str(e))
+ from youtube_session import RETIRED
+ raise HTTPException(410,RETIRED)
 
 @app.post('/api/youtube-session/disconnect')
 def disconnect_youtube(request:Request):
@@ -125,7 +124,10 @@ def import_youtube(ident,url,quality="fast",browser="none"):
 
 @app.post('/api/youtube')
 def start_youtube(options:YouTubeInput,request:Request):
- if options.browser=='managed':require_local_youtube(request)
+ if options.browser=='managed':
+  require_local_youtube(request)
+  from youtube_session import RETIRED
+  raise HTTPException(410,RETIRED)
  if options.browser!="none" and request.client and request.client.host not in ("127.0.0.1","::1","testclient"):
   raise HTTPException(403,"El uso de una sesión de navegador solo está disponible desde el PC donde corre la app.")
  from youtube_import import canonical_url

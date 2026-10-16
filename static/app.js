@@ -258,38 +258,24 @@ $('youtubeBrowser').onchange=()=>{$('youtubeAccessState').textContent='Alternati
 $('youtubeLocalFallback').onclick=()=>{$('source').click();};
 
 function youtubeFriendlyError(state){
- if(state.error_code==='YT-CONEXION')return 'YouTube pide una sesión. Pulsa Conectar YouTube e inicia sesión en la ventana de Clip Studio; después vuelve a importar.';
+ if(state.error_code==='YT-CONEXION')return 'La conexión integrada fue retirada porque Google rechazó el navegador. No vuelvas a iniciar sesión en esa ventana.';
  if(state.error_code==='YT-SESION'||state.error_code==='YT-403')return 'YouTube no autorizó importar este enlace automáticamente. Puedes ingresar el archivo original desde tu PC.';
  if(state.error_code?.startsWith('YT-COOKIES'))return 'No se pudo completar el acceso a YouTube con la alternativa autorizada. Puedes ingresar el archivo original desde tu PC.';
  return state.message;
 }
 
-let youtubeConnectionTimer=null;
 async function refreshYoutubeConnection(){
  try{
   const info=await(await request('/api/youtube-session')).json();
   $('disconnectYoutube').classList.toggle('hidden',!info.authorized&&!info.cleanup_pending);
-  $('youtubeConnectionState').textContent=info.message||(info.connected?'Sesión guardada en este PC. Puedes cerrar la ventana de conexión e importar tu enlace.':info.authorized?'En la ventana de Clip Studio, abre Iniciar sesión y completa la comprobación de YouTube.':'Conecta YouTube una vez si pide sesión. Se usa un perfil propio; no necesitas cerrar Brave, Chrome ni la app.');
-  if(info.connected&&youtubeConnectionTimer){clearInterval(youtubeConnectionTimer);youtubeConnectionTimer=null;}
+  $('disconnectYoutube').textContent='Eliminar conexión anterior';
+  $('youtubeConnectionState').textContent=info.message;
  }catch(e){$('youtubeConnectionState').textContent=e.message;}
 }
-$('connectYoutube').onclick=async()=>{
- $('connectYoutube').disabled=true;
- $('youtubeConnectionState').textContent='Abriendo la ventana de conexión de Clip Studio…';
- try{
-  await request('/api/youtube-session/connect',jsonOptions({}));
-  $('youtubeBrowser').value='managed';
-  await refreshYoutubeConnection();
-  clearInterval(youtubeConnectionTimer);
-  youtubeConnectionTimer=setInterval(refreshYoutubeConnection,2500);
- }catch(e){$('youtubeConnectionState').textContent=e.message;}
- finally{$('connectYoutube').disabled=false;}
-};
 $('disconnectYoutube').onclick=async()=>{
  $('disconnectYoutube').disabled=true;
  try{
   await request('/api/youtube-session/disconnect',jsonOptions({}));
-  clearInterval(youtubeConnectionTimer);youtubeConnectionTimer=null;
   await refreshYoutubeConnection();
  }catch(e){$('youtubeConnectionState').textContent=e.message;}
  finally{$('disconnectYoutube').disabled=false;}
