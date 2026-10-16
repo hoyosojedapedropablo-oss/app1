@@ -90,12 +90,19 @@ Si no puede conservar respuestas completas dentro del rango, la cobertura puede 
 Se crea un titulo principal por clip; pide otras opciones con Mejorar titulos de este clip con IA.
 Repetir el mismo analisis reutiliza respuestas guardadas. Al actualizar incluye editorial.py y styling.py.
 
-IMPORTACION DE YOUTUBE
+IMPORTACION DE YOUTUBE - CONEXION PROPIA
 Pega el enlace y pulsa Importar video de YouTube.
-La app intenta primero descargar sin leer ninguna sesion del navegador.
-Calidad y sesion alternativa son opcionales, en Opciones avanzadas de descarga.
-La sesion elegida solo se intenta si YouTube exige acceso adicional.
-Si YouTube impide importar, puedes usar Ingresar archivo de mi PC.
-El diagnostico tecnico se conserva en Opciones avanzadas.
-No necesitas reinstalar ni cambiar de navegador para usar un archivo.
-YouTube puede impedir descargas incluso con una sesion valida.
+La app intenta primero descargar sin usar ninguna sesion.
+Si YouTube pide acceso, pulsa Conectar YouTube e inicia sesion en la ventana nueva.
+Se crea un perfil propio de Clip Studio; NO es tu perfil habitual de Brave o Chrome.
+No necesitas cerrar tu navegador habitual ni instalar Firefox.
+Cuando la app indique Sesion guardada, puedes cerrar la ventana de conexion.
+Conserva data para reutilizar la conexion al actualizar la app.
+Deja Metodo de acceso en Automatico y vuelve a importar el enlace.
+La conexion se reutiliza en las siguientes importaciones.
+Desconectar elimina el perfil de conexion de Clip Studio y sus cookies.
+Nunca envies contrasenas ni cookies por el chat.
+La conexion propia evita leer y descifrar el perfil habitual con Windows.
+Google puede rechazar el inicio de sesion en un navegador controlado.
+YouTube puede seguir rechazando descargas aun con una sesion valida.
+La descarga real del usuario y el inicio de sesion con Google no estan verificados.

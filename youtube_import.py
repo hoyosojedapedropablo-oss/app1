@@ -32,6 +32,9 @@ def diagnose_error(error):
  # Return actionable categories, never provider URLs, local paths or credential contents.
  chain=[];current=error;seen=set()
  while current is not None and id(current) not in seen and len(chain)<6:
+  from youtube_session import SessionUnavailable
+  if isinstance(current,SessionUnavailable):
+   return 'YT-CONEXION','Conecta YouTube desde Clip Studio e inicia sesión en su ventana propia. No se leerá tu perfil habitual de Brave o Chrome.'
   seen.add(id(current));chain.append(str(current).lower());current=current.__cause__ or current.__context__
  text=' '.join(chain)
  checks=[
@@ -61,7 +64,7 @@ def diagnose_error(error):
  return 'YT-DESCARGA','No se pudo completar la descarga. Ejecuta REPARAR_YOUTUBE_WINDOWS y vuelve a probar. Si continúa, comparte este código de error y el enlace del video.'
 
 def _download_attempt(url,folder,progress,mode="fast",browser="none"):
- if browser not in ("none","firefox","chrome","edge","brave"):raise ValueError("Navegador no admitido.")
+ if browser not in ("none","managed","firefox","chrome","edge","brave"):raise ValueError("Navegador no admitido.")
  if mode not in ("fast","original"):raise ValueError("Calidad de descarga inválida.")
  import yt_dlp
  started=time.monotonic()
@@ -88,11 +91,25 @@ def _download_attempt(url,folder,progress,mode="fast",browser="none"):
  limit='[height<=1080]' if mode=='fast' else ''
  selector=f'bestvideo[ext=mp4][vcodec^=avc1]{limit}+bestaudio[ext=m4a]/best[ext=mp4]{limit}/bestvideo{limit}+bestaudio/best{limit}' if mode=='fast' else 'bestvideo+bestaudio/best'
  options=dict(js_runtimes=javascript_options(),concurrent_fragment_downloads=8,http_chunk_size=10*1024*1024,postprocessor_hooks=[post_hook],noplaylist=True,quiet=True,logger=Logger(),socket_timeout=30,retries=2,fragment_retries=2,progress_hooks=[hook],match_filter=match,max_filesize=MAX_BYTES,outtmpl=str(folder/'download.%(ext)s'),merge_output_format='mp4',format=selector,postprocessors=[dict(key='FFmpegVideoRemuxer',preferedformat='mp4')])
- if browser!='none':
+ managed=None
+ if browser=='managed':
+  from youtube_session import session
+  managed=session.download_context()
+  options.update(user_agent=managed['user_agent'],cachedir=False)
+ elif browser!='none':
   options['cookiesfrombrowser']=(browser,)
   options['cachedir']=False
  with yt_dlp.YoutubeDL(options) as ydl:
-  if browser!='none':
+  if browser=='managed':
+   from http.cookiejar import Cookie
+   for cookie in managed['cookies']:
+    expires=cookie.get('expires',-1)
+    ydl.cookiejar.set_cookie(Cookie(0,cookie['name'],cookie['value'],None,False,
+     cookie['domain'],True,cookie['domain'].startswith('.'),cookie.get('path','/'),True,
+     cookie.get('secure',False),int(expires) if expires>0 else None,expires<=0,
+     None,None,{'HttpOnly':None} if cookie.get('httpOnly') else {}))
+   progress(0,'Usando la conexión propia de YouTube…',access_mode='managed',browser_cookies_read=True,youtube_login_cookie_present=True)
+  elif browser!='none':
    # Read only after the caller explicitly requested this browser. Report presence, never values.
    progress(0,'Leyendo la sesión del navegador seleccionado…',access_mode=browser)
    cookies=[cookie for cookie in ydl.cookiejar if (cookie.domain.lstrip('.')=='youtube.com' or cookie.domain.endswith('.youtube.com')) and not cookie.is_expired()]
@@ -122,7 +139,7 @@ class ImportAccessFailure(Exception):
 
 def download(url,folder,progress,mode='fast',browser='none'):
  """Public first. Reading a browser is an explicit, last-resort opt-in, never a prerequisite."""
- if browser not in ('none','firefox','chrome','edge','brave'):raise ValueError('Navegador no admitido.')
+ if browser not in ('none','managed','firefox','chrome','edge','brave'):raise ValueError('Navegador no admitido.')
  progress(0,'Conectando con YouTube…',access_mode='none',requested_browser=browser,attempt=1)
  try:return _download_attempt(url,folder,progress,mode=mode,browser='none')
  except Exception as public_error:
