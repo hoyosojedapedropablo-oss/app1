@@ -32,9 +32,12 @@ def diagnose_error(error):
  # Return actionable categories, never provider URLs, local paths or credential contents.
  text=str(error).lower()
  checks=[
+  ('YT-COOKIES-CIFRADO',('failed to decrypt','decrypt with dpapi','app-bound','app bound','cookie decryption'), 'Windows no permitió leer la sesión cifrada de ese navegador. Usa Firefox: abre YouTube allí, inicia sesión, verifica el video, cierra Firefox y selecciona Firefox en la app. No desactives la protección del navegador.'),
+  ('YT-COOKIES-OCUPADAS',('could not copy chrome cookie','could not copy edge cookie','database is locked','being used by another process'), 'No se pudo leer la sesión porque el navegador está abierto o bloqueado. Cierra el navegador seleccionado y sus procesos en segundo plano; puedes mantener la app abierta en otro navegador. En Windows se recomienda Firefox.'),
+  ('YT-COOKIES-PERFIL',('could not find firefox cookies','could not find chrome cookies','could not find edge cookies','could not find cookies database'), 'No se encontró la sesión de ese navegador en este PC. Abre YouTube en ese navegador, inicia sesión y comprueba el video; luego cierra ese navegador y reintenta.'),
   ('YT-RED',('proxy','tunnel connection','getaddrinfo','name resolution','failed to resolve','connection refused','network is unreachable'), 'No se pudo conectar con YouTube por un problema de red o proxy. Revisa tu conexión y prueba de nuevo.'),
   ('YT-EDAD',('age-restricted','confirm your age','age restricted'), 'YouTube exige verificar la edad para este video. La descarga pública no puede hacerlo; ingresa el archivo descargado.'),
-  ('YT-SESION',("not a bot",'sign in','login required','authentication required','confirm you’re not a bot'), 'YouTube está pidiendo iniciar sesión o verificar que no eres un bot. Esta descarga no usa tu cuenta del navegador. Prueba más tarde o ingresa el archivo descargado.'),
+  ('YT-SESION',("not a bot",'sign in','login required','authentication required','confirm you’re not a bot'), 'YouTube está pidiendo iniciar sesión o verificar que no eres un bot. Abre el video en tu navegador y completa la verificación. Después selecciona Usar mi sesión de YouTube en la app (Firefox recomendado en Windows) y reintenta. También puedes ingresar el archivo descargado.'),
   ('YT-PRIVADO',('private video','members-only','members only','video is not available','video unavailable','removed by','copyright'), 'El video no está disponible públicamente o tiene restricciones. Comprueba que abre en YouTube sin iniciar sesión, o ingresa el archivo descargado.'),
   ('YT-REGION',('not available in your country','geo restricted','geo-restricted'), 'El video tiene una restricción de región y no puede descargarse desde esta conexión.'),
   ('YT-LIMITE',('429','too many requests','rate limit'), 'YouTube limitó temporalmente las descargas. Espera unos minutos antes de intentarlo de nuevo.'),
@@ -52,7 +55,8 @@ def diagnose_error(error):
  if isinstance(error,ValueError) and text.startswith(('el video','la duración','no se pudo consultar','no se obtuvo','no se pudo importar','la descarga superó','los directos','calidad de descarga')):return 'YT-VALIDACION',str(error)[:500]
  return 'YT-DESCARGA','No se pudo completar la descarga. Ejecuta REPARAR_YOUTUBE_WINDOWS y vuelve a probar. Si continúa, comparte este código de error y el enlace del video.'
 
-def download(url,folder,progress,mode="fast"):
+def download(url,folder,progress,mode="fast",browser="none"):
+ if browser not in ("none","firefox","chrome","edge"):raise ValueError("Navegador no admitido.")
  if mode not in ("fast","original"):raise ValueError("Calidad de descarga inválida.")
  import yt_dlp
  started=time.monotonic()
@@ -79,6 +83,9 @@ def download(url,folder,progress,mode="fast"):
  limit='[height<=1080]' if mode=='fast' else ''
  selector=f'bestvideo[ext=mp4][vcodec^=avc1]{limit}+bestaudio[ext=m4a]/best[ext=mp4]{limit}/bestvideo{limit}+bestaudio/best{limit}' if mode=='fast' else 'bestvideo+bestaudio/best'
  options=dict(js_runtimes=javascript_options(),concurrent_fragment_downloads=8,http_chunk_size=10*1024*1024,postprocessor_hooks=[post_hook],noplaylist=True,quiet=True,logger=Logger(),socket_timeout=30,retries=2,fragment_retries=2,progress_hooks=[hook],match_filter=match,max_filesize=MAX_BYTES,outtmpl=str(folder/'download.%(ext)s'),merge_output_format='mp4',format=selector,postprocessors=[dict(key='FFmpegVideoRemuxer',preferedformat='mp4')])
+ if browser!='none':
+  options['cookiesfrombrowser']=(browser,)
+  options['cachedir']=False
  with yt_dlp.YoutubeDL(options) as ydl:
   info=ydl.extract_info(url,download=False)
   if not info:raise ValueError('No se pudo consultar el video.')

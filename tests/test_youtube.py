@@ -108,3 +108,34 @@ class YouTubeRepairTests(unittest.TestCase):
    self.assertEqual(state['error_code'],'YT-403')
    self.assertIn('REPARAR_YOUTUBE_WINDOWS',state['message'])
    self.assertNotIn('secret-value',state['message'])
+
+class YouTubeSessionTests(unittest.TestCase):
+ def test_session_is_opt_in_and_not_persisted_to_a_cookie_file(self):
+  import youtube_import
+  for browser in ['none','firefox','chrome','edge']:
+   with tempfile.TemporaryDirectory() as tmp:
+    options={};folder=Path(tmp)
+    class YDL:
+     def __init__(self,opts):options.update(opts)
+     def __enter__(self):return self
+     def __exit__(self,*args):pass
+     def extract_info(self,*args,**kwargs):return dict(title='Sample',duration=20)
+     def process_ie_result(self,info,**kwargs):(folder/'download.mp4').write_bytes(b'video');return info
+    with patch('yt_dlp.YoutubeDL',YDL):youtube_import.download('https://www.youtube.com/watch?v=JCcuOv5y_9g',folder,lambda *a,**k:None,browser=browser)
+    self.assertNotIn('cookiefile',options)
+    if browser=='none':self.assertNotIn('cookiesfrombrowser',options)
+    else:self.assertEqual(options['cookiesfrombrowser'],(browser,));self.assertFalse(options['cachedir'])
+ def test_session_choice_is_explicitly_forwarded_without_saving_credentials(self):
+  with patch.dict(backend.IMPORTS,{},clear=True),patch.dict(backend.JOBS,{},clear=True),patch.object(backend.import_pool,'submit') as submit:
+   response=TestClient(backend.app).post('/api/youtube',json={'url':'https://youtu.be/JCcuOv5y_9g','browser':'firefox'})
+  self.assertEqual(response.status_code,200)
+  self.assertEqual(submit.call_args.args[-1],'firefox')
+  self.assertNotIn('browser',response.json());self.assertNotIn('cookie',response.text.lower())
+ def test_remote_clients_cannot_request_browser_session(self):
+  response=TestClient(backend.app,client=('192.168.1.50',12345)).post('/api/youtube',json={'url':'https://youtu.be/JCcuOv5y_9g','browser':'chrome'})
+  self.assertEqual(response.status_code,403)
+ def test_windows_cookie_errors_are_actionable(self):
+  from youtube_import import diagnose_error
+  for text,code in [('Failed to decrypt with DPAPI','YT-COOKIES-CIFRADO'),('Could not copy Chrome cookie database','YT-COOKIES-OCUPADAS'),('Could not find firefox cookies database','YT-COOKIES-PERFIL')]:
+   actual,message=diagnose_error(RuntimeError(text))
+   self.assertEqual(actual,code);self.assertNotIn('http',message)

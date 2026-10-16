@@ -61,15 +61,16 @@ import_pool=ThreadPoolExecutor(max_workers=1)
 class YouTubeInput(BaseModel):
  url:str=Field(min_length=1,max_length=2000)
  quality:Literal['fast','original']='fast'
+ browser:Literal['none','firefox','chrome','edge']='none'
 
-def import_youtube(ident,url,quality="fast"):
+def import_youtube(ident,url,quality="fast",browser="none"):
  import shutil
  from youtube_import import download
  folder=DATA/ident;folder.mkdir(exist_ok=True)
  def progress(value,message,**metadata):IMPORTS[ident].update(status='downloading',progress=value,message=message,**metadata)
  try:
   progress(0,'Consultando video de YouTube…')
-  path,name=download(url,folder,progress,mode=quality)
+  path,name=download(url,folder,progress,mode=quality,browser=browser)
   path.rename(folder/'source')
   job=register_video(ident,folder/'source',name)
   job['youtube']={key:IMPORTS[ident][key] for key in ['title','channel','thumbnail','duration','quality'] if key in IMPORTS[ident]}
@@ -78,12 +79,15 @@ def import_youtube(ident,url,quality="fast"):
  except Exception as e:
   from youtube_import import diagnose_error
   code,message=diagnose_error(e)
+  if code=='YT-SESION' and browser!='none':message='YouTube sigue exigiendo verificación tras intentar usar la sesión seleccionada. Abre el enlace en ese navegador, confirma que puedes reproducirlo y completa la verificación; cierra ese navegador antes de reintentar. Si persiste, espera o ingresa el archivo descargado.'
   IMPORTS[ident].update(status='error',error_code=code,message=f'[{code}] {message}')
   JOBS.pop(ident,None)
   shutil.rmtree(folder,ignore_errors=True)
 
 @app.post('/api/youtube')
-def start_youtube(options:YouTubeInput):
+def start_youtube(options:YouTubeInput,request:Request):
+ if options.browser!="none" and request.client and request.client.host not in ("127.0.0.1","::1","testclient"):
+  raise HTTPException(403,"El uso de una sesión de navegador solo está disponible desde el PC donde corre la app.")
  from youtube_import import canonical_url
  try:url=canonical_url(options.url)
  except ValueError as e:raise HTTPException(400,str(e))
@@ -95,7 +99,7 @@ def start_youtube(options:YouTubeInput):
    return IMPORTS[ident]
  ident=uuid.uuid4().hex
  IMPORTS[ident]=dict(id=ident,status='queued',progress=0,message='Consultando título y duración…',thumbnail='https://i.ytimg.com/vi/'+url.split('v=')[1]+'/hqdefault.jpg',title='Preparando video de YouTube…')
- import_pool.submit(import_youtube,ident,url,options.quality)
+ import_pool.submit(import_youtube,ident,url,options.quality,options.browser)
  return IMPORTS[ident]
 
 @app.get('/api/youtube/{ident}')

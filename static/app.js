@@ -155,12 +155,12 @@ $('downloadYoutube').onclick=async()=>{
  const button=$('downloadYoutube');button.disabled=true;$('source').disabled=true;
  const locked=['analyze','manual','reuseJob','export'];const before=locked.map(id=>$(id).disabled);locked.forEach(id=>$(id).disabled=true);let importedOK=false;
  try{
-  const imported=await(await request('/api/youtube',jsonOptions({url:$('youtubeUrl').value,quality:$('youtubeQuality').value}))).json();
+  const imported=await(await request('/api/youtube',jsonOptions({url:$('youtubeUrl').value,quality:$('youtubeQuality').value,browser:$('youtubeBrowser').value}))).json();
   while(true){
    const state=await(await request('/api/youtube/'+imported.id)).json();
    paintYoutube(state);
    $('youtubeState').textContent=state.message+(state.status==='downloading'?` ${state.progress}%`:'');
-   if(state.status==='error')throw Error(state.message);
+   if(state.status==='error'){if(state.error_code==='YT-SESION'||state.error_code?.startsWith('YT-COOKIES'))$('youtubeSession').open=true;throw Error(state.message);}
    if(state.status==='ready'){useImportedVideo(state.job);importedOK=true;break;}
    await new Promise(resolve=>setTimeout(resolve,1500));
   }
@@ -193,7 +193,7 @@ async function prepareTracking(){
  trackingPoints=[];trackingRange=null;$('framing').value='crop';$('trackingState').textContent='Detectando rostros, voz y movimiento de boca…';
  let state=await(await request(`/api/jobs/${id}/tracking`,jsonOptions({start,end}))).json();
  while(token===trackingRequest&&selected?.id===clip&&job?.id===id){
-  if(state.status==='error')throw Error(state.message);
+  if(state.status==='error'){if(state.error_code==='YT-SESION'||state.error_code?.startsWith('YT-COOKIES'))$('youtubeSession').open=true;throw Error(state.message);}
   if(state.status==='ready'){trackingPoints=state.points;trackingRange={start,end};$('trackingState').textContent='Seguimiento listo. '+state.method;saveCurrent();paint();return;}
   $('trackingState').textContent=`Calculando seguimiento · ${state.progress||0}%`;
   await new Promise(resolve=>setTimeout(resolve,800));if(token!==trackingRequest)return;
@@ -208,7 +208,7 @@ async function ensureExportTracking(opts){
  if(trackingRange?.start===opts.start&&trackingRange?.end===opts.end&&trackingPoints.length)return;
  const id=job.id;let state=await(await request(`/api/jobs/${id}/tracking`,jsonOptions({start:opts.start,end:opts.end}))).json();
  while(state.status!=='ready'){
-  if(state.status==='error')throw Error(state.message);
+  if(state.status==='error'){if(state.error_code==='YT-SESION'||state.error_code?.startsWith('YT-COOKIES'))$('youtubeSession').open=true;throw Error(state.message);}
   say(`Preparando seguimiento para exportar · ${state.progress||0}%`);await new Promise(resolve=>setTimeout(resolve,800));
   state=await(await request(`/api/jobs/${id}/tracking/${state.key}`)).json();
  }
