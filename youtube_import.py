@@ -36,13 +36,13 @@ def diagnose_error(error):
  text=' '.join(chain)
  checks=[
   ('YT-COOKIES-YOUTUBE',('no se encontraron cookies de youtube',), 'Se leyó el navegador, pero no tenía cookies de YouTube vigentes. Abre el enlace en el navegador elegido, completa la verificación y cierra ese navegador antes de reintentar.'),
-  ('YT-COOKIES-CIFRADO',('failed to decrypt','decrypt with dpapi','app-bound','app bound','cookie decryption'), 'Windows no permitió leer la sesión cifrada de ese navegador. Usa Firefox: abre YouTube allí, inicia sesión, verifica el video, cierra Firefox y selecciona Firefox en la app. No desactives la protección del navegador.'),
-  ('YT-COOKIES-OCUPADAS',('could not copy chrome cookie','could not copy edge cookie','could not copy brave cookie','database is locked','being used by another process'), 'No se pudo leer la sesión porque el navegador está abierto o bloqueado. Cierra el navegador seleccionado y sus procesos en segundo plano; puedes mantener la app abierta en otro navegador. En Windows se recomienda Firefox.'),
+  ('YT-COOKIES-CIFRADO',('failed to decrypt','decrypt with dpapi','app-bound','app bound','cookie decryption'), 'Windows no permitió leer la sesión cifrada del navegador. Esta vía de acceso no está disponible en este equipo; puedes importar el archivo original. No desactives la protección del navegador.'),
+  ('YT-COOKIES-OCUPADAS',('could not copy chrome cookie','could not copy edge cookie','could not copy brave cookie','database is locked','being used by another process'), 'La sesión de ese navegador está bloqueada por Windows o por un proceso que la mantiene abierta. No se pudo usar esta vía de acceso. Puedes importar el archivo original desde tu PC.'),
   ('YT-COOKIES-PERFIL',('could not find firefox cookies','could not find chrome cookies','could not find edge cookies','could not find brave cookies','could not find cookies database'), 'No se encontró la sesión de ese navegador en este PC. Abre YouTube en ese navegador, inicia sesión y comprueba el video; luego cierra ese navegador y reintenta.'),
   ('YT-COOKIES-LECTURA',('failed to load cookies',), 'No se pudo leer la sesión del navegador seleccionado. Cierra ese navegador y reintenta. Si persiste en Chrome o Edge, usa Firefox; no hace falta volver a instalar el descargador.'),
   ('YT-RED',('proxy','tunnel connection','getaddrinfo','name resolution','failed to resolve','connection refused','network is unreachable'), 'No se pudo conectar con YouTube por un problema de red o proxy. Revisa tu conexión y prueba de nuevo.'),
   ('YT-EDAD',('age-restricted','confirm your age','age restricted'), 'YouTube exige verificar la edad para este video. La descarga pública no puede hacerlo; ingresa el archivo descargado.'),
-  ('YT-SESION',("not a bot",'sign in','login required','authentication required','confirm you’re not a bot'), 'YouTube está pidiendo iniciar sesión o verificar que no eres un bot. Abre el video en tu navegador y completa la verificación. Después elige Firefox en Acceso a YouTube y reintenta desde la app. También puedes ingresar el archivo descargado.'),
+  ('YT-SESION',("not a bot",'sign in','login required','authentication required','confirm you’re not a bot'), 'YouTube bloqueó la importación automática y exige una verificación de acceso. La app no puede completarla por ti. Puedes ingresar el archivo original desde tu PC; el uso de una sesión autorizada está en las opciones avanzadas.'),
   ('YT-PRIVADO',('private video','members-only','members only','video is not available','video unavailable','removed by','copyright'), 'El video no está disponible públicamente o tiene restricciones. Comprueba que abre en YouTube sin iniciar sesión, o ingresa el archivo descargado.'),
   ('YT-REGION',('not available in your country','geo restricted','geo-restricted'), 'El video tiene una restricción de región y no puede descargarse desde esta conexión.'),
   ('YT-LIMITE',('429','too many requests','rate limit'), 'YouTube limitó temporalmente las descargas. Espera unos minutos antes de intentarlo de nuevo.'),
@@ -60,7 +60,7 @@ def diagnose_error(error):
  if isinstance(error,ValueError) and text.startswith(('el video','la duración','no se pudo consultar','no se obtuvo','no se pudo importar','la descarga superó','los directos','calidad de descarga')):return 'YT-VALIDACION',str(error)[:500]
  return 'YT-DESCARGA','No se pudo completar la descarga. Ejecuta REPARAR_YOUTUBE_WINDOWS y vuelve a probar. Si continúa, comparte este código de error y el enlace del video.'
 
-def download(url,folder,progress,mode="fast",browser="none"):
+def _download_attempt(url,folder,progress,mode="fast",browser="none"):
  if browser not in ("none","firefox","chrome","edge","brave"):raise ValueError("Navegador no admitido.")
  if mode not in ("fast","original"):raise ValueError("Calidad de descarga inválida.")
  import yt_dlp
@@ -113,6 +113,25 @@ def download(url,folder,progress,mode="fast",browser="none"):
  if not path.exists():raise ValueError('No se obtuvo un archivo de video válido.')
  if path.stat().st_size>MAX_BYTES:raise ValueError('El video supera 12 GB.')
  return path,(info.get('title') or 'Video de YouTube')+'.mp4'
+
+class ImportAccessFailure(Exception):
+ def __init__(self,public_code):
+  super().__init__('No se pudo completar el acceso a YouTube.')
+  self.public_error_code=public_code
+
+
+def download(url,folder,progress,mode='fast',browser='none'):
+ """Public first. Reading a browser is an explicit, last-resort opt-in, never a prerequisite."""
+ if browser not in ('none','firefox','chrome','edge','brave'):raise ValueError('Navegador no admitido.')
+ progress(0,'Conectando con YouTube…',access_mode='none',requested_browser=browser,attempt=1)
+ try:return _download_attempt(url,folder,progress,mode=mode,browser='none')
+ except Exception as public_error:
+  code,_=diagnose_error(public_error)
+  # Do not read sessions for network, format, duration, disk or installation failures.
+  if browser=='none' or code not in ('YT-SESION','YT-403'):raise
+ progress(0,'YouTube pide acceso adicional; intentando la sesión que autorizaste…',access_mode=browser,requested_browser=browser,public_error_code=code,attempt=2)
+ try:return _download_attempt(url,folder,progress,mode=mode,browser=browser)
+ except Exception as session_error:raise ImportAccessFailure(code) from session_error
 
 if __name__=='__main__':
  import subprocess,shutil

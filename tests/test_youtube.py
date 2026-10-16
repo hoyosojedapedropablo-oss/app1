@@ -57,7 +57,7 @@ class DownloadOptimizationTests(unittest.TestCase):
       options['postprocessor_hooks'][0]({'status':'started'})
       return info
     with patch('yt_dlp.YoutubeDL',YDL):
-     path,name=youtube_import.download('https://www.youtube.com/watch?v=BaW_jenozKc',folder,lambda value,message,**meta:events.append((value,message,meta)),mode=mode)
+     path,name=youtube_import._download_attempt('https://www.youtube.com/watch?v=BaW_jenozKc',folder,lambda value,message,**meta:events.append((value,message,meta)),mode=mode)
     self.assertEqual(calls,['extract','download'])
     self.assertEqual(options['concurrent_fragment_downloads'],8)
     self.assertIn('deno',options['js_runtimes'])
@@ -123,7 +123,7 @@ class YouTubeSessionTests(unittest.TestCase):
      def __exit__(self,*args):pass
      def extract_info(self,*args,**kwargs):return dict(title='Sample',duration=20)
      def process_ie_result(self,info,**kwargs):(folder/'download.mp4').write_bytes(b'video');return info
-    with patch('yt_dlp.YoutubeDL',YDL):youtube_import.download('https://www.youtube.com/watch?v=JCcuOv5y_9g',folder,lambda *a,**k:None,browser=browser)
+    with patch('yt_dlp.YoutubeDL',YDL):youtube_import._download_attempt('https://www.youtube.com/watch?v=JCcuOv5y_9g',folder,lambda *a,**k:None,browser=browser)
     self.assertNotIn('cookiefile',options)
     if browser=='none':self.assertNotIn('cookiesfrombrowser',options)
     else:self.assertEqual(options['cookiesfrombrowser'],(browser,));self.assertFalse(options['cachedir'])
@@ -163,7 +163,7 @@ class YouTubeSessionVerificationTests(unittest.TestCase):
     def __exit__(self,*a):pass
     def extract_info(self,*a,**k):return dict(title='Sample',duration=20)
     def process_ie_result(self,info,**k):(folder/'download.mp4').write_bytes(b'video');return info
-   with patch('yt_dlp.YoutubeDL',YDL):youtube_import.download('https://www.youtube.com/watch?v=JCcuOv5y_9g',folder,lambda v,m,**meta:events.append(meta),browser='firefox')
+   with patch('yt_dlp.YoutubeDL',YDL):youtube_import._download_attempt('https://www.youtube.com/watch?v=JCcuOv5y_9g',folder,lambda v,m,**meta:events.append(meta),browser='firefox')
    verified=[e for e in events if e.get('browser_cookies_read')]
    self.assertTrue(verified);self.assertTrue(verified[0]['youtube_login_cookie_present'])
    self.assertNotIn('must-not-appear',str(events))
@@ -177,15 +177,16 @@ class YouTubeSessionVerificationTests(unittest.TestCase):
     def __exit__(self,*a):pass
     def extract_info(self,*a,**k):raise AssertionError('Do not retry public download after a failed session read')
    with patch('yt_dlp.YoutubeDL',YDL),self.assertRaises(ValueError) as error:
-    youtube_import.download('https://www.youtube.com/watch?v=JCcuOv5y_9g',Path(tmp),lambda *a,**k:None,browser='firefox')
+    youtube_import._download_attempt('https://www.youtube.com/watch?v=JCcuOv5y_9g',Path(tmp),lambda *a,**k:None,browser='firefox')
    self.assertEqual(youtube_import.diagnose_error(error.exception)[0],'YT-COOKIES-YOUTUBE')
  def test_failed_request_reports_requested_mode(self):
   with tempfile.TemporaryDirectory() as tmp,patch.object(backend,'DATA',Path(tmp)),patch.dict(backend.IMPORTS,{},clear=True):
    ident='f'*32;backend.IMPORTS[ident]={'status':'queued'}
    with patch('youtube_import.download',side_effect=RuntimeError('Sign in to confirm you are not a bot')):backend.import_youtube(ident,'https://www.youtube.com/watch?v=JCcuOv5y_9g',browser='firefox')
-   self.assertEqual(backend.IMPORTS[ident]['access_mode'],'firefox')
+   self.assertEqual(backend.IMPORTS[ident]['requested_browser'],'firefox')
+   self.assertEqual(backend.IMPORTS[ident]['access_mode'],'none')
    self.assertEqual(backend.IMPORTS[ident]['error_code'],'YT-SESION')
-   self.assertIn('sesión seleccionada',backend.IMPORTS[ident]['message'])
+   self.assertIn('verificación',backend.IMPORTS[ident]['message'])
 
 
 class BraveSessionTests(unittest.TestCase):
@@ -193,5 +194,37 @@ class BraveSessionTests(unittest.TestCase):
   with patch.dict(backend.IMPORTS,{},clear=True),patch.dict(backend.JOBS,{},clear=True),patch.object(backend.import_pool,'submit') as submit:
    response=TestClient(backend.app).post('/api/youtube',json={'url':'https://youtu.be/JCcuOv5y_9g','browser':'brave'})
   self.assertEqual(response.status_code,200,response.text)
-  self.assertEqual(response.json()['access_mode'],'brave')
+  self.assertEqual(response.json()['access_mode'],'none')
+  self.assertEqual(response.json()['requested_browser'],'brave')
   self.assertEqual(submit.call_args.args[-1],'brave')
+
+class PublicFirstImportTests(unittest.TestCase):
+ def test_public_success_never_reads_selected_browser(self):
+  import youtube_import
+  with patch('youtube_import._download_attempt',return_value=('path','video.mp4')) as attempt:
+   result=youtube_import.download('url',None,lambda *a,**k:None,browser='brave')
+  self.assertEqual(result,('path','video.mp4'));self.assertEqual(attempt.call_count,1)
+  self.assertEqual(attempt.call_args.kwargs['browser'],'none')
+ def test_public_auth_failure_uses_only_the_authorized_browser_once(self):
+  import youtube_import
+  with patch('youtube_import._download_attempt',side_effect=[RuntimeError('Sign in to confirm you are not a bot'),('path','video.mp4')]) as attempt:
+   result=youtube_import.download('url',None,lambda *a,**k:None,browser='brave')
+  self.assertEqual(result,('path','video.mp4'))
+  self.assertEqual([c.kwargs['browser'] for c in attempt.call_args_list],['none','brave'])
+ def test_no_session_opt_in_never_reads_browser_on_block(self):
+  import youtube_import
+  with patch('youtube_import._download_attempt',side_effect=RuntimeError('Sign in to confirm you are not a bot')) as attempt:
+   with self.assertRaises(RuntimeError):youtube_import.download('url',None,lambda *a,**k:None)
+  self.assertEqual(attempt.call_count,1);self.assertEqual(attempt.call_args.kwargs['browser'],'none')
+ def test_network_errors_do_not_trigger_cookie_reads(self):
+  import youtube_import
+  with patch('youtube_import._download_attempt',side_effect=RuntimeError('Tunnel connection failed: 403 Forbidden')) as attempt:
+   with self.assertRaises(RuntimeError):youtube_import.download('url',None,lambda *a,**k:None,browser='brave')
+  self.assertEqual(attempt.call_count,1)
+ def test_session_failure_preserves_both_attempts_without_loops(self):
+  import youtube_import
+  with patch('youtube_import._download_attempt',side_effect=[RuntimeError('Sign in'),RuntimeError('Could not copy Chrome cookie database')]) as attempt:
+   with self.assertRaises(youtube_import.ImportAccessFailure) as error:youtube_import.download('url',None,lambda *a,**k:None,browser='brave')
+  self.assertEqual(attempt.call_count,2)
+  self.assertEqual(error.exception.public_error_code,'YT-SESION')
+  self.assertEqual(youtube_import.diagnose_error(error.exception)[0],'YT-COOKIES-OCUPADAS')

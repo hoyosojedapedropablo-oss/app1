@@ -69,7 +69,7 @@ def import_youtube(ident,url,quality="fast",browser="none"):
  folder=DATA/ident;folder.mkdir(exist_ok=True)
  def progress(value,message,**metadata):IMPORTS[ident].update(status='downloading',progress=value,message=message,**metadata)
  try:
-  progress(0,'Consultando video de YouTube…',access_mode=browser,integration_version=2)
+  progress(0,'Consultando video de YouTube…',access_mode='none',requested_browser=browser,integration_version=3)
   path,name=download(url,folder,progress,mode=quality,browser=browser)
   path.rename(folder/'source')
   job=register_video(ident,folder/'source',name)
@@ -79,7 +79,10 @@ def import_youtube(ident,url,quality="fast",browser="none"):
  except Exception as e:
   from youtube_import import diagnose_error
   code,message=diagnose_error(e)
-  if code=='YT-SESION' and browser!='none':message='YouTube sigue exigiendo verificación tras intentar usar la sesión seleccionada. Abre el enlace en ese navegador, confirma que puedes reproducirlo y completa la verificación; cierra ese navegador antes de reintentar. Si persiste, espera o ingresa el archivo descargado.'
+  if code=='YT-SESION' and IMPORTS[ident].get('access_mode') not in ('none',None):message='YouTube sigue exigiendo verificación tras intentar usar la sesión seleccionada. Abre el enlace en ese navegador, confirma que puedes reproducirlo y completa la verificación; cierra ese navegador antes de reintentar. Si persiste, espera o ingresa el archivo descargado.'
+  if getattr(e,'public_error_code',None):
+   IMPORTS[ident]['public_error_code']=e.public_error_code
+   message='YouTube no permitió la descarga pública y tampoco se pudo completar el acceso con la sesión autorizada. '+message
   IMPORTS[ident].update(status='error',error_code=code,message=f'[{code}] {message}')
   JOBS.pop(ident,None)
   shutil.rmtree(folder,ignore_errors=True)
@@ -95,10 +98,10 @@ def start_youtube(options:YouTubeInput,request:Request):
  for job in JOBS.values():
   if job.get('youtube_url')==url and job.get('youtube_quality')==options.quality and (DATA/job['id']/'source').exists():
    ident=uuid.uuid4().hex
-   IMPORTS[ident]=dict(id=ident,status='ready',progress=100,access_mode='cached',integration_version=2,message='Video recuperado: ya estaba descargado.',job=job,**job.get('youtube',{}))
+   IMPORTS[ident]=dict(id=ident,status='ready',progress=100,access_mode='cached',integration_version=3,message='Video recuperado: ya estaba descargado.',job=job,**job.get('youtube',{}))
    return IMPORTS[ident]
  ident=uuid.uuid4().hex
- IMPORTS[ident]=dict(id=ident,status='queued',progress=0,access_mode=options.browser,integration_version=2,message='Consultando título y duración…',thumbnail='https://i.ytimg.com/vi/'+url.split('v=')[1]+'/hqdefault.jpg',title='Preparando video de YouTube…')
+ IMPORTS[ident]=dict(id=ident,status='queued',progress=0,access_mode='none',requested_browser=options.browser,integration_version=3,message='Consultando título y duración…',thumbnail='https://i.ytimg.com/vi/'+url.split('v=')[1]+'/hqdefault.jpg',title='Preparando video de YouTube…')
  import_pool.submit(import_youtube,ident,url,options.quality,options.browser)
  return IMPORTS[ident]
 
