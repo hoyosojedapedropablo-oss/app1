@@ -115,7 +115,9 @@ class YouTubeSessionTests(unittest.TestCase):
   for browser in ['none','firefox','chrome','edge']:
    with tempfile.TemporaryDirectory() as tmp:
     options={};folder=Path(tmp)
+    from types import SimpleNamespace
     class YDL:
+     cookiejar=[SimpleNamespace(domain='.youtube.com',name='SID',is_expired=lambda:False)]
      def __init__(self,opts):options.update(opts)
      def __enter__(self):return self
      def __exit__(self,*args):pass
@@ -139,3 +141,48 @@ class YouTubeSessionTests(unittest.TestCase):
   for text,code in [('Failed to decrypt with DPAPI','YT-COOKIES-CIFRADO'),('Could not copy Chrome cookie database','YT-COOKIES-OCUPADAS'),('Could not find firefox cookies database','YT-COOKIES-PERFIL')]:
    actual,message=diagnose_error(RuntimeError(text))
    self.assertEqual(actual,code);self.assertNotIn('http',message)
+
+
+class YouTubeSessionVerificationTests(unittest.TestCase):
+ def test_wrapped_browser_error_preserves_specific_cause(self):
+  from youtube_import import diagnose_error
+  try:
+   try:raise RuntimeError('Failed to decrypt with DPAPI: sensitive-test-value')
+   except RuntimeError:raise RuntimeError('failed to load cookies')
+  except RuntimeError as error:code,message=diagnose_error(error)
+  self.assertEqual(code,'YT-COOKIES-CIFRADO');self.assertNotIn('sensitive-test-value',message)
+ def test_session_presence_is_reported_without_values(self):
+  import youtube_import
+  from types import SimpleNamespace
+  with tempfile.TemporaryDirectory() as tmp:
+   folder=Path(tmp);events=[]
+   class YDL:
+    cookiejar=[SimpleNamespace(domain='.example.com',name='SID',value='must-not-appear',is_expired=lambda:False),SimpleNamespace(domain='.youtube.com',name='SID',value='must-not-appear',is_expired=lambda:False)]
+    def __init__(self,*a,**k):pass
+    def __enter__(self):return self
+    def __exit__(self,*a):pass
+    def extract_info(self,*a,**k):return dict(title='Sample',duration=20)
+    def process_ie_result(self,info,**k):(folder/'download.mp4').write_bytes(b'video');return info
+   with patch('yt_dlp.YoutubeDL',YDL):youtube_import.download('https://www.youtube.com/watch?v=JCcuOv5y_9g',folder,lambda v,m,**meta:events.append(meta),browser='firefox')
+   verified=[e for e in events if e.get('browser_cookies_read')]
+   self.assertTrue(verified);self.assertTrue(verified[0]['youtube_login_cookie_present'])
+   self.assertNotIn('must-not-appear',str(events))
+ def test_no_youtube_cookies_is_not_misreported_as_a_youtube_bot_block(self):
+  import youtube_import
+  with tempfile.TemporaryDirectory() as tmp:
+   class YDL:
+    cookiejar=[]
+    def __init__(self,*a,**k):pass
+    def __enter__(self):return self
+    def __exit__(self,*a):pass
+    def extract_info(self,*a,**k):raise AssertionError('Do not retry public download after a failed session read')
+   with patch('yt_dlp.YoutubeDL',YDL),self.assertRaises(ValueError) as error:
+    youtube_import.download('https://www.youtube.com/watch?v=JCcuOv5y_9g',Path(tmp),lambda *a,**k:None,browser='firefox')
+   self.assertEqual(youtube_import.diagnose_error(error.exception)[0],'YT-COOKIES-YOUTUBE')
+ def test_failed_request_reports_requested_mode(self):
+  with tempfile.TemporaryDirectory() as tmp,patch.object(backend,'DATA',Path(tmp)),patch.dict(backend.IMPORTS,{},clear=True):
+   ident='f'*32;backend.IMPORTS[ident]={'status':'queued'}
+   with patch('youtube_import.download',side_effect=RuntimeError('Sign in to confirm you are not a bot')):backend.import_youtube(ident,'https://www.youtube.com/watch?v=JCcuOv5y_9g',browser='firefox')
+   self.assertEqual(backend.IMPORTS[ident]['access_mode'],'firefox')
+   self.assertEqual(backend.IMPORTS[ident]['error_code'],'YT-SESION')
+   self.assertIn('sesión seleccionada',backend.IMPORTS[ident]['message'])

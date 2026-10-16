@@ -69,7 +69,7 @@ def import_youtube(ident,url,quality="fast",browser="none"):
  folder=DATA/ident;folder.mkdir(exist_ok=True)
  def progress(value,message,**metadata):IMPORTS[ident].update(status='downloading',progress=value,message=message,**metadata)
  try:
-  progress(0,'Consultando video de YouTube…')
+  progress(0,'Consultando video de YouTube…',access_mode=browser,integration_version=2)
   path,name=download(url,folder,progress,mode=quality,browser=browser)
   path.rename(folder/'source')
   job=register_video(ident,folder/'source',name)
@@ -95,10 +95,10 @@ def start_youtube(options:YouTubeInput,request:Request):
  for job in JOBS.values():
   if job.get('youtube_url')==url and job.get('youtube_quality')==options.quality and (DATA/job['id']/'source').exists():
    ident=uuid.uuid4().hex
-   IMPORTS[ident]=dict(id=ident,status='ready',progress=100,message='Video recuperado: ya estaba descargado.',job=job,**job.get('youtube',{}))
+   IMPORTS[ident]=dict(id=ident,status='ready',progress=100,access_mode='cached',integration_version=2,message='Video recuperado: ya estaba descargado.',job=job,**job.get('youtube',{}))
    return IMPORTS[ident]
  ident=uuid.uuid4().hex
- IMPORTS[ident]=dict(id=ident,status='queued',progress=0,message='Consultando título y duración…',thumbnail='https://i.ytimg.com/vi/'+url.split('v=')[1]+'/hqdefault.jpg',title='Preparando video de YouTube…')
+ IMPORTS[ident]=dict(id=ident,status='queued',progress=0,access_mode=options.browser,integration_version=2,message='Consultando título y duración…',thumbnail='https://i.ytimg.com/vi/'+url.split('v=')[1]+'/hqdefault.jpg',title='Preparando video de YouTube…')
  import_pool.submit(import_youtube,ident,url,options.quality,options.browser)
  return IMPORTS[ident]
 

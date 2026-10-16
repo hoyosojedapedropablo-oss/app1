@@ -93,8 +93,15 @@ Repetir el mismo analisis reutiliza respuestas guardadas. Al actualizar incluye 
 YOUTUBE PIDE INICIAR SESION (YT-SESION)
 Abre el enlace en Firefox, inicia sesion y completa cualquier comprobacion.
 Cierra Firefox. Puedes mantener Clip Studio abierto en Chrome o Edge.
-En la app abre Usar mi sesion de YouTube y elige Firefox; reintenta la descarga.
+En la app selecciona Firefox en Acceso a YouTube y reintenta la descarga.
 No envies contrasenas ni cookies por el chat. La opcion de sesion viene desactivada.
 Chrome y Edge tambien estan disponibles, pero Windows puede impedir leer sus cookies cifradas.
 No necesitas repetir REPARAR_YOUTUBE_WINDOWS por un bloqueo de sesion.
 YouTube puede seguir rechazando una descarga incluso usando una sesion valida.
+
+COMPROBAR EL MODO DE DESCARGA
+El selector Acceso a YouTube esta visible encima del boton de descargar.
+El estado indica Modo usado por la app: Sin sesion, Firefox, Chrome o Edge.
+Si usas Firefox, espera a que indique que las cookies de YouTube fueron leidas.
+Cookies leidas no garantiza que YouTube acepte la sesion. Si mantiene YT-SESION, no se puede garantizar esa descarga.
+Si el estado indica que el servidor no informa el modo, cierra la ventana negra y abre INICIAR_WINDOWS de nuevo.

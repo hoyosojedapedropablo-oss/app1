@@ -151,16 +151,17 @@ function useImportedVideo(videoJob){
  ++pollToken;++cueVersion;clearTimeout(captionTimer);job=videoJob;selected=null;cues=[];captionPending=false;edits.clear();$('clips').replaceChildren();$('all').classList.add('hidden');$('video').src=`/api/jobs/${job.id}/video`;$('filename').textContent=job.name;$('end').value=Math.min(30,job.duration);$('analyze').disabled=false;$('manual').disabled=false;$('goEditor').disabled=false;paint();say(`Video listo · ${(job.duration/60).toFixed(1)} minutos`);
 }
 $('downloadYoutube').onclick=async()=>{
- $('youtubeCard').classList.add('hidden');
+ $('youtubeCard').classList.add('hidden');$('retryYoutubeSession').classList.add('hidden');
+ const requestedMode=$('youtubeBrowser').value;
  const button=$('downloadYoutube');button.disabled=true;$('source').disabled=true;
  const locked=['analyze','manual','reuseJob','export'];const before=locked.map(id=>$(id).disabled);locked.forEach(id=>$(id).disabled=true);let importedOK=false;
  try{
-  const imported=await(await request('/api/youtube',jsonOptions({url:$('youtubeUrl').value,quality:$('youtubeQuality').value,browser:$('youtubeBrowser').value}))).json();
+  const imported=await(await request('/api/youtube',jsonOptions({url:$('youtubeUrl').value,quality:$('youtubeQuality').value,browser:requestedMode}))).json();
   while(true){
    const state=await(await request('/api/youtube/'+imported.id)).json();
-   paintYoutube(state);
+   paintYoutube(state);paintYoutubeAccess(state);
    $('youtubeState').textContent=state.message+(state.status==='downloading'?` ${state.progress}%`:'');
-   if(state.status==='error'){if(state.error_code==='YT-SESION'||state.error_code?.startsWith('YT-COOKIES'))$('youtubeSession').open=true;throw Error(state.message);}
+   if(state.status==='error'){if(state.error_code==='YT-SESION'&&state.access_mode==='none')$('retryYoutubeSession').classList.remove('hidden');if(state.error_code==='YT-SESION'||state.error_code?.startsWith('YT-COOKIES'))$('youtubeSession').open=true;throw Error(state.message);}
    if(state.status==='ready'){useImportedVideo(state.job);importedOK=true;break;}
    await new Promise(resolve=>setTimeout(resolve,1500));
   }
@@ -170,13 +171,13 @@ $('downloadYoutube').onclick=async()=>{
 function paintYoutube(state){
  if(!state.thumbnail)return;
  $('youtubeCard').classList.remove('hidden');$('youtubeThumbnail').src=state.thumbnail;
- $('youtubeTitle').textContent=state.title||'Video de YouTube';
+ $('youtubeTitle').textContent=state.status==='error'&&state.title?.startsWith('Preparando video')?'No se pudo descargar este video':state.title||'Video de YouTube';
  const duration=state.duration?`${Math.floor(state.duration/60)}:${String(Math.floor(state.duration%60)).padStart(2,'0')} min`:'';
  $('youtubeMeta').textContent=[state.channel,duration,state.quality].filter(Boolean).join(' · ');
  $('youtubeProgress').value=state.progress||0;
  const speed=state.speed?`${(state.speed/1024**2).toFixed(1)} MB/s`:'';
  const eta=state.eta!=null?`Aprox. ${Math.ceil(state.eta/60)} min restantes`:'';
- $('youtubeTransfer').textContent=state.status==='ready'?'✓ Listo para cortar':[speed,eta].filter(Boolean).join(' · ')||state.message||'Preparando…';
+ $('youtubeTransfer').textContent=state.status==='error'?'Descarga detenida · '+(state.error_code||'Error'):state.status==='ready'?'✓ Listo para cortar':[speed,eta].filter(Boolean).join(' · ')||state.message||'Preparando…';
 }
 
 $('youtubePanel').ontoggle=()=>{$('videoFileDrop').classList.toggle('hidden',$('youtubePanel').open);};
@@ -193,7 +194,7 @@ async function prepareTracking(){
  trackingPoints=[];trackingRange=null;$('framing').value='crop';$('trackingState').textContent='Detectando rostros, voz y movimiento de boca…';
  let state=await(await request(`/api/jobs/${id}/tracking`,jsonOptions({start,end}))).json();
  while(token===trackingRequest&&selected?.id===clip&&job?.id===id){
-  if(state.status==='error'){if(state.error_code==='YT-SESION'||state.error_code?.startsWith('YT-COOKIES'))$('youtubeSession').open=true;throw Error(state.message);}
+  if(state.status==='error'){if(state.error_code==='YT-SESION'&&state.access_mode==='none')$('retryYoutubeSession').classList.remove('hidden');if(state.error_code==='YT-SESION'||state.error_code?.startsWith('YT-COOKIES'))$('youtubeSession').open=true;throw Error(state.message);}
   if(state.status==='ready'){trackingPoints=state.points;trackingRange={start,end};$('trackingState').textContent='Seguimiento listo. '+state.method;saveCurrent();paint();return;}
   $('trackingState').textContent=`Calculando seguimiento · ${state.progress||0}%`;
   await new Promise(resolve=>setTimeout(resolve,800));if(token!==trackingRequest)return;
@@ -208,7 +209,7 @@ async function ensureExportTracking(opts){
  if(trackingRange?.start===opts.start&&trackingRange?.end===opts.end&&trackingPoints.length)return;
  const id=job.id;let state=await(await request(`/api/jobs/${id}/tracking`,jsonOptions({start:opts.start,end:opts.end}))).json();
  while(state.status!=='ready'){
-  if(state.status==='error'){if(state.error_code==='YT-SESION'||state.error_code?.startsWith('YT-COOKIES'))$('youtubeSession').open=true;throw Error(state.message);}
+  if(state.status==='error'){if(state.error_code==='YT-SESION'&&state.access_mode==='none')$('retryYoutubeSession').classList.remove('hidden');if(state.error_code==='YT-SESION'||state.error_code?.startsWith('YT-COOKIES'))$('youtubeSession').open=true;throw Error(state.message);}
   say(`Preparando seguimiento para exportar · ${state.progress||0}%`);await new Promise(resolve=>setTimeout(resolve,800));
   state=await(await request(`/api/jobs/${id}/tracking/${state.key}`)).json();
  }
@@ -244,3 +245,13 @@ function refreshTitleImage(ratio){
   const img=new Image();img.style.width='0px';img.alt=appearance.title;img.src=titleImageURL;img.onload=()=>{if(version===titleImageVersion)img.style.width=(img.naturalWidth*$('preview').clientWidth/1080)+'px';};node.replaceChildren(img);
  }catch(e){if(version===titleImageVersion)say(e.message);}},100);
 }
+
+function paintYoutubeAccess(state){
+ const names={none:'Sin sesión · descarga pública',firefox:'Firefox',chrome:'Chrome',edge:'Edge',cached:'Video ya guardado'};
+ if(state.access_mode===undefined){$('youtubeAccessState').textContent='El servidor no informó el modo de sesión. Cierra la ventana negra y vuelve a abrir INICIAR_WINDOWS para cargar la versión actualizada.';return;}
+ let message='Modo usado por la app: '+(names[state.access_mode]||'Desconocido');
+ if(state.browser_cookies_read)message+=state.youtube_login_cookie_present?' · cookies de inicio de sesión de YouTube encontradas (no confirma que YouTube las acepte).':' · cookies leídas; no se detectó una sesión iniciada de YouTube.';
+ $('youtubeAccessState').textContent=message;
+}
+$('youtubeBrowser').onchange=()=>{$('youtubeAccessState').textContent='Modo elegido: '+$('youtubeBrowser').selectedOptions[0].textContent;};
+$('retryYoutubeSession').onclick=()=>{$('youtubeBrowser').value='firefox';$('youtubeBrowser').dispatchEvent(new Event('change'));$('youtubeSession').open=true;$('downloadYoutube').click();};

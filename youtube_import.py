@@ -30,14 +30,19 @@ def javascript_options():
 
 def diagnose_error(error):
  # Return actionable categories, never provider URLs, local paths or credential contents.
- text=str(error).lower()
+ chain=[];current=error;seen=set()
+ while current is not None and id(current) not in seen and len(chain)<6:
+  seen.add(id(current));chain.append(str(current).lower());current=current.__cause__ or current.__context__
+ text=' '.join(chain)
  checks=[
+  ('YT-COOKIES-YOUTUBE',('no se encontraron cookies de youtube',), 'Se leyó el navegador, pero no tenía cookies de YouTube vigentes. Abre el enlace en el navegador elegido, completa la verificación y cierra ese navegador antes de reintentar.'),
   ('YT-COOKIES-CIFRADO',('failed to decrypt','decrypt with dpapi','app-bound','app bound','cookie decryption'), 'Windows no permitió leer la sesión cifrada de ese navegador. Usa Firefox: abre YouTube allí, inicia sesión, verifica el video, cierra Firefox y selecciona Firefox en la app. No desactives la protección del navegador.'),
   ('YT-COOKIES-OCUPADAS',('could not copy chrome cookie','could not copy edge cookie','database is locked','being used by another process'), 'No se pudo leer la sesión porque el navegador está abierto o bloqueado. Cierra el navegador seleccionado y sus procesos en segundo plano; puedes mantener la app abierta en otro navegador. En Windows se recomienda Firefox.'),
   ('YT-COOKIES-PERFIL',('could not find firefox cookies','could not find chrome cookies','could not find edge cookies','could not find cookies database'), 'No se encontró la sesión de ese navegador en este PC. Abre YouTube en ese navegador, inicia sesión y comprueba el video; luego cierra ese navegador y reintenta.'),
+  ('YT-COOKIES-LECTURA',('failed to load cookies',), 'No se pudo leer la sesión del navegador seleccionado. Cierra ese navegador y reintenta. Si persiste en Chrome o Edge, usa Firefox; no hace falta volver a instalar el descargador.'),
   ('YT-RED',('proxy','tunnel connection','getaddrinfo','name resolution','failed to resolve','connection refused','network is unreachable'), 'No se pudo conectar con YouTube por un problema de red o proxy. Revisa tu conexión y prueba de nuevo.'),
   ('YT-EDAD',('age-restricted','confirm your age','age restricted'), 'YouTube exige verificar la edad para este video. La descarga pública no puede hacerlo; ingresa el archivo descargado.'),
-  ('YT-SESION',("not a bot",'sign in','login required','authentication required','confirm you’re not a bot'), 'YouTube está pidiendo iniciar sesión o verificar que no eres un bot. Abre el video en tu navegador y completa la verificación. Después selecciona Usar mi sesión de YouTube en la app (Firefox recomendado en Windows) y reintenta. También puedes ingresar el archivo descargado.'),
+  ('YT-SESION',("not a bot",'sign in','login required','authentication required','confirm you’re not a bot'), 'YouTube está pidiendo iniciar sesión o verificar que no eres un bot. Abre el video en tu navegador y completa la verificación. Después elige Firefox en Acceso a YouTube y reintenta desde la app. También puedes ingresar el archivo descargado.'),
   ('YT-PRIVADO',('private video','members-only','members only','video is not available','video unavailable','removed by','copyright'), 'El video no está disponible públicamente o tiene restricciones. Comprueba que abre en YouTube sin iniciar sesión, o ingresa el archivo descargado.'),
   ('YT-REGION',('not available in your country','geo restricted','geo-restricted'), 'El video tiene una restricción de región y no puede descargarse desde esta conexión.'),
   ('YT-LIMITE',('429','too many requests','rate limit'), 'YouTube limitó temporalmente las descargas. Espera unos minutos antes de intentarlo de nuevo.'),
@@ -87,6 +92,13 @@ def download(url,folder,progress,mode="fast",browser="none"):
   options['cookiesfrombrowser']=(browser,)
   options['cachedir']=False
  with yt_dlp.YoutubeDL(options) as ydl:
+  if browser!='none':
+   # Read only after the caller explicitly requested this browser. Report presence, never values.
+   progress(0,'Leyendo la sesión del navegador seleccionado…',access_mode=browser)
+   cookies=[cookie for cookie in ydl.cookiejar if (cookie.domain.lstrip('.')=='youtube.com' or cookie.domain.endswith('.youtube.com')) and not cookie.is_expired()]
+   if not cookies:raise ValueError('No se encontraron cookies de YouTube en el navegador seleccionado.')
+   auth_names={'SID','SAPISID','__Secure-1PSID','__Secure-3PSID','__Secure-1PAPISID','__Secure-3PAPISID','LOGIN_INFO'}
+   progress(0,'Cookies de YouTube leídas; consultando el video…',access_mode=browser,browser_cookies_read=True,youtube_login_cookie_present=any(cookie.name in auth_names for cookie in cookies))
   info=ydl.extract_info(url,download=False)
   if not info:raise ValueError('No se pudo consultar el video.')
   reason=match(info)
