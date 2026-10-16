@@ -68,3 +68,15 @@ Antes de integrarlo o anunciarlo como solución:
 5. Comprobar 1080p/original cuando existan, límite de 120 minutos, límite de tamaño, limpieza de parciales y comportamiento ante contenido privado, restringido o no disponible.
 
 **Bloqueo pendiente:** falta una descarga real aceptada por YouTube en la ruta de ejecución prevista. Añadir infraestructura, un adaptador de API o pruebas simuladas no satisface ese criterio por sí solo.
+
+## Comparación con la versión inicial y acceso del entorno de pruebas
+
+El usuario confirmó que `JCcuOv5y_9g` se descargó correctamente en una versión anterior. Se recuperó el código de importación original del commit `7dadcb8` sin reinstalarlo ni cambiar el editor actual.
+
+Se capturaron las opciones originales y actuales y se ejecutó la extracción de metadatos de ambos videos (`JCcuOv5y_9g` y `rcPWJKs5It4`) con cada configuración, en el mismo entorno y con el mismo yt-dlp 2026.8.19. Ambos perfiles eligieron `visionos, web`, no solicitaron cookies y fallaron con `YT-RED` antes de obtener metadatos. No fue una descarga completa ni una reproducción exacta del PC del usuario: la versión de la dependencia instalada en su primer intento no está registrada y la configuración inicial no la fijaba exactamente. Por tanto, este experimento no identifica todavía una regresión ni prueba que volver al código original arregle el acceso actual.
+
+La herramienta de lectura de configuración del entorno pasó a estar disponible. Confirmó una política restringida guardada cuyos destinos personalizados solo incluían Hugging Face y OpenAI. Los dominios de YouTube no estaban en esa lista ni en sus destinos predefinidos. Esto coincide con los rechazos 403 del proxy de desarrollo, sin diagnosticar el PC del usuario.
+
+Se guardó un borrador que conserva los destinos anteriores y agrega exclusivamente los destinos necesarios para las pruebas: `youtube.com`, `*.youtube.com`, `youtu.be`, `googlevideo.com`, `*.googlevideo.com`, `i.ytimg.com`, `www.gstatic.com`, `www.google.com`, `jnn-pa.googleapis.com` y `youtubei.googleapis.com`. Los preajustes de paquetes se conservan. No se modificaron secretos, repositorios ni scripts de instalación/arranque.
+
+La plataforma confirmó el borrador con `status=saved` y `requires_publish=true`. Guardar el borrador no aplica la red al proceso actual. El usuario debe revisar y guardar la configuración en los ajustes del entorno y publicarla. Después corresponde comprobar la conectividad y repetir la comparación y la descarga real. No se evitó el proxy ni se afirmó que YouTube aceptará las solicitudes una vez permitido el acceso.
