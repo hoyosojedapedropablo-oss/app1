@@ -37,8 +37,8 @@ def diagnose_error(error):
  checks=[
   ('YT-COOKIES-YOUTUBE',('no se encontraron cookies de youtube',), 'Se leyó el navegador, pero no tenía cookies de YouTube vigentes. Abre el enlace en el navegador elegido, completa la verificación y cierra ese navegador antes de reintentar.'),
   ('YT-COOKIES-CIFRADO',('failed to decrypt','decrypt with dpapi','app-bound','app bound','cookie decryption'), 'Windows no permitió leer la sesión cifrada de ese navegador. Usa Firefox: abre YouTube allí, inicia sesión, verifica el video, cierra Firefox y selecciona Firefox en la app. No desactives la protección del navegador.'),
-  ('YT-COOKIES-OCUPADAS',('could not copy chrome cookie','could not copy edge cookie','database is locked','being used by another process'), 'No se pudo leer la sesión porque el navegador está abierto o bloqueado. Cierra el navegador seleccionado y sus procesos en segundo plano; puedes mantener la app abierta en otro navegador. En Windows se recomienda Firefox.'),
-  ('YT-COOKIES-PERFIL',('could not find firefox cookies','could not find chrome cookies','could not find edge cookies','could not find cookies database'), 'No se encontró la sesión de ese navegador en este PC. Abre YouTube en ese navegador, inicia sesión y comprueba el video; luego cierra ese navegador y reintenta.'),
+  ('YT-COOKIES-OCUPADAS',('could not copy chrome cookie','could not copy edge cookie','could not copy brave cookie','database is locked','being used by another process'), 'No se pudo leer la sesión porque el navegador está abierto o bloqueado. Cierra el navegador seleccionado y sus procesos en segundo plano; puedes mantener la app abierta en otro navegador. En Windows se recomienda Firefox.'),
+  ('YT-COOKIES-PERFIL',('could not find firefox cookies','could not find chrome cookies','could not find edge cookies','could not find brave cookies','could not find cookies database'), 'No se encontró la sesión de ese navegador en este PC. Abre YouTube en ese navegador, inicia sesión y comprueba el video; luego cierra ese navegador y reintenta.'),
   ('YT-COOKIES-LECTURA',('failed to load cookies',), 'No se pudo leer la sesión del navegador seleccionado. Cierra ese navegador y reintenta. Si persiste en Chrome o Edge, usa Firefox; no hace falta volver a instalar el descargador.'),
   ('YT-RED',('proxy','tunnel connection','getaddrinfo','name resolution','failed to resolve','connection refused','network is unreachable'), 'No se pudo conectar con YouTube por un problema de red o proxy. Revisa tu conexión y prueba de nuevo.'),
   ('YT-EDAD',('age-restricted','confirm your age','age restricted'), 'YouTube exige verificar la edad para este video. La descarga pública no puede hacerlo; ingresa el archivo descargado.'),
@@ -61,7 +61,7 @@ def diagnose_error(error):
  return 'YT-DESCARGA','No se pudo completar la descarga. Ejecuta REPARAR_YOUTUBE_WINDOWS y vuelve a probar. Si continúa, comparte este código de error y el enlace del video.'
 
 def download(url,folder,progress,mode="fast",browser="none"):
- if browser not in ("none","firefox","chrome","edge"):raise ValueError("Navegador no admitido.")
+ if browser not in ("none","firefox","chrome","edge","brave"):raise ValueError("Navegador no admitido.")
  if mode not in ("fast","original"):raise ValueError("Calidad de descarga inválida.")
  import yt_dlp
  started=time.monotonic()

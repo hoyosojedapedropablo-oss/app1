@@ -61,7 +61,7 @@ import_pool=ThreadPoolExecutor(max_workers=1)
 class YouTubeInput(BaseModel):
  url:str=Field(min_length=1,max_length=2000)
  quality:Literal['fast','original']='fast'
- browser:Literal['none','firefox','chrome','edge']='none'
+ browser:Literal['none','firefox','chrome','edge','brave']='none'
 
 def import_youtube(ident,url,quality="fast",browser="none"):
  import shutil

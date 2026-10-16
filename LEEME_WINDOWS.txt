@@ -105,3 +105,10 @@ El estado indica Modo usado por la app: Sin sesion, Firefox, Chrome o Edge.
 Si usas Firefox, espera a que indique que las cookies de YouTube fueron leidas.
 Cookies leidas no garantiza que YouTube acepte la sesion. Si mantiene YT-SESION, no se puede garantizar esa descarga.
 Si el estado indica que el servidor no informa el modo, cierra la ventana negra y abre INICIAR_WINDOWS de nuevo.
+
+SI USAS BRAVE
+Brave ya aparece en Acceso a YouTube. No elijas Chrome como sustituto.
+Verifica el video en Brave y luego cierra Brave.
+Abre la app desde Edge en http://127.0.0.1:8000, manteniendo la ventana negra abierta.
+Selecciona Brave y pulsa Descargar y agregar video.
+Windows aun puede bloquear la lectura o el descifrado de sus cookies.

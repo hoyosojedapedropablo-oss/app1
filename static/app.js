@@ -247,7 +247,7 @@ function refreshTitleImage(ratio){
 }
 
 function paintYoutubeAccess(state){
- const names={none:'Sin sesión · descarga pública',firefox:'Firefox',chrome:'Chrome',edge:'Edge',cached:'Video ya guardado'};
+ const names={none:'Sin sesión · descarga pública',firefox:'Firefox',chrome:'Chrome',edge:'Edge',brave:'Brave',cached:'Video ya guardado'};
  if(state.access_mode===undefined){$('youtubeAccessState').textContent='El servidor no informó el modo de sesión. Cierra la ventana negra y vuelve a abrir INICIAR_WINDOWS para cargar la versión actualizada.';return;}
  let message='Modo usado por la app: '+(names[state.access_mode]||'Desconocido');
  if(state.browser_cookies_read)message+=state.youtube_login_cookie_present?' · cookies de inicio de sesión de YouTube encontradas (no confirma que YouTube las acepte).':' · cookies leídas; no se detectó una sesión iniciada de YouTube.';

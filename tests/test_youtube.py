@@ -112,7 +112,7 @@ class YouTubeRepairTests(unittest.TestCase):
 class YouTubeSessionTests(unittest.TestCase):
  def test_session_is_opt_in_and_not_persisted_to_a_cookie_file(self):
   import youtube_import
-  for browser in ['none','firefox','chrome','edge']:
+  for browser in ['none','firefox','chrome','edge','brave']:
    with tempfile.TemporaryDirectory() as tmp:
     options={};folder=Path(tmp)
     from types import SimpleNamespace
@@ -186,3 +186,12 @@ class YouTubeSessionVerificationTests(unittest.TestCase):
    self.assertEqual(backend.IMPORTS[ident]['access_mode'],'firefox')
    self.assertEqual(backend.IMPORTS[ident]['error_code'],'YT-SESION')
    self.assertIn('sesión seleccionada',backend.IMPORTS[ident]['message'])
+
+
+class BraveSessionTests(unittest.TestCase):
+ def test_brave_request_uses_brave_not_chrome(self):
+  with patch.dict(backend.IMPORTS,{},clear=True),patch.dict(backend.JOBS,{},clear=True),patch.object(backend.import_pool,'submit') as submit:
+   response=TestClient(backend.app).post('/api/youtube',json={'url':'https://youtu.be/JCcuOv5y_9g','browser':'brave'})
+  self.assertEqual(response.status_code,200,response.text)
+  self.assertEqual(response.json()['access_mode'],'brave')
+  self.assertEqual(submit.call_args.args[-1],'brave')
