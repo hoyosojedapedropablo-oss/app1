@@ -248,7 +248,7 @@ function refreshTitleImage(ratio){
 }
 
 function paintYoutubeAccess(state){
- const names={managed:'Conexión propia de Clip Studio',none:'Sin sesión · descarga pública',firefox:'Firefox',chrome:'Chrome',edge:'Edge',brave:'Brave',cached:'Video ya guardado'};
+ const names={service:'Servicio de descarga',managed:'Conexión propia de Clip Studio',none:'Sin sesión · descarga pública',firefox:'Firefox',chrome:'Chrome',edge:'Edge',brave:'Brave',cached:'Video ya guardado'};
  if(state.access_mode===undefined){$('youtubeAccessState').textContent='El servidor no informó el modo de sesión. Cierra la ventana negra y vuelve a abrir INICIAR_WINDOWS para cargar la versión actualizada.';return;}
  let message='Modo usado por la app: '+(names[state.access_mode]||'Desconocido');
  if(state.browser_cookies_read)message+=state.youtube_login_cookie_present?' · cookies de inicio de sesión de YouTube encontradas (no confirma que YouTube las acepte).':' · cookies leídas; no se detectó una sesión iniciada de YouTube.';
@@ -268,6 +268,7 @@ async function refreshYoutubeConnection(){
  try{
   const info=await(await request('/api/youtube-session')).json();
   $('disconnectYoutube').classList.toggle('hidden',!info.authorized&&!info.cleanup_pending);
+  $('youtubeConnectionState').classList.toggle('hidden',!info.authorized&&!info.cleanup_pending);
   $('disconnectYoutube').textContent='Eliminar conexión anterior';
   $('youtubeConnectionState').textContent=info.message;
  }catch(e){$('youtubeConnectionState').textContent=e.message;}

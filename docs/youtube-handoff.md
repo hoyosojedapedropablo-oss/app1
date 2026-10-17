@@ -19,3 +19,21 @@ Descargar videos públicos pegando la URL, sin extensiones, sin pedir cuentas de
 5. Validar descarga completa, video y audio, duración, resolución, limpieza de parciales e importación en Clip Studio. Las pruebas simuladas no sustituyen esa validación.
 
 No se ha reparado todavía la descarga del usuario. No hay motivo demostrado para pedirle otra reinstalación de la app.
+
+## Integración Cobalt preparada (17 de octubre)
+
+Ver `docs/cobalt-service.md`. Existe un adaptador opcional, servicio Compose propio
+y puente a BgUtils. Las imágenes oficiales fijadas se descargaron y los tres
+componentes superaron sus comprobaciones de disponibilidad. Las pruebas de la app
+(92) y del puente (2) pasan; incluyen transferencia de MP4 generado a registro real
+del editor con transporte simulado. No confundirlo con acceso real a YouTube.
+
+El intento real de `JCcuOv5y_9g` en modo rápido devolvió `error.api.fetch.fail` /
+`YT-SERVICIO`. La comprobación HTTPS separada sigue fallando en el proxy con 403,
+mientras PyPI responde 200. `manage.py activate` rechazó la validación incompleta;
+`enabled` permanece falso. No se probó repetidamente el resto tras el primer fallo.
+No hay descarga real validada ni nueva actualización que el usuario deba instalar.
+El siguiente paso externo es disponer de un entorno de ejecución con acceso real
+funcional a YouTube para completar las cuatro descargas y revisar los MP4.
+
+La comprobación directa del proveedor anónimo devolvió HTTP 503; el puente reportó `attestation_ready:false`. Las instrucciones de arranque opcionales se guardaron en el borrador del entorno, sin cambiar la política de red ni publicar la configuración.

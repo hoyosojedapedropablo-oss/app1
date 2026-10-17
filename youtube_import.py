@@ -32,6 +32,8 @@ def diagnose_error(error):
  # Return actionable categories, never provider URLs, local paths or credential contents.
  chain=[];current=error;seen=set()
  while current is not None and id(current) not in seen and len(chain)<6:
+  from cobalt_import import CobaltFailure
+  if isinstance(current,CobaltFailure):return current.code,current.safe_message
   from youtube_session import SessionUnavailable
   if isinstance(current,SessionUnavailable):
    from youtube_session import RETIRED
@@ -130,6 +132,9 @@ class ImportAccessFailure(Exception):
 def download(url,folder,progress,mode='fast',browser='none'):
  """Public first. Reading a browser is an explicit, last-resort opt-in, never a prerequisite."""
  if browser not in ('none','managed','firefox','chrome','edge','brave'):raise ValueError('Navegador no admitido.')
+ from cobalt_import import configuration,download as service_download
+ if configuration() is not None:
+  return service_download(url,folder,progress,mode=mode)
  progress(0,'Conectando con YouTube…',access_mode='none',requested_browser=browser,attempt=1)
  try:return _download_attempt(url,folder,progress,mode=mode,browser='none')
  except Exception as public_error:

@@ -1,0 +1,73 @@
+name: clipstudio-download
+services:
+  cobalt:
+    image: ghcr.io/imputnet/cobalt@sha256:63186dd68afd57ce3bb1f62cc4c139f5fa95b9c3e87a3cf5c6e4c7a570523f62
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    mem_limit: 1g
+    cpus: 2
+    tmpfs: ["/tmp:size=128m,mode=1777"]
+    ports: ["127.0.0.1:9000:9000"]
+    environment:
+      API_URL: "${COBALT_PUBLIC_URL:-http://127.0.0.1:9000/}"
+      API_LISTEN_ADDRESS: 0.0.0.0
+      DURATION_LIMIT: "7200"
+      API_KEY_URL: file:///run/cobalt/keys.json
+      API_AUTH_REQUIRED: "1"
+      CORS_WILDCARD: "0"
+      CORS_URL: "http://127.0.0.1:8000"
+      YOUTUBE_SESSION_SERVER: http://session-bridge:8080/
+      YOUTUBE_SESSION_INNERTUBE_CLIENT: WEB_EMBEDDED
+      NO_PROXY: "${NO_PROXY:-localhost,127.0.0.1},pot-provider,session-bridge,cobalt"
+    volumes:
+      - ../../data/cobalt/keys.json:/run/cobalt/keys.json:ro
+    depends_on:
+      session-bridge: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:9000/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    logging: {driver: local, options: {max-size: 1m, max-file: "2"}}
+  pot-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider@sha256:addc137188b8f2be54b17bb0a919a3847cd417d143162e74d2fe9b410e586bcd
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: 768m
+    cpus: 1
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    environment:
+      NO_PROXY: "${NO_PROXY:-localhost,127.0.0.1},pot-provider,session-bridge,cobalt"
+    healthcheck:
+      test: [CMD, deno, eval, "const r=await fetch('http://127.0.0.1:4416/ping');if(!r.ok)Deno.exit(1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    logging: {driver: none}
+  session-bridge:
+    image: ghcr.io/imputnet/cobalt@sha256:63186dd68afd57ce3bb1f62cc4c139f5fa95b9c3e87a3cf5c6e4c7a570523f62
+    command: [node, /bridge/session-bridge.mjs]
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: 0.5
+    environment:
+      POT_PROVIDER_URL: http://pot-provider:4416
+    volumes: ["./session-bridge.mjs:/bridge/session-bridge.mjs:ro"]
+    depends_on:
+      pot-provider: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8080/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    logging: {driver: none}
