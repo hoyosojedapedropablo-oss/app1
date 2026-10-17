@@ -133,11 +133,18 @@ try {
           return host==='googlevideo.com'||host.endsWith('.googlevideo.com');
         } catch {return false;}
       };
+      const safeRange=request=>{
+        const headers=request.headers;
+        let value='';
+        if(typeof headers==='string')value=/^range:\s*(bytes=[0-9]+-[0-9]*)\s*$/im.exec(headers)?.[1]||'';
+        else if(Array.isArray(headers))for(let i=0;i<headers.length-1;i+=2)if(String(headers[i]).toLowerCase()==='range')value=String(headers[i+1]);
+        return /^bytes=[0-9]+-[0-9]*$/.test(value)?{range:value}:{};
+      };
       channel('undici:request:headers').subscribe(({request,response})=>{
-        if(safeRequest(request)&&events.length<24)events.push({method:request.method,status:response.statusCode});
+        if(safeRequest(request)&&events.length<24)events.push({method:request.method,status:response.statusCode,...safeRange(request)});
       });
       channel('undici:request:error').subscribe(({request,error})=>{
-        if(safeRequest(request)&&events.length<24)events.push({method:request.method,error:category(error)});
+        if(safeRequest(request)&&events.length<24)events.push({method:request.method,error:category(error),...safeRange(request)});
       });
       const originalFrom=Readable.from;
       Readable.from=(...args)=>{

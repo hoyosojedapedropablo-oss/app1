@@ -27,6 +27,7 @@ services:
       - ../../data/cobalt/keys.json:/run/cobalt/keys.json:ro
       - ./head-fallback.mjs:/bridge/head-fallback.mjs:ro
       - ./media-probe.mjs:/bridge/media-probe.mjs:ro
+      - ./media-chunks.mjs:/bridge/media-chunks.mjs:ro
     depends_on:
       session-bridge: {condition: service_healthy}
     healthcheck:

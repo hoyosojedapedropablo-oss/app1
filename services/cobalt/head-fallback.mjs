@@ -28,6 +28,11 @@ export function transformSource(source,kind) {
   source=source.replace(originalImport,
     'import { '+(kind==='proxy'?'Agent, ':'')+'request as undiciRequest, getGlobalDispatcher, interceptors } from "undici";'+requestShim);
   if(kind==='internal') {
+    const chunkStart=source.indexOf('async function* readChunks(');
+    const chunkEnd=source.indexOf('async function handleChunkedStream(',chunkStart);
+    if(chunkStart<0||chunkEnd<chunkStart)throw Error('COBALT_CHUNK_PATCH_CONTEXT_MISMATCH');
+    source="import {readMediaChunks} from 'file:///bridge/media-chunks.mjs';\n"+source.slice(0,chunkStart)+
+      'async function* readChunks(streamInfo,size) { yield* readMediaChunks(streamInfo,size,{request,getHeaders}); }\n\n'+source.slice(chunkEnd);
     const start=source.indexOf('let req, attempts = 3;');
     const end=source.indexOf('const generator = readChunks(streamInfo, size);',start);
     if(start<0||end<start)throw Error('COBALT_MEDIA_PATCH_CONTEXT_MISMATCH');

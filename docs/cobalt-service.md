@@ -192,3 +192,27 @@ registra URLs, claves ni mensajes originales de errores. Conserva la limitación
 de no compartir la sesión en memoria del proceso principal. Falta el informe de
 esta comparación para decidir el próximo cambio; no se modificó el sondeo de
 producción basándose solamente en la hipótesis del tamaño de rango.
+
+### Lectura de audio por bloques (informe completo posterior)
+
+El informe Windows descartó que GET de un byte fuera la causa: tanto video como
+audio respondieron 206 a un byte y a 64 KiB con Content-Range correcto. El preload
+estaba configurado. La ruta corregida entregó video, pero la lectura por bloques
+de audio recibió GET 403 y abortó. El informe no demuestra todavía qué tamaño
+máximo admite ese servidor ni garantiza que reducir el rango resuelva el caso.
+
+`media-chunks.mjs` reemplaza el lector de bloques de la imagen fijada. Empieza con
+8 MB; ante un 403 de ese rango, prueba 1 MiB y después 64 KiB, sin repetir rangos
+idénticos ni seguir intentando si el menor también es rechazado. Conserva la
+misma URL/identidad de acceso, TLS, dispatcher y señal. Exige 206, Content-Range
+exacto, tamaño total consistente y cantidad real de bytes. No concatena páginas
+de error, rangos desplazados ni bloques incompletos. Gestiona el evento de aborto
+al descartar una respuesta para evitar cerrar el proceso del servicio.
+
+Una prueba offline ampliada con audio AAC de 15 s y metadatos al principio
+(faststart) permite 64 KiB pero rechaza rangos grandes para el audio. El parche
+anterior produce 0 bytes. El nuevo genera 155 370 bytes; FFprobe verifica 10
+paquetes H.264 y 647 AAC, duración de contenedor 15,2 s. Se comprobó el contenido
+de la pista y una redirección. La validación real ahora cuenta paquetes y exige
+audio y video con datos, no solo declaraciones de pistas. Pendiente confirmar
+la descarga completa de YouTube en el PC; no activar basándose en la prueba offline.

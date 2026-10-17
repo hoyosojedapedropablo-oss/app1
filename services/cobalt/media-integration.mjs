@@ -16,6 +16,7 @@ const upstream=http.createServer((req,res)=>{
   if(req.method==='HEAD'){counts.head++;res.writeHead(403,{'Content-Length':'0'}).end();return;}
   counts.get++;
   const range=/^bytes=(\d+)-(\d+)$/.exec(req.headers.range||'');
+  if(req.url==='/audio' && range && Number(range[2])-Number(range[1])+1>65536){res.writeHead(403,{'Content-Length':'0'}).end();return;}
   const start=range?Number(range[1]):0,end=range?Math.min(Number(range[2]),data.length-1):data.length-1;
   const body=data.subarray(start,end+1);
   res.writeHead(range?206:200,{'Content-Type':req.url==='/video'?'video/mp4':'audio/mp4','Content-Length':String(body.length),...(range?{'Content-Range':`bytes ${start}-${end}/${data.length}`}:{})});

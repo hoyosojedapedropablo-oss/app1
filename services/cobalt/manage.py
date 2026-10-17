@@ -82,10 +82,12 @@ def validate():
         record = dict(video_id=ident, mode=mode, success=False)
         try:
             path, _ = download('https://www.youtube.com/watch?v='+ident, folder, lambda *a,**k:None, mode=mode)
-            process = subprocess.run(['ffprobe','-v','error','-show_format','-show_streams','-of','json',str(path)], capture_output=True, text=True, check=True)
+            process = subprocess.run(['ffprobe','-v','error','-count_packets','-show_format','-show_streams','-of','json',str(path)], capture_output=True, text=True, check=True)
             media = json.loads(process.stdout)
             video = next(s for s in media['streams'] if s['codec_type']=='video')
             audio = next(s for s in media['streams'] if s['codec_type']=='audio')
+            if any(int(stream.get('nb_read_packets',0)) <= 0 for stream in (video,audio)):
+                raise ValueError('El archivo no contiene paquetes de audio y video.')
             duration = float(media['format']['duration'])
             if not 0 < duration <= 7200:
                 raise ValueError('Duración no admitida')
