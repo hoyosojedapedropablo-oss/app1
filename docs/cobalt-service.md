@@ -90,3 +90,18 @@ Las pruebas verifican el contrato, autenticación, origen del túnel, limpieza,
 límites, sanitización de errores, bloqueo de activación y transferencia/importación
 de un MP4 generado con FFmpeg. El servidor de descarga está simulado en esas
 pruebas; no cuentan como descargas reales de YouTube.
+
+## Informe de transferencia vacía en Windows
+
+La prueba en el PC del usuario arrancó los tres componentes correctamente, pero
+la descarga falló con «El archivo recibido está vacío o incompleto». Esto es un
+resultado distinto del rechazo del proxy en desarrollo; no atribuirlo al mismo
+problema sin evidencia. Todavía no se conoce la causa del fallo de transferencia.
+
+`services/cobalt/diagnose.py` comprueba prefijos de hasta 64 KiB del túnel combinado
+y, mediante el contrato oficial `localProcessing: forced`, de las pistas por
+separado. Solo acepta túneles de la misma instancia. Registra estados HTTP,
+bytes recibidos y estado/OOM de los contenedores; excluye claves, URLs y tokens.
+Genera `DIAGNOSTICO_COBALT.json` en la raíz de la app. Las pruebas con transportes
+simulados verifican el aislamiento del fallo y que no se filtren credenciales.
+Esta herramienta es diagnóstica: recibir un prefijo no valida un video completo.
