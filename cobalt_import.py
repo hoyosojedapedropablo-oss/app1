@@ -50,6 +50,20 @@ def configuration():
     return endpoint.rstrip('/')+'/', key
 
 
+def allowed_modes():
+    # Environment-configured services are explicitly managed by their operator.
+    if os.environ.get('CLIP_COBALT_URL','').strip():
+        return {'fast','original'}
+    try:
+        saved=json.loads(CONFIG_PATH.read_text(encoding='utf-8'))
+        modes=saved.get('enabled_modes',['fast','original'])
+        if not isinstance(modes,list) or not modes or any(mode not in ('fast','original') for mode in modes):
+            raise ValueError()
+        return set(modes)
+    except (OSError,ValueError,AttributeError):
+        raise CobaltFailure('YT-SERVICIO-CONFIG','La configuración de calidades del servicio no es válida.') from None
+
+
 def _origin(parsed):
     return parsed.scheme, parsed.hostname, parsed.port or (443 if parsed.scheme == 'https' else 80)
 
@@ -117,6 +131,8 @@ def download(url, folder, progress, mode='fast'):
         raise CobaltFailure('YT-SERVICIO-CONFIG', 'El servicio de descarga no está configurado.')
     if mode not in ('fast', 'original'):
         raise ValueError('Calidad de descarga inválida.')
+    if mode not in allowed_modes():
+        raise CobaltFailure('YT-SERVICIO-CALIDAD','Esta calidad no está habilitada. Elige Rápida · hasta 1080p; la calidad original sigue pendiente de validación.')
     endpoint, key = config
     headers = {'Accept': 'application/json'}
     if key:

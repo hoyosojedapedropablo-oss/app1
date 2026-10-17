@@ -111,3 +111,12 @@ class CobaltTests(unittest.TestCase):
             validation.write_text(json.dumps({'config_identity':'different','results':records}))
             with self.assertRaises(ValueError):manage.activate()
             self.assertFalse(json.loads(client.read_text())['enabled'])
+
+    def test_fast_only_activation_blocks_original_before_network_access(self):
+        config=self.folder/'client.json'
+        config.write_text(json.dumps({'enabled':True,'endpoint':'http://127.0.0.1:9000/','api_key':'test','enabled_modes':['fast']}))
+        with patch.dict(os.environ,{'CLIP_COBALT_URL':'','CLIP_COBALT_KEY':''}),patch.object(service,'CONFIG_PATH',config),patch.object(service.httpx,'Client') as client:
+            with self.assertRaises(service.CobaltFailure) as error:
+                service.download('https://youtu.be/JCcuOv5y_9g',self.folder,lambda *a,**k:None,'original')
+            self.assertEqual(error.exception.code,'YT-SERVICIO-CALIDAD')
+            client.assert_not_called()

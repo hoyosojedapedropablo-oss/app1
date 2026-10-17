@@ -217,3 +217,35 @@ paquetes H.264 y 647 AAC, duración de contenedor 15,2 s. Se comprobó el conten
 de la pista y una redirección. La validación real ahora cuenta paquetes y exige
 audio y video con datos, no solo declaraciones de pistas. Pendiente confirmar
 la descarga completa de YouTube en el PC; no activar basándose en la prueba offline.
+
+### Primera descarga real validada y separación de calidades
+
+El usuario ejecutó la actualización adaptativa en Windows. La validación real
+mostró `JCcuOv5y_9g fast OK`: se obtuvo un MP4 completo y FFprobe comprobó audio,
+video y paquetes. El paso siguiente `original` falló con `YT-RESTRINGIDO`; el
+validador anterior se detuvo antes de probar el segundo video. No interpretar
+ese código de la ruta original como prueba de que el video sea privado: la ruta
+rápida sí pudo descargarlo.
+
+El informe posterior confirma video y audio por la ruta corregida, y para audio
+muestra 8 MB → 403 seguido de 1 MiB → 206. Los prefijos por sí solos no validan
+videos completos; la prueba completa del primer video se acredita por el resultado
+`fast OK` del validador, no por los 64 KiB del diagnóstico.
+
+El administrador puede ejecutar `manage.py validate --quality fast --reuse`.
+Se exigen ambos videos en esa calidad, con paquetes de audio y video. Una descarga
+anterior solo se reutiliza si pertenece a la misma configuración, se encuentra
+bajo el directorio de validación, coincide con los datos registrados y vuelve a
+pasar FFprobe. Los resultados se guardan tras cada video. La descarga nueva se
+conserva con su ruta relativa para revisión. Original sigue pendiente.
+
+Tras revisar los MP4, `manage.py activate --quality fast` habilita únicamente
+`fast`. El cliente de la app rechaza `original` antes de hacer solicitudes al
+servicio. Reiniciar la app con INICIAR_WINDOWS después de actualizar/activar para
+cargar el cliente nuevo. La activación completa sigue exigiendo las cuatro
+combinaciones. Las variables de servicio del entorno son configuración explícita
+del operador y no usan la restricción del archivo local.
+
+El actualizador comprueba ahora la calidad rápida y revalida el archivo ya guardado
+para evitar volver a transferirlo. No activa el servicio automáticamente. Falta
+el resultado real del segundo video en modo rápido y revisión de los MP4.
