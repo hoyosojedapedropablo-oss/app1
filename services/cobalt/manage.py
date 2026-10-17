@@ -95,10 +95,13 @@ def validate():
                 width=video['width'], height=video['height'], video_codec=video['codec_name'], audio_codec=audio['codec_name'])
         except CobaltFailure as error:
             record['error_code'] = error.code
+            record['message'] = error.safe_message
         except Exception:
             record['error_code'] = 'VALIDACION-MEDIA'
         results.append(record)
         print(ident, mode, 'OK' if record['success'] else record['error_code'], flush=True)
+        if record.get('message'):
+            print(record['message'], flush=True)
         if not record['success']:
             break  # No repeated upstream requests after a failed access check.
     write_json(VALIDATION, dict(config_identity=identity(config), results=results))
