@@ -88,18 +88,20 @@ try {
       if (url.protocol!=='https:' || !(url.hostname==='googlevideo.com' || url.hostname.endsWith('.googlevideo.com')) || url.username || url.password) {
         track.error='UNEXPECTED_MEDIA_HOST';continue;
       }
-      for (const method of ['HEAD','GET']) {
+      for (const method of ['HEAD','GET_ONE','GET']) {
         const result={};track[method.toLowerCase()]=result;
         try {
-          const response = await fetch(url, {method,dispatcher,redirect:'follow',
-            headers:{...getHeaders('youtube'),...(method==='GET'?{Range:'bytes=0-65535'}:{})},
+          const response = await fetch(url, {method:method==='HEAD'?'HEAD':'GET',dispatcher,redirect:'follow',
+            headers:{...getHeaders('youtube'),...(method!=='HEAD'?{Range:method==='GET_ONE'?'bytes=0-0':'bytes=0-65535'}:{})},
             signal:AbortSignal.timeout(20000)});
           result.http_status=response.status;
+          const range=response.headers.get('content-range');
+          if(range && /^bytes [0-9]+-[0-9]+\/[0-9]+$/.test(range))result.content_range=range;
           const length=response.headers.get('content-length');
           if (length && /^\d+$/.test(length))result.content_length=Number(length);
           const type=response.headers.get('content-type')||'';
           result.content_category=type.startsWith('video/')?'video':type.startsWith('audio/')?'audio':type.startsWith('text/')?'text':type.includes('json')?'json':'other';
-          if (method==='GET') {
+          if (method!=='HEAD') {
             result.sample_bytes=0;
             if (response.ok && response.body) {
               const reader=response.body.getReader();
@@ -114,6 +116,56 @@ try {
         } catch {result.error='NETWORK_OR_TIMEOUT';}
       }
     }
+    // Exercise the installed stream code with the same URLs used above.
+    try {
+      for(const value of media.urls){const u=new URL(value);if(u.protocol!=='https:'||!(u.hostname==='googlevideo.com'||u.hostname.endsWith('.googlevideo.com'))||u.username||u.password)throw Error('UNEXPECTED_MEDIA_HOST');}
+      const http=await import('node:http');
+      const {channel}=await import('node:diagnostics_channel');
+      const {Readable}=await import('node:stream');
+      const {internalStream}=await import('./src/stream/internal.js');
+      const events=[];report.stream_events=events;
+      const category=error=>/maxRedirections/.test(String(error?.message))?'REDIRECT_OPTION':
+        /abort/i.test(String(error?.message))?'ABORTED':
+        /^UND_ERR_[A-Z_]+$/.test(error?.code||'')?error.code:'STREAM_ERROR';
+      const safeRequest=request=>{
+        try {
+          const host=new URL(String(request.origin)).hostname;
+          return host==='googlevideo.com'||host.endsWith('.googlevideo.com');
+        } catch {return false;}
+      };
+      channel('undici:request:headers').subscribe(({request,response})=>{
+        if(safeRequest(request)&&events.length<24)events.push({method:request.method,status:response.statusCode});
+      });
+      channel('undici:request:error').subscribe(({request,error})=>{
+        if(safeRequest(request)&&events.length<24)events.push({method:request.method,error:category(error)});
+      });
+      const originalFrom=Readable.from;
+      Readable.from=(...args)=>{
+        const readable=originalFrom(...args);
+        readable.on('error',error=>{if(events.length<24)events.push({stage:'read_chunks',error:category(error)});});
+        return readable;
+      };
+      const server=http.createServer((req,res)=>{
+        const index=req.url==='/video'?0:1;
+        const streamInfo={url:media.urls[index],service:'youtube',controller:new AbortController(),dispatcher};
+        internalStream(streamInfo,res);
+      });
+      await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+      report.installed_pipeline=[];
+      try {
+        for(const kind of ['video','audio']) {
+          const result={kind,sample_bytes:0};report.installed_pipeline.push(result);
+          try {
+            const response=await fetch(`http://127.0.0.1:${server.address().port}/${kind}`,{signal:AbortSignal.timeout(20000)});
+            result.http_status=response.status;
+            const reader=response.body.getReader();
+            try {
+              while(result.sample_bytes<65536){const {done,value}=await reader.read();if(done)break;result.sample_bytes+=Math.min(value.length,65536-result.sample_bytes);}
+            } finally {await reader.cancel().catch(()=>{});}
+          } catch(error){result.error=category(error);}
+        }
+      } finally {server.closeAllConnections();server.close();Readable.from=originalFrom;}
+    } catch {report.pipeline_error='PIPELINE_PROBE_UNAVAILABLE';}
   }
 } catch {report.error='PROBE_FAILED';}
 finish();
@@ -122,7 +174,7 @@ finish();
 def upstream_probe():
     try:
         process = subprocess.run(["docker","exec","-i","clipstudio-download-cobalt-1",
-            "node","--input-type=module"], input=UPSTREAM_PROBE, capture_output=True,
+            "node","--import","/bridge/head-fallback.mjs","--input-type=module"], input=UPSTREAM_PROBE, capture_output=True,
             text=True, timeout=110, check=True)
         for line in process.stdout.splitlines():
             if line.startswith("CLIP_PROBE_JSON:"):
@@ -146,6 +198,10 @@ def main():
                 output=subprocess.run(['docker','inspect','--format','{{json .State}}','clipstudio-download-'+name+'-1'],capture_output=True,text=True,timeout=10,check=True)
                 state=json.loads(output.stdout)
                 report['containers'][name]={'running':state.get('Running'),'oom_killed':state.get('OOMKilled'),'exit_code':state.get('ExitCode')}
+                if name=='cobalt':
+                    command=subprocess.run(['docker','inspect','--format','{{json .Config.Cmd}}','clipstudio-download-cobalt-1'],capture_output=True,text=True,timeout=10,check=True)
+                    args=json.loads(command.stdout)
+                    report['containers'][name]['compatibility_preload_configured']=isinstance(args,list) and '/bridge/head-fallback.mjs' in args
             except Exception:
                 report['containers'][name]={'inspection':'unavailable'}
         print('Comprobando transferencia y pistas por separado. Puede tardar unos minutos.',flush=True)

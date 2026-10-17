@@ -37,9 +37,10 @@ class DiagnosticTests(unittest.TestCase):
         import json
         import subprocess
         script=diag.UPSTREAM_PROBE
-        script=script.replace("const {fetch,EnvHttpProxyAgent} = await import('undici');", "const EnvHttpProxyAgent=class {}; const fetch=async (url,options)=>{if(options.method==='HEAD')return new Response(null,{status:403});return url.searchParams.get('track')==='video'?new Response(new Uint8Array(70000),{status:206,headers:{'Content-Type':'video/mp4'}}):new Response('private error detail',{status:403});};")
+        script=script.replace("const {fetch,EnvHttpProxyAgent} = await import('undici');", "const EnvHttpProxyAgent=class {}; const nativeFetch=globalThis.fetch; const fetch=async (url,options)=>{if(typeof url==='string' && url.startsWith('http://127.0.0.1:'))return nativeFetch(url,options);if(options.method==='HEAD')return new Response(null,{status:403});return url.searchParams.get('track')==='video'?new Response(new Uint8Array(70000),{status:206,headers:{'Content-Type':'video/mp4'}}):new Response('private error detail',{status:403});};")
         script=script.replace("const {default:extract} = await import('./src/processing/services/youtube.js');", "const extract=async()=>({urls:['https://media.googlevideo.com/video?track=video&secret=PRIVATE','https://media.googlevideo.com/video?track=audio&secret=PRIVATE']});")
         script=script.replace("const {getHeaders} = await import('./src/stream/shared.js');", "const getHeaders=()=>({});")
+        script=script.replace("const {internalStream}=await import('./src/stream/internal.js');", "const internalStream=(info,res)=>res.end();")
         output=subprocess.run(['node','--input-type=module'],input=script,capture_output=True,text=True,timeout=5,check=True)
         self.assertNotIn('PRIVATE',output.stdout+output.stderr)
         self.assertNotIn('private error detail',output.stdout+output.stderr)
@@ -49,3 +50,6 @@ class DiagnosticTests(unittest.TestCase):
         self.assertEqual(report['tracks'][0]['get']['sample_bytes'],65536)
         self.assertEqual(report['tracks'][1]['get']['http_status'],403)
         self.assertEqual(report['tracks'][1]['get']['sample_bytes'],0)
+        self.assertEqual(report['tracks'][0]['get_one']['http_status'],206)
+        self.assertEqual([r['sample_bytes'] for r in report['installed_pipeline']],[0,0])
+        self.assertNotIn('pipeline_error',report)

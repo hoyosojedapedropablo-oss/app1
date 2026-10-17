@@ -176,3 +176,19 @@ en desarrollo. Las pruebas del actualizador comprueban preservación de claves,
 aplicación repetida, restauración y rechazo de contenido alterado o ediciones
 locales. La ejecución completa de este actualizador y la descarga de YouTube
 siguen pendientes de verificar en Windows.
+
+### Resultado posterior en Windows
+
+El instalador terminó y los componentes quedaron saludables, pero la primera
+validación real siguió fallando con archivo vacío/incompleto. No presentar el
+parche como reparación validada de YouTube ni repetir la instalación sin nueva
+evidencia. El éxito de la integración offline no prueba el caso remoto.
+
+El diagnóstico ampliado compara GET de un byte con GET de 64 KiB, registra
+Content-Range numérico, comprueba que el contenedor tenga configurado el preload
+y ejecuta la ruta `internalStream` corregida con las mismas URLs del extractor
+anónimo aislado. Recoge estados HTTP y categorías de errores de lectura; no
+registra URLs, claves ni mensajes originales de errores. Conserva la limitación
+de no compartir la sesión en memoria del proceso principal. Falta el informe de
+esta comparación para decidir el próximo cambio; no se modificó el sondeo de
+producción basándose solamente en la hipótesis del tamaño de rango.
