@@ -156,22 +156,23 @@ No activar el proveedor hasta que su validación real y revisión del MP4 pasen.
 
 ### Aplicar en una carpeta Windows existente
 
-`services/cobalt/apply_media_fix.py` descarga únicamente `compose.yaml`,
-`head-fallback.mjs` y `media-probe.mjs` del commit fijado
-`11009339f41d3bcefef1b58d8badcf2b4c4f28c9`. Verifica SHA-256 antes de escribir,
+`services/cobalt/apply_media_fix.py` descarga seis archivos: `compose.yaml`,
+`head-fallback.mjs`, `media-probe.mjs`, `media-chunks.mjs`, `manage.py` y
+`diagnose.py`, del commit fijado
+`ead2e131e25100e9c87f764b94b4f9f48fe0a5da`. Verifica SHA-256 antes de escribir,
 conserva copia de los archivos anteriores en `data/cobalt/compat-backup-*` y
 rechaza cambios locales desconocidos. No sustituye claves, videos ni `.venv`.
 Reinicia el servicio mediante `manage.py start`; si ese arranque falla, restaura
 los archivos anteriores e intenta reiniciar la configuración anterior.
 
 Tras arrancar, ejecuta la validación real ya existente de los dos videos en ambas
-calidades. Si falla, muestra el resultado y conserva la corrección para investigar;
-no activa automáticamente el proveedor. Si pasa, todavía se deben revisar los
+calidades. Si falla, muestra el resultado, conserva la corrección y genera
+automáticamente el diagnóstico para investigar; no activa el proveedor. Si pasa, todavía se deben revisar los
 MP4 y activar explícitamente el servicio. Los usuarios finales de la app no
 necesitan ejecutar este procedimiento: es una actualización de la instalación
 de prueba del propietario.
 
-La descarga de los tres archivos desde el repositorio y sus checksums se verificó
+La descarga de los archivos desde el repositorio y sus checksums se verificó
 en desarrollo. Las pruebas del actualizador comprueban preservación de claves,
 aplicación repetida, restauración y rechazo de contenido alterado o ediciones
 locales. La ejecución completa de este actualizador y la descarga de YouTube
