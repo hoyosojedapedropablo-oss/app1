@@ -196,6 +196,23 @@ def upstream_probe():
     return {"error":"PROBE_UNAVAILABLE"}
 
 
+def validation_summary():
+    try:
+        records=json.loads((ROOT/'data/cobalt/validation.json').read_text(encoding='utf-8')).get('results',[])
+        if not isinstance(records,list):return []
+        allowed=('video_id','mode','success','duration','expected_duration','bytes','verification_version','error_code','message')
+        summary=[]
+        for record in records:
+            if not isinstance(record,dict):continue
+            value={key:record[key] for key in allowed if key in record}
+            transfer=record.get('transfer')
+            if isinstance(transfer,dict):
+                value['transfer']={key:transfer[key] for key in ('source_duration','source_expected_bytes','downloaded_bytes','total_bytes') if key in transfer}
+            summary.append(value)
+        return summary
+    except (OSError,ValueError,AttributeError):return []
+
+
 def main():
     try:
         config=json.loads((ROOT/'data/cobalt/client.json').read_text(encoding='utf-8'))
@@ -204,7 +221,7 @@ def main():
         parsed=urlsplit(endpoint)
         if parsed.scheme!='http' or parsed.hostname not in ('127.0.0.1','localhost') or parsed.port!=9000 or parsed.username or parsed.password:
             raise ValueError('Solo se diagnostica el servicio local instalado.')
-        report={'description':'Media prefixes only; not a successful full download','containers':{}}
+        report={'description':'Media prefixes only; not a successful full download','containers':{},'validation_results':validation_summary()}
         for name in ('cobalt','pot-provider','session-bridge'):
             try:
                 output=subprocess.run(['docker','inspect','--format','{{json .State}}','clipstudio-download-'+name+'-1'],capture_output=True,text=True,timeout=10,check=True)

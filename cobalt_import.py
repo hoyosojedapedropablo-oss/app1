@@ -184,8 +184,10 @@ def _verify_media(path,expected_duration):
         durations=[float(media['format']['duration']),float(video['duration']),float(audio['duration'])]
         tolerance=max(2.,expected_duration*.005)
         if (any(int(stream.get('nb_read_packets',0))<=0 for stream in (video,audio)) or
-            any(not isfinite(value) or value<=0 or abs(value-expected_duration)>tolerance for value in durations)):
+            any(not isfinite(value) or value<=0 for value in durations)):
             raise ValueError()
+        if any(abs(value-expected_duration)>tolerance for value in durations):
+            raise CobaltFailure('YT-INCOMPLETO',f'La duración no coincide con el original ({expected_duration:.2f} s): video {durations[1]:.2f} s, audio {durations[2]:.2f} s. Descarga descartada.')
         if not 0<path.stat().st_size<=MAX_BYTES:raise ValueError()
     except (OSError,subprocess.SubprocessError,ValueError,KeyError,StopIteration,TypeError):
         raise CobaltFailure('YT-INCOMPLETO','El archivo no contiene audio y video completos con la duración original. La descarga fue descartada.') from None

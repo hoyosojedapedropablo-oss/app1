@@ -53,3 +53,15 @@ class DiagnosticTests(unittest.TestCase):
         self.assertEqual(report['tracks'][0]['get_one']['http_status'],206)
         self.assertEqual([r['sample_bytes'] for r in report['installed_pipeline']],[0,0])
         self.assertNotIn('pipeline_error',report)
+
+    def test_validation_summary_includes_failure_counters_without_private_config(self):
+        import json
+        from unittest.mock import patch
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp,patch.object(diag,'ROOT',Path(tmp)):
+            folder=Path(tmp)/'data/cobalt';folder.mkdir(parents=True)
+            (folder/'validation.json').write_text(json.dumps({'api_key':'PRIVATE','config_identity':'private identity','results':[{'video_id':'JCcuOv5y_9g','success':False,'expected_duration':1080,'transfer':{'downloaded_bytes':100,'private_key':'PRIVATE'},'private_key':'PRIVATE'}]}))
+            result=diag.validation_summary()
+            self.assertEqual(result[0]['transfer'],{'downloaded_bytes':100})
+            self.assertNotIn('PRIVATE',json.dumps(result))
+            self.assertNotIn('identity',json.dumps(result))
