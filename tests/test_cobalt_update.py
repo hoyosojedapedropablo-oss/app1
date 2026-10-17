@@ -8,23 +8,25 @@ update=importlib.util.module_from_spec(spec);spec.loader.exec_module(update)
 
 class UpdateTests(unittest.TestCase):
     def test_verified_update_is_idempotent_and_preserves_private_data(self):
-        root_source=Path(__file__).parents[1]/'services/cobalt'
-        files={name:(root_source/name).read_bytes() for name in update.FILES}
+        root_source=Path(__file__).parents[1]
+        files={name:update.target(root_source,name).read_bytes() for name in update.FILES}
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);service=root/'services/cobalt';service.mkdir(parents=True)
             data=root/'data/cobalt';data.mkdir(parents=True)
             (data/'keys.json').write_text('private fixture')
             backup,previous=update.apply_files(root,files)
             self.assertEqual((service/'compose.yaml').read_bytes(),files['compose.yaml'])
+            self.assertEqual((root/'cobalt_import.py').read_bytes(),files['cobalt_import.py'])
             self.assertEqual((data/'keys.json').read_text(),'private fixture')
             update.apply_files(root,files)
             update.restore_files(root,backup,previous)
             self.assertFalse((service/'compose.yaml').exists())
+            self.assertFalse((root/'cobalt_import.py').exists())
             self.assertTrue((data/'keys.json').exists())
 
     def test_corrupt_package_and_local_edits_are_preserved(self):
-        source=Path(__file__).parents[1]/'services/cobalt'
-        files={name:(source/name).read_bytes() for name in update.FILES}
+        source=Path(__file__).parents[1]
+        files={name:update.target(source,name).read_bytes() for name in update.FILES}
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);service=root/'services/cobalt';service.mkdir(parents=True)
             original=service/'compose.yaml';original.write_text('local changes')
