@@ -160,7 +160,7 @@ No activar el proveedor hasta que su validación real y revisión del MP4 pasen.
 `services/cobalt/apply_media_fix.py` descarga siete archivos: `compose.yaml`,
 `head-fallback.mjs`, `media-probe.mjs`, `media-chunks.mjs`, `manage.py` y
 `diagnose.py` y el cliente raíz `cobalt_import.py`, del commit fijado
-`adbe75837a939616f8a060feae597b16b6e26d0e`. Verifica SHA-256 antes de escribir,
+`b37bb4558d6e6aec0f48804d71959af60cfb9690`. Verifica SHA-256 antes de escribir,
 conserva copia de los archivos anteriores en `data/cobalt/compat-backup-*` y
 rechaza cambios locales desconocidos. No sustituye claves, videos ni `.venv`.
 Reinicia el servicio mediante `manage.py start`; si ese arranque falla, restaura
