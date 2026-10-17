@@ -10,6 +10,12 @@ import httpx
 import cobalt_import as service
 
 
+def payload(size=10,duration=1,tunnels=None,name='../video.mp4'):
+    return {'status':'local-processing','type':'merge','output':{'filename':name},
+        'tunnel':tunnels or ['http://127.0.0.1:9000/tunnel?part=video','http://127.0.0.1:9000/tunnel?part=audio'],
+        'source_video_id':'JCcuOv5y_9g','expected_duration':duration,'expected_media_bytes':size}
+
+
 class CobaltTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -30,16 +36,17 @@ class CobaltTests(unittest.TestCase):
             def handler(request):
                 requests.append(request)
                 if request.method == 'POST':
-                    return httpx.Response(200, json={'status':'tunnel','url':'http://127.0.0.1:9000/tunnel?id=test','filename':'../video.mp4'})
+                    return httpx.Response(200, json=payload())
                 return httpx.Response(200, content=b'video', headers={'Content-Type':'video/mp4'})
-            path, name = self.run_download(handler, mode)
+            with patch.object(service,'_merge_tracks',side_effect=lambda tracks,target:target.write_bytes(b'video')),patch.object(service,'_verify_media'):
+                path, name = self.run_download(handler, mode)
             self.assertEqual(path.read_bytes(), b'video')
             self.assertEqual(name, 'video.mp4')
             self.assertEqual(requests[0].headers['Authorization'],'Api-Key test-key')
-            self.assertNotIn('Authorization',requests[1].headers)
+            for request in requests[1:]:self.assertNotIn('Authorization',request.headers)
             body = json.loads(requests[0].content)
             self.assertTrue(body['alwaysProxy'])
-            self.assertEqual(body['localProcessing'],'disabled')
+            self.assertEqual(body['localProcessing'],'forced')
             self.assertEqual(body['videoQuality'],'1080' if mode=='fast' else 'max')
 
     def test_rejects_foreign_tunnels_and_redirects(self):
@@ -47,18 +54,18 @@ class CobaltTests(unittest.TestCase):
             calls = []
             def handler(request):
                 calls.append(request)
-                return httpx.Response(200,json={'status':'tunnel','url':url})
+                return httpx.Response(200,json=payload(tunnels=[url,'http://127.0.0.1:9000/tunnel?part=audio']))
             with self.assertRaises(service.CobaltFailure):self.run_download(handler)
             self.assertEqual(len(calls),1)
         def redirect(request):return httpx.Response(302,headers={'Location':'https://evil.example'})
         with self.assertRaises(service.CobaltFailure):self.run_download(redirect)
 
     def test_oversize_truncated_and_nonvideo_files_are_removed(self):
-        for headers,content in (({'Content-Length':'100'},b'abc'),({'Content-Type':'text/html'},b'error'),({},b'123456')):
+        for headers,content,size,limit in (({'Content-Length':'100'},b'abc',200,1000),({'Content-Type':'text/html'},b'error',10,1000),({},b'123456',12,5)):
             def handler(request):
-                if request.method=='POST':return httpx.Response(200,json={'status':'tunnel','url':'http://127.0.0.1:9000/tunnel'})
+                if request.method=='POST':return httpx.Response(200,json=payload(size=size))
                 return httpx.Response(200,headers=headers,content=content)
-            with patch.object(service,'MAX_BYTES',5):
+            with patch.object(service,'MAX_BYTES',limit):
                 with self.assertRaises(service.CobaltFailure):self.run_download(handler)
             self.assertFalse((self.folder/'download.mp4').exists())
 
@@ -88,7 +95,7 @@ class CobaltTests(unittest.TestCase):
         backend.command(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=size=320x180:rate=2','-f','lavfi','-i','sine=frequency=440','-t','1','-c:v','libx264','-c:a','aac',str(sample)])
         video=sample.read_bytes()
         def handler(request):
-            if request.method=='POST':return httpx.Response(200,json={'status':'tunnel','url':'http://127.0.0.1:9000/tunnel?id=sample','filename':'sample.mp4'})
+            if request.method=='POST':return httpx.Response(200,json=payload(size=2*len(video),name='sample.mp4'))
             return httpx.Response(200,content=video,headers={'Content-Type':'video/mp4'})
         client=httpx.Client(transport=httpx.MockTransport(handler))
         ident='c'*32
@@ -96,7 +103,8 @@ class CobaltTests(unittest.TestCase):
             with patch.object(service.httpx,'Client',return_value=client):backend.import_youtube(ident,'https://youtu.be/JCcuOv5y_9g')
             self.assertEqual(backend.IMPORTS[ident]['status'],'ready')
             self.assertAlmostEqual(backend.JOBS[ident]['duration'],1,delta=.1)
-            self.assertEqual(TestClient(backend.app).get('/api/jobs/'+ident+'/video').content,video)
+            self.assertGreater(len(TestClient(backend.app).get('/api/jobs/'+ident+'/video').content),0)
+            self.assertFalse(list((self.folder/ident).glob('track-*.bin')))
 
     def test_activation_rejects_partial_or_different_configuration(self):
         spec=importlib.util.spec_from_file_location('cobalt_manage',Path(__file__).parents[1]/'services/cobalt/manage.py')
@@ -120,3 +128,25 @@ class CobaltTests(unittest.TestCase):
                 service.download('https://youtu.be/JCcuOv5y_9g',self.folder,lambda *a,**k:None,'original')
             self.assertEqual(error.exception.code,'YT-SERVICIO-CALIDAD')
             client.assert_not_called()
+
+    def test_64_second_mp4_cannot_pass_for_an_18_minute_source(self):
+        import subprocess
+        sample=self.folder/'short.mp4'
+        subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=size=160x90:rate=2','-f','lavfi','-i','sine=frequency=440','-t','64','-c:v','libx264','-c:a','aac',str(sample)],check=True)
+        data=sample.read_bytes()
+        def handler(request):
+            if request.method=='POST':return httpx.Response(200,json=payload(size=len(data)*2,duration=1080))
+            return httpx.Response(200,content=data,headers={'content-type':'video/mp4'})
+        with self.assertRaises(service.CobaltFailure) as error:self.run_download(handler)
+        self.assertEqual(error.exception.code,'YT-INCOMPLETO')
+        self.assertFalse((self.folder/'download.mp4').exists())
+        self.assertFalse(list(self.folder.glob('track-*.bin')))
+
+    def test_missing_original_duration_or_wrong_video_identity_are_rejected(self):
+        for change in ({'expected_duration':None},{'source_video_id':'rcPWJKs5It4'}):
+            calls=[]
+            def handler(request):
+                calls.append(request)
+                return httpx.Response(200,json={**payload(),**change})
+            with self.assertRaises(service.CobaltFailure):self.run_download(handler)
+            self.assertEqual(len(calls),1)

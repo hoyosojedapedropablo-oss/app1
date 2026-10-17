@@ -37,6 +37,9 @@ def inspect_paths(client, endpoint, key):
             with client.stream('POST',endpoint,json={**request,'localProcessing':processing},
                                headers={'Accept':'application/json','Authorization':'Api-Key '+key}) as response:
                 payload = _read_json(response)
+            for field in ('expected_duration','expected_media_bytes'):
+                value=payload.get(field)
+                if type(value) in (int,float) and 0<value<=12*1024**3:record[field]=value
             status = payload.get('status')
             record['response_type'] = status if status in ('tunnel','local-processing','redirect','picker') else 'unexpected'
             if status == 'tunnel':
@@ -76,6 +79,8 @@ try {
   const {getHeaders} = await import('./src/stream/shared.js');
   const dispatcher = new EnvHttpProxyAgent();
   const media = await extract({id:'JCcuOv5y_9g',quality:'1080',codec:'h264',container:'mp4',isAudioOnly:false,youtubeHLS:false,dispatcher});
+  const expected=media.originalRequest?.expectedDuration;
+  if(typeof expected==='number' && Number.isFinite(expected) && expected>0 && expected<=7200)report.source_duration=expected;
   if (media.error) {
     report.extraction_error = typeof media.error==='string' && /^[a-z0-9_.]{1,100}$/.test(media.error) ? media.error : 'EXTRACTION_FAILED';
   } else if (!Array.isArray(media.urls) || media.urls.length !== 2) {

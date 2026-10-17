@@ -7,8 +7,9 @@ No entregar esta integración como reparación ni pedir al usuario que reinstale
 ## Diseño
 
 Clip Studio envía la URL al Cobalt administrado por el propietario de la app.
-Cobalt prepara y transmite el archivo; Clip Studio lo guarda, verifica con FFprobe
-y registra como un video normal del editor. El cliente final no instala Docker,
+Cobalt entrega dos pistas por túneles propios. Clip Studio recibe y verifica
+cada pista completa, las une localmente y compara las duraciones de audio, video
+y contenedor con la duración original antes de registrar el resultado en el editor. El cliente final no instala Docker,
 no aporta cookies y no inicia sesión en Google.
 
 El servicio incluye Cobalt y BgUtils oficiales, fijados por digest en
@@ -218,19 +219,20 @@ de la pista y una redirección. La validación real ahora cuenta paquetes y exig
 audio y video con datos, no solo declaraciones de pistas. Pendiente confirmar
 la descarga completa de YouTube en el PC; no activar basándose en la prueba offline.
 
-### Primera descarga real validada y separación de calidades
+### Resultado inicialmente marcado OK, después invalidado por duración
 
 El usuario ejecutó la actualización adaptativa en Windows. La validación real
-mostró `JCcuOv5y_9g fast OK`: se obtuvo un MP4 completo y FFprobe comprobó audio,
-video y paquetes. El paso siguiente `original` falló con `YT-RESTRINGIDO`; el
+mostró `JCcuOv5y_9g fast OK`: se obtuvo un MP4 reproducible y FFprobe comprobó audio,
+video y paquetes. La revisión posterior demostró que era un archivo parcial de
+64 segundos. Ese OK NO acreditaba una descarga completa. El paso siguiente `original` falló con `YT-RESTRINGIDO`; el
 validador anterior se detuvo antes de probar el segundo video. No interpretar
 ese código de la ruta original como prueba de que el video sea privado: la ruta
 rápida sí pudo descargarlo.
 
 El informe posterior confirma video y audio por la ruta corregida, y para audio
 muestra 8 MB → 403 seguido de 1 MiB → 206. Los prefijos por sí solos no validan
-videos completos; la prueba completa del primer video se acredita por el resultado
-`fast OK` del validador, no por los 64 KiB del diagnóstico.
+videos completos; el resultado `fast OK` del validador antiguo tampoco acreditaba integridad: no
+comparaba duración original ni tamaños completos. No reutilizar esos resultados.
 
 El administrador puede ejecutar `manage.py validate --quality fast --reuse`.
 Se exigen ambos videos en esa calidad, con paquetes de audio y video. Una descarga
@@ -249,3 +251,46 @@ del operador y no usan la restricción del archivo local.
 El actualizador comprueba ahora la calidad rápida y revalida el archivo ya guardado
 para evitar volver a transferirlo. No activa el servicio automáticamente. Falta
 el resultado real del segundo video en modo rápido y revisión de los MP4.
+
+### Corrección de integridad tras los archivos de 64 segundos
+
+`REVISION_DURACION.json` del usuario confirma 64,477052 s / 16 305 322 bytes y
+64,641134 s / 44 116 015 bytes. Los dos anteriores OK quedan invalidados. El
+primer video anunciaba más de 918 MB solo de pista de video, por lo que el MP4
+no correspondía a una transferencia completa. No activar a partir de esos registros.
+
+El cliente ahora solicita `localProcessing: forced`, recibe las dos pistas
+completas con tamaño declarado, comprueba sus bytes agregados contra la información
+del extractor, y solo después usa FFmpeg con archivos locales que permiten
+búsqueda. Esto evita depender de que una unión en directo siga leyendo hasta el
+final; no establece por sí solo la causa exacta de todo rechazo remoto.
+
+El preload incorpora identidad, duración original y tamaño agregado de las pistas
+a la respuesta JSON, desde los formatos y basic_info del extractor de YouTube.
+Los dos módulos adicionales también se verifican por SHA-256 de la imagen fijada.
+Los túneles siguen perteneciendo a la instancia y no reciben la clave API. Su
+vigencia se amplía a 7500 s para que el segundo no expire mientras llega la primera
+pista, dentro del límite de 7200 s de transferencia. No se exponen a la UI.
+
+FFprobe debe confirmar paquetes y duraciones de audio, video y contenedor dentro
+de max(2 s, 0,5 %) del original. La falta de información del original es un error,
+no un permiso para aceptar un archivo sin verificar. Los registros requieren
+`verification_version: 2` y `expected_duration`; los antiguos no habilitan ni
+reutilizan descargas. El actualizador mantiene el servicio desactivado hasta la
+nueva validación y revisión. No borra los MP4 antiguos del usuario.
+
+Pruebas: un MP4 real de 64 s se rechaza para un original esperado de 1080 s y se
+eliminan las nuevas pistas temporales y salida fallida. Una integración offline
+en la imagen fijada entrega túneles firmados reales, rechaza HEAD y rangos grandes
+de audio, transfiere ambas pistas sin faststart exactamente y luego une localmente:
+394 129 bytes, 15 s de video y audio, 150 paquetes de video y 647 de audio.
+La descarga completa desde YouTube sigue pendiente de validación en Windows.
+
+Los archivos que superan la verificación nueva se reúnen en
+`data/cobalt/validation/VERIFICADOS`, con nombres que incluyen el ID del video.
+El actualizador abre esa carpeta al terminar correctamente en Windows. Los MP4
+antiguos permanecen en sus carpetas originales y no se presentan como verificados.
+Se muestran fases y avance durante la transferencia; si falla, el registro guarda
+solo duración esperada y contadores de bytes observados, sin claves ni URLs.
+`start` fuerza recreación para cargar los archivos de preload montados, incluso
+cuando las rutas y nombres del Compose no han cambiado.

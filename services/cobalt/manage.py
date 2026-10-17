@@ -65,7 +65,7 @@ def compose(action):
         override = STATE/'cloud-ca.compose.json'
         write_json(override, {'services':services})
         args += ['-f', str(override)]
-    args += ['up', '-d', '--wait', '--wait-timeout', '120'] if action == 'start' else ['down']
+    args += ['up', '-d', '--force-recreate', '--wait', '--wait-timeout', '120'] if action == 'start' else ['down']
     subprocess.run(args, env=env, cwd=ROOT, check=True)
 
 
@@ -74,14 +74,17 @@ def selected_pairs(quality):
     return {pair for pair in EXPECTED if quality=='all' or pair[1]==quality}
 
 
-def inspect_media(path,mode):
-    process=subprocess.run(['ffprobe','-v','error','-count_packets','-show_format','-show_streams','-of','json',str(path)],capture_output=True,text=True,check=True)
+def inspect_media(path,mode,expected_duration=None):
+    process=subprocess.run(['ffprobe','-v','error','-count_packets','-show_format','-show_streams','-of','json',str(path)],capture_output=True,text=True,encoding='utf-8',errors='replace',check=True)
     media=json.loads(process.stdout)
     video=next(s for s in media['streams'] if s['codec_type']=='video')
     audio=next(s for s in media['streams'] if s['codec_type']=='audio')
     if any(int(stream.get('nb_read_packets',0))<=0 for stream in (video,audio)):
         raise ValueError('El archivo no contiene paquetes de audio y video.')
     duration=float(media['format']['duration'])
+    if expected_duration is not None:
+        from cobalt_import import _verify_media
+        _verify_media(path,expected_duration)
     if not 0<duration<=7200 or (mode=='fast' and video['height']>1080):
         raise ValueError('Duración o resolución no admitida.')
     return dict(bytes=path.stat().st_size,duration=duration,width=video['width'],height=video['height'],
@@ -89,8 +92,19 @@ def inspect_media(path,mode):
         video_packets=int(video['nb_read_packets']),audio_packets=int(audio['nb_read_packets']))
 
 
+def verified_record(record):
+    from math import isfinite
+    try:
+        expected=float(record['expected_duration']);actual=float(record['duration'])
+        return (record.get('success') is True and record.get('verification_version')==2 and
+            isfinite(expected) and 0<expected<=7200 and isfinite(actual) and
+            abs(actual-expected)<=max(2.,expected*.005) and
+            int(record.get('audio_packets',0))>0 and int(record.get('video_packets',0))>0)
+    except (KeyError,ValueError,TypeError):return False
+
+
 def cached_file(record):
-    if record.get('success') is not True or not isinstance(record.get('bytes'),int):return None
+    if not verified_record(record) or not isinstance(record.get('bytes'),int):return None
     relative=record.get('source_path')
     candidates=[STATE/relative] if isinstance(relative,str) else list((STATE/'validation').glob('*/download.mp4'))
     matches=[p for p in candidates if p.resolve().is_relative_to((STATE/'validation').resolve()) and p.is_file() and p.stat().st_size==record['bytes']]
@@ -112,13 +126,14 @@ def validate(quality='all',reuse=False):
     required=selected_pairs(quality)
     for ident,mode in sorted(required,key=lambda pair:(pair[1]!='fast',pair[0])):
         record=dict(video_id=ident,mode=mode,success=False)
+        observed={}
         try:
             previous=old.get((ident,mode),{})
             path=cached_file(previous) if reuse else None
             metadata=None
             if path:
                 try:
-                    checked=inspect_media(path,mode)
+                    checked=inspect_media(path,mode,previous['expected_duration'])
                     if (abs(checked['duration']-previous.get('duration',-1))<.1 and
                         all(checked[key]==previous.get(key) for key in ('width','height','video_codec','audio_codec'))):
                         metadata=checked
@@ -128,14 +143,32 @@ def validate(quality='all',reuse=False):
                 folder=STATE/'validation'/uuid.uuid4().hex
                 folder.mkdir(parents=True)
                 print(ident,mode,'Descargando…',flush=True)
-                path,_=download('https://www.youtube.com/watch?v='+ident,folder,lambda *a,**k:None,mode=mode)
-                metadata=inspect_media(path,mode)
-            record.update(success=True,source_path=str(path.relative_to(STATE)),**metadata)
+                last={'bucket':-1,'message':None}
+                def progress(value,message,**details):
+                    observed.update(details)
+                    bucket=int(value)//10
+                    if bucket!=last['bucket'] or message!=last['message']:
+                        print(ident,mode,str(value)+'%',message,flush=True)
+                        last.update(bucket=bucket,message=message)
+                path,_=download('https://www.youtube.com/watch?v='+ident,folder,progress,mode=mode)
+                if observed.get('verification_version')!=2:raise ValueError('Falta la verificación del original.')
+                expected_duration=observed['source_duration']
+                metadata=inspect_media(path,mode,expected_duration)
+            review=STATE/'validation'/'VERIFICADOS'
+            review.mkdir(parents=True,exist_ok=True)
+            if path.parent!=review:
+                destination=review/(ident+'_'+mode+'_'+uuid.uuid4().hex[:8]+'.mp4')
+                path.replace(destination)
+                path=destination
+            record.update(success=True,source_path=str(path.relative_to(STATE)),verification_version=2,
+                expected_duration=previous['expected_duration'] if cached else expected_duration,**metadata)
             if cached:record['reused']=True
         except CobaltFailure as error:
             record.update(error_code=error.code,message=error.safe_message)
         except Exception:
             record['error_code']='VALIDACION-MEDIA'
+        if not record['success']:
+            record['transfer']={key:observed[key] for key in ('source_duration','source_expected_bytes','downloaded_bytes','total_bytes') if key in observed}
         results[(ident,mode)]=record
         print(ident,mode,('OK · archivo guardado revalidado' if record.get('reused') else 'OK') if record['success'] else record['error_code'],flush=True)
         if record.get('message'):print(record['message'],flush=True)
@@ -147,7 +180,7 @@ def validate(quality='all',reuse=False):
 def activate(quality='all'):
     config=json.loads(CLIENT.read_text())
     check=json.loads(VALIDATION.read_text())
-    successful={(r.get('video_id'),r.get('mode')) for r in check.get('results',[]) if r.get('success') is True}
+    successful={(r.get('video_id'),r.get('mode')) for r in check.get('results',[]) if verified_record(r)}
     if check.get('config_identity')!=identity(config) or not selected_pairs(quality)<=successful:
         raise ValueError('La calidad solicitada no superó las descargas reales requeridas. No se activó.')
     config.update(enabled=True,enabled_modes=['fast','original'] if quality=='all' else [quality])
@@ -172,6 +205,7 @@ def main():
         elif action == 'activate':
             activate(args.quality)
         elif action == 'disable':
+            initialize()
             config = json.loads(CLIENT.read_text());config['enabled']=False;write_json(CLIENT,config)
         print('Operación completada. Las claves no se muestran ni se incluyen en el repositorio.')
         return 0
