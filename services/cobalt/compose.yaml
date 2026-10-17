@@ -2,6 +2,7 @@ name: clipstudio-download
 services:
   cobalt:
     image: ghcr.io/imputnet/cobalt@sha256:63186dd68afd57ce3bb1f62cc4c139f5fa95b9c3e87a3cf5c6e4c7a570523f62
+    command: [node, --import, /bridge/head-fallback.mjs, src/cobalt.js]
     init: true
     read_only: true
     cap_drop: [ALL]
@@ -24,6 +25,8 @@ services:
       NO_PROXY: "${NO_PROXY:-localhost,127.0.0.1},pot-provider,session-bridge,cobalt"
     volumes:
       - ../../data/cobalt/keys.json:/run/cobalt/keys.json:ro
+      - ./head-fallback.mjs:/bridge/head-fallback.mjs:ro
+      - ./media-probe.mjs:/bridge/media-probe.mjs:ro
     depends_on:
       session-bridge: {condition: service_healthy}
     healthcheck:

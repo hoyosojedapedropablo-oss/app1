@@ -120,3 +120,36 @@ conocido de esta conexión. Once pruebas relacionadas pasan, incluida una ejecuc
 Node con respuestas controladas HEAD 403 / GET 206 y ausencia de datos privados.
 Pendiente ejecutar el diagnóstico ampliado en el PC Windows donde los túneles
 combinado y separados devolvieron cero bytes sin OOM de contenedores.
+
+## Corrección de transferencia comprobada con archivos locales
+
+El PC del usuario mostró HEAD 403 y GET con rango 206 (65 536 bytes) para video y
+audio. Ese resultado identifica un fallo del sondeo HEAD, aunque no valida todavía
+un video completo. Además, la imagen fijada contiene Undici 6.24.1 y sus llamadas
+`request(..., {maxRedirections})` fallan con «maxRedirections is not supported, use
+the redirect interceptor». Ambos problemas se reprodujeron dentro de la imagen.
+
+`head-fallback.mjs` aplica dos adaptaciones en memoria, sin modificar la imagen:
+
+- Si HEAD falla por el método o no da tamaño, consulta GET `Range: bytes=0-0`.
+  Acepta 206 con Content-Range válido, calcula el tamaño **total** y cancela el
+  pequeño cuerpo del sondeo. No acepta un GET denegado como medio válido.
+- Sustituye la opción incompatible por el interceptor oficial de redirecciones,
+  conservando dispatcher, señal de cancelación y límite de redirecciones.
+
+Se conservan TLS, el proxy, la autenticación y los límites. El cargador verifica
+los SHA-256 del código de origen `internal.js` y `proxy.js`; rechaza otra versión
+antes de aplicar cambios. El alcance es descarga normal de pistas, no la ruta
+HLS experimental. El código original de Cobalt sigue bajo AGPL-3.0; imagen,
+fuentes originales oficiales y parche están identificados para poder reproducir
+la adaptación. No se usa un servicio público de terceros.
+
+Prueba offline dentro de la imagen oficial, con un servidor local que rechaza
+HEAD y permite GET: antes del parche, 0 bytes; después, pista idéntica al archivo
+original y MP4 de 29 624 bytes. FFprobe verificó H.264, AAC, 320×180 y 1,2 segundos.
+También se comprobó una redirección HTTP real en el túnel proxy. El contenedor de
+prueba no tuvo acceso a red externa. El servicio Compose corregido arrancó con
+los tres componentes saludables. Pasan 95 pruebas Python y 8 pruebas Node.
+
+La descarga completa desde YouTube sigue pendiente de validar en el PC Windows.
+No activar el proveedor hasta que su validación real y revisión del MP4 pasen.
