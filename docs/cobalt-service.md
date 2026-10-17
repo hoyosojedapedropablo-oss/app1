@@ -105,3 +105,18 @@ bytes recibidos y estado/OOM de los contenedores; excluye claves, URLs y tokens.
 Genera `DIAGNOSTICO_COBALT.json` en la raíz de la app. Las pruebas con transportes
 simulados verifican el aislamiento del fallo y que no se filtren credenciales.
 Esta herramienta es diagnóstica: recibir un prefijo no valida un video completo.
+
+El diagnóstico ampliado ejecuta, dentro de la imagen fijada, el extractor iOS de
+Cobalt en un proceso aislado y comprueba HEAD y GET con rango para las pistas.
+Conserva el proxy y la CA; no carga ni exporta cookies. La sesión en memoria del
+proceso principal no se comparte: el informe registra esa limitación explícitamente.
+Los estados permiten distinguir rechazo a HEAD de rechazo a lectura, pero no
+prueban por sí solos que ambos procesos reciban los mismos enlaces o tokens.
+El código limita lectura/tiempo y no imprime URLs ni errores internos del proveedor.
+
+Validación en desarrollo: el programa se ejecutó en la imagen real y reportó
+`extraction_error: fetch.fail` antes de obtener pistas, consistente con el bloqueo
+conocido de esta conexión. Once pruebas relacionadas pasan, incluida una ejecución
+Node con respuestas controladas HEAD 403 / GET 206 y ausencia de datos privados.
+Pendiente ejecutar el diagnóstico ampliado en el PC Windows donde los túneles
+combinado y separados devolvieron cero bytes sin OOM de contenedores.

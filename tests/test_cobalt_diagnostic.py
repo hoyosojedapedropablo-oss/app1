@@ -32,3 +32,20 @@ class DiagnosticTests(unittest.TestCase):
         self.assertEqual(len(calls),2)
         self.assertTrue(all(r['error_code']=='YT-SERVICIO-RESPUESTA' for r in result))
         self.assertNotIn('private',str(result))
+
+    def test_upstream_probe_preserves_head_get_evidence_and_redacts_urls(self):
+        import json
+        import subprocess
+        script=diag.UPSTREAM_PROBE
+        script=script.replace("const {fetch,EnvHttpProxyAgent} = await import('undici');", "const EnvHttpProxyAgent=class {}; const fetch=async (url,options)=>{if(options.method==='HEAD')return new Response(null,{status:403});return url.searchParams.get('track')==='video'?new Response(new Uint8Array(70000),{status:206,headers:{'Content-Type':'video/mp4'}}):new Response('private error detail',{status:403});};")
+        script=script.replace("const {default:extract} = await import('./src/processing/services/youtube.js');", "const extract=async()=>({urls:['https://media.googlevideo.com/video?track=video&secret=PRIVATE','https://media.googlevideo.com/video?track=audio&secret=PRIVATE']});")
+        script=script.replace("const {getHeaders} = await import('./src/stream/shared.js');", "const getHeaders=()=>({});")
+        output=subprocess.run(['node','--input-type=module'],input=script,capture_output=True,text=True,timeout=5,check=True)
+        self.assertNotIn('PRIVATE',output.stdout+output.stderr)
+        self.assertNotIn('private error detail',output.stdout+output.stderr)
+        report=json.loads(output.stdout.strip().removeprefix('CLIP_PROBE_JSON:'))
+        self.assertEqual(report['tracks'][0]['head']['http_status'],403)
+        self.assertEqual(report['tracks'][0]['get']['http_status'],206)
+        self.assertEqual(report['tracks'][0]['get']['sample_bytes'],65536)
+        self.assertEqual(report['tracks'][1]['get']['http_status'],403)
+        self.assertEqual(report['tracks'][1]['get']['sample_bytes'],0)

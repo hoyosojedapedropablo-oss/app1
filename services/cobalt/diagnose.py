@@ -57,6 +57,81 @@ def inspect_paths(client, endpoint, key):
     return results
 
 
+
+UPSTREAM_PROBE = r"""
+// Runs in the pinned Cobalt container; never emits media URLs or provider errors.
+console.log = console.warn = console.error = () => {};
+const report = {schema:1, client:"IOS", isolated_extractor:true, shared_session_loaded:false, tracks:[]};
+let finished = false;
+function finish() {
+  if (finished) return;
+  finished = true;
+  process.stdout.write('CLIP_PROBE_JSON:'+JSON.stringify(report)+'\n');
+  process.exit(0);
+}
+setTimeout(()=>{report.deadline_reached=true;finish();},95000).unref();
+try {
+  const {fetch,EnvHttpProxyAgent} = await import('undici');
+  const {default:extract} = await import('./src/processing/services/youtube.js');
+  const {getHeaders} = await import('./src/stream/shared.js');
+  const dispatcher = new EnvHttpProxyAgent();
+  const media = await extract({id:'JCcuOv5y_9g',quality:'1080',codec:'h264',container:'mp4',isAudioOnly:false,youtubeHLS:false,dispatcher});
+  if (media.error) {
+    report.extraction_error = typeof media.error==='string' && /^[a-z0-9_.]{1,100}$/.test(media.error) ? media.error : 'EXTRACTION_FAILED';
+  } else if (!Array.isArray(media.urls) || media.urls.length !== 2) {
+    report.extraction_error = 'UNEXPECTED_TRACKS';
+  } else {
+    for (const [index, value] of media.urls.entries()) {
+      const track = {kind:index===0?'video':'audio'};
+      report.tracks.push(track);
+      const url = new URL(value);
+      if (url.protocol!=='https:' || !(url.hostname==='googlevideo.com' || url.hostname.endsWith('.googlevideo.com')) || url.username || url.password) {
+        track.error='UNEXPECTED_MEDIA_HOST';continue;
+      }
+      for (const method of ['HEAD','GET']) {
+        const result={};track[method.toLowerCase()]=result;
+        try {
+          const response = await fetch(url, {method,dispatcher,redirect:'follow',
+            headers:{...getHeaders('youtube'),...(method==='GET'?{Range:'bytes=0-65535'}:{})},
+            signal:AbortSignal.timeout(20000)});
+          result.http_status=response.status;
+          const length=response.headers.get('content-length');
+          if (length && /^\d+$/.test(length))result.content_length=Number(length);
+          const type=response.headers.get('content-type')||'';
+          result.content_category=type.startsWith('video/')?'video':type.startsWith('audio/')?'audio':type.startsWith('text/')?'text':type.includes('json')?'json':'other';
+          if (method==='GET') {
+            result.sample_bytes=0;
+            if (response.ok && response.body) {
+              const reader=response.body.getReader();
+              try {
+                while(result.sample_bytes<65536) {
+                  const {done,value:chunk}=await reader.read();if(done)break;
+                  result.sample_bytes+=Math.min(chunk.byteLength,65536-result.sample_bytes);
+                }
+              } finally {await reader.cancel().catch(()=>{});}
+            } else await response.body?.cancel();
+          } else await response.body?.cancel();
+        } catch {result.error='NETWORK_OR_TIMEOUT';}
+      }
+    }
+  }
+} catch {report.error='PROBE_FAILED';}
+finish();
+"""
+
+def upstream_probe():
+    try:
+        process = subprocess.run(["docker","exec","-i","clipstudio-download-cobalt-1",
+            "node","--input-type=module"], input=UPSTREAM_PROBE, capture_output=True,
+            text=True, timeout=110, check=True)
+        for line in process.stdout.splitlines():
+            if line.startswith("CLIP_PROBE_JSON:"):
+                return json.loads(line.removeprefix("CLIP_PROBE_JSON:"))
+    except Exception:
+        pass
+    return {"error":"PROBE_UNAVAILABLE"}
+
+
 def main():
     try:
         config=json.loads((ROOT/'data/cobalt/client.json').read_text(encoding='utf-8'))
@@ -76,6 +151,8 @@ def main():
         print('Comprobando transferencia y pistas por separado. Puede tardar unos minutos.',flush=True)
         with httpx.Client(timeout=httpx.Timeout(35,connect=10),follow_redirects=False) as client:
             report['paths']=inspect_paths(client,endpoint,config['api_key'])
+        print('Comprobando acceso a las pistas dentro del servicio. Espera hasta dos minutos.',flush=True)
+        report['upstream']=upstream_probe()
         path=ROOT/'DIAGNOSTICO_COBALT.json'
         path.write_text(json.dumps(report,indent=2),encoding='utf-8')
         print(json.dumps(report,indent=2))
