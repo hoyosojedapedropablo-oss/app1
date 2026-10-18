@@ -196,6 +196,31 @@ def upstream_probe():
     return {"error":"PROBE_UNAVAILABLE"}
 
 
+def transfer_events():
+    """Read only our numeric/enum telemetry, never expose raw container logs."""
+    try:
+        result=subprocess.run(['docker','logs','--tail','500','clipstudio-download-cobalt-1'],
+            capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=15,check=True)
+        events=[]
+        stages={'refresh','retry','range_failure'}
+        errors={'UND_ERR_SOCKET','UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT',
+            'ECONNRESET','ETIMEDOUT','EPIPE','MEDIA_RANGE_TRUNCATED','MEDIA_RANGE_REJECTED',
+            'MEDIA_RANGE_OVERSIZED','MEDIA_RANGE_FAILED'}
+        for line in (result.stdout+'\n'+result.stderr).splitlines():
+            if not line.startswith('CLIP_MEDIA_EVENT:') or len(line)>2048:continue
+            try:event=json.loads(line.removeprefix('CLIP_MEDIA_EVENT:'))
+            except ValueError:continue
+            if not isinstance(event,dict) or event.get('stage') not in stages:continue
+            safe={'stage':event['stage']}
+            if event.get('error') in errors:safe['error']=event['error']
+            for field in ('offset','end','received','status','attempt'):
+                value=event.get(field)
+                if type(value) is int and 0<=value<=12*1024**3:safe[field]=value
+            events.append(safe)
+        return events[-40:]
+    except (OSError,subprocess.SubprocessError):return []
+
+
 def validation_summary():
     try:
         records=json.loads((ROOT/'data/cobalt/validation.json').read_text(encoding='utf-8')).get('results',[])
@@ -221,7 +246,7 @@ def main():
         parsed=urlsplit(endpoint)
         if parsed.scheme!='http' or parsed.hostname not in ('127.0.0.1','localhost') or parsed.port!=9000 or parsed.username or parsed.password:
             raise ValueError('Solo se diagnostica el servicio local instalado.')
-        report={'description':'Media prefixes only; not a successful full download','containers':{},'validation_results':validation_summary()}
+        report={'description':'Media prefixes only; not a successful full download','containers':{},'validation_results':validation_summary(),'full_transfer_events':transfer_events()}
         for name in ('cobalt','pot-provider','session-bridge'):
             try:
                 output=subprocess.run(['docker','inspect','--format','{{json .State}}','clipstudio-download-'+name+'-1'],capture_output=True,text=True,timeout=10,check=True)

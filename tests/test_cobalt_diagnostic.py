@@ -65,3 +65,13 @@ class DiagnosticTests(unittest.TestCase):
             self.assertEqual(result[0]['transfer'],{'downloaded_bytes':100})
             self.assertNotIn('PRIVATE',json.dumps(result))
             self.assertNotIn('identity',json.dumps(result))
+
+
+class TransferEventsTests(unittest.TestCase):
+    def test_transfer_logs_whitelist_fields_and_ignore_private_messages(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        result=SimpleNamespace(stdout='PRIVATE log\nCLIP_MEDIA_EVENT:{"stage":"range_failure","offset":14680064,"status":403,"error":"MEDIA_RANGE_REJECTED","url":"PRIVATE"}\nCLIP_MEDIA_EVENT:{"stage":"retry","error":"PRIVATE","received":7}\nCLIP_MEDIA_EVENT:invalid\n',stderr='')
+        with patch.object(diag.subprocess,'run',return_value=result):events=diag.transfer_events()
+        self.assertEqual(events,[{'stage':'range_failure','offset':14680064,'status':403,'error':'MEDIA_RANGE_REJECTED'},{'stage':'retry','received':7}])
+        self.assertNotIn('PRIVATE',str(events))

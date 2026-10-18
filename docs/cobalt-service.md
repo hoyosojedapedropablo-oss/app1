@@ -294,3 +294,26 @@ Se muestran fases y avance durante la transferencia; si falla, el registro guard
 solo duración esperada y contadores de bytes observados, sin claves ni URLs.
 `start` fuerza recreación para cargar los archivos de preload montados, incluso
 cuando las rutas y nombres del Compose no han cambiado.
+
+### Corte de transferencia observado en Windows
+
+El siguiente diagnóstico confirmó duración original 3624 s, tamaño agregado
+977 389 735 bytes y corte tras 14 680 064 bytes recibidos. Los tres contenedores
+seguían activos, sin OOM. Los prefijos de 64 KiB no permiten determinar el error
+de la petición real ni validar una transferencia completa. Los OK históricos
+sin versión de verificación 2 siguen invalidados.
+
+El lector anterior no reintentaba cuerpos truncados o cortes de socket y omitía
+la renovación de enlace de Cobalt durante la lectura. El lector ahora retiene
+cada bloque (máximo 8 MB) hasta verificar su longitud, reintenta errores de red
+transitorios dos veces por bloque con máximo doce por pista y respeta abortos.
+Ante 403 después de avanzar y agotar tamaños menores, conserva el callback de
+renovación de Cobalt, máximo tres veces; un rechazo persistente sigue fallando.
+Cada respuesta renovada debe conservar tamaño total y rango exacto.
+
+`full_transfer_events` recoge únicamente eventos propios con posiciones numéricas,
+estados HTTP y códigos de error enumerados, desde los últimos logs de Cobalt.
+Nunca incluye logs sin filtrar, URLs, cuerpos de error ni material de sesión.
+Pruebas: corte HTTP real tras el primer bloque de 8 MB, recuperación exacta de
+9 MB; truncamiento persistente limitado; renovación ante 403 y rechazo de un
+tamaño original cambiado. La descarga completa de YouTube aún no está validada.
