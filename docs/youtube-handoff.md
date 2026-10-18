@@ -37,3 +37,30 @@ El siguiente paso externo es disponer de un entorno de ejecución con acceso rea
 funcional a YouTube para completar las cuatro descargas y revisar los MP4.
 
 La comprobación directa del proveedor anónimo devolvió HTTP 503; el puente reportó `attestation_ready:false`. Las instrucciones de arranque opcionales se guardaron en el borrador del entorno, sin cambiar la política de red ni publicar la configuración.
+
+## Diagnóstico Windows posterior a la recuperación de bloques (18 de octubre)
+
+El informe del usuario muestra la petición fallida real: HTTP 403 para
+`15274496–15340031`, tras tres renovaciones de enlace, sin recibir cuerpo.
+No confundirlo con un socket transitorio ni con el rechazo de red del entorno
+cloud. El contador del cliente refleja 14 680 064 bytes entregados en bloques
+HTTPX de 1 MiB; el lector interno había avanzado hasta 15 274 496. No son dos
+fallos distintos. Los tres contenedores seguían activos, sin OOM.
+
+La ruta rápida de Cobalt usa IOS y `useSession=false` para 1080p. Que el proveedor
+esté sano no establece que esa petición use su atestación. El código vigente de
+yt-dlp (`yt_dlp/extractor/youtube/_base.py`, cliente `ios`) declara POT requerido
+para HTTPS, con excepción cuando se aporta token de player. Esto plantea una
+hipótesis de compatibilidad de cliente/atestación, no prueba la causa exacta.
+No adjuntar un token web a IOS ni cambiar clientes a ciegas.
+
+`services/cobalt/diagnose_access.py` es una comparación de lectura, independiente
+por proceso, entre la ruta IOS predeterminada y las rutas WEB_EMBEDDED/WEB con la
+sesión anónima de la instancia. La separación evita contaminar el visitor_data
+con la primera sesión cacheada de Cobalt. La calidad 2160 se usa únicamente como
+selector del flujo de sesión del extractor fijado; no modifica la app ni habilita
+calidades. Muestrea 64 KiB por pista al inicio, en el punto de corte observado y
+a mitad del archivo; verifica rango, bytes y tipo de medio. No descarga el video
+completo y ningún muestreo puede habilitar el servicio. Solo guarda presencia de
+parámetros y datos numéricos/enumerados, nunca URLs, tokens o logs sin filtrar.
+Resultado esperado: `DIAGNOSTICO_ACCESO.json`. Pendiente de ejecutarse en Windows.
