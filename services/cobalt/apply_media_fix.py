@@ -11,7 +11,7 @@ import urllib.request
 import uuid
 
 ROOT=Path(__file__).resolve().parents[2]
-REVISION='b37bb4558d6e6aec0f48804d71959af60cfb9690'
+REVISION='13b513ff78042416c1588fcc99fb0575ccd91b32'
 SOURCE_ROOT='https://raw.githubusercontent.com/hoyosojedapedropablo-oss/app1/'+REVISION+'/'
 BASE=SOURCE_ROOT+'services/cobalt/'
 ROOT_FILES={'cobalt_import.py'}
@@ -21,10 +21,10 @@ def target(root,name):return root/name if name in ROOT_FILES else root/'services
 FILES={
     "head-fallback.mjs": "d522dd8baafd9411896d4c6110e1cdad235e169c3d1b7480382e48c5f6aad929",
     "media-probe.mjs": "40f28d578f502255e38b21251ac7f2d832a6aaa243cc229eba283b2d7cc2b101",
-    "media-chunks.mjs": "b1223b6219b76b7bb51b00f8175c18e9a2c4e9d46b388d2c92eb0e4d2c85390c",
+    "media-chunks.mjs": "05d4e41f437bc0e58fde68846d387e0744ad569afd10bf2dfb5419581a7ed868",
     "compose.yaml": "d4c3dce196a5718d26c846146205a12dcda49fc29ba3d37151e8792df4b3cbe2",
     "manage.py": "9e893d330ca7124e47ae6b83ca58deb361f355e61bbac7e6b29896b9117063b6",
-    "diagnose.py": "a0ca6dae708d6054915d3c0b56ef1261e6d9bda5f81bfdc3451359a637167a1d",
+    "diagnose.py": "ab0e42bd55390975258b50dd75b9b9942913d374e2c8cd0fe6fb04769ab109da",
     "cobalt_import.py": "d878265c0474e78d47ff69d3be100d6a292d878402b80de4b06296d33eec5fce"
 }
 PREVIOUS_FILES={
@@ -139,7 +139,7 @@ def main():
             print('El servicio corregido no arrancó. Se restauraron los archivos anteriores.',flush=True)
             subprocess.run([str(python),str(manage),'start'],cwd=ROOT)
             return 1
-        print('Actualización aplicada. Verificando pistas completas y duración original. Los archivos antiguos de 64 segundos no se reutilizarán.',flush=True)
+        print('Actualización aplicada. Verificando pistas completas y duración original, con recuperación limitada de cortes. Los archivos antiguos de 64 segundos no se reutilizarán.',flush=True)
         result=subprocess.run([str(python),str(manage),'validate','--quality','fast','--reuse'],cwd=ROOT)
         if result.returncode:
             print('La actualización se instaló, pero la prueba real no pasó. Generando el diagnóstico; espera...',flush=True)
