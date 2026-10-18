@@ -64,3 +64,42 @@ a mitad del archivo; verifica rango, bytes y tipo de medio. No descarga el video
 completo y ningún muestreo puede habilitar el servicio. Solo guarda presencia de
 parámetros y datos numéricos/enumerados, nunca URLs, tokens o logs sin filtrar.
 Resultado esperado: `DIAGNOSTICO_ACCESO.json`. Pendiente de ejecutarse en Windows.
+
+## Comparación recibida y candidato nativo (18 de octubre)
+
+`DIAGNOSTICO_ACCESO.json` confirma IOS: comienzo 206 con rango válido en ambas
+pistas; punto 15 274 496 y mitad de ambas pistas 403, sin cuerpo; sin parámetros
+`pot` ni `n` en las URLs. WEB_EMBEDDED devuelve `content.video.unavailable`;
+WEB registra `extraction_ok:false` sin categoría adicional. No afirmar que se
+ha probado un bloqueo de IP ni que el video realmente sea privado. Ningún método
+comparado confirmó una transferencia completa.
+
+El puente Cobalt solicita `/get_pot` con cuerpo vacío. La integración oficial
+BgUtils para yt-dlp transmite en cambio challenge, content_binding e
+innertube_context desde la solicitud. No es válido asumir que el token genérico
+de Cobalt satisface la vinculación de un cliente diferente.
+
+`services/cobalt/test_native_download.py` prepara una prueba experimental con
+cliente mweb y complemento oficial 2.0.2, mismo proveedor ya instalado. Agrega
+solo ese wheel a la venv actual si falta, fija y verifica SHA-256 del artefacto
+PyPI antes de instalar sin dependencias. No actualiza yt-dlp ni cambia el backend
+configurado de la app. Rechaza una versión de plugin diferente ya instalada.
+
+No publica puertos de Docker ni modifica Compose: un relay HTTP temporal ligado
+a loopback con ruta aleatoria rechaza Origin, rutas arbitrarias y desactivación
+TLS. Pasa cuerpos JSON por stdin a `deno eval` del proveedor fijo mediante
+`docker exec`. Conserva challenge/context/binding del complemento; tokens solo
+en memoria, nunca en reportes o logs. El relay se cierra al terminar.
+
+La prueba descarga ambos videos completos, uno a uno, hasta1080p H264/AAC; usa
+la duración e identidad extraídas del original y `_verify_media` antes de aceptar
+cada MP4. Elimina nuevos parciales al fallar y no activa el servicio. Registra
+fases, categorías y contadores seguros en `RESULTADO_DESCARGA_NATIVA.json`.
+No usa cuentas, cookies de navegador ni instancias públicas de terceros.
+
+Comprobado localmente: wheel SHA/carga automática real del plugin, transporte
+stdin/JSON en Deno de la imagen fijada sin red, seis pruebas de relay/protecciones,
+identidad/duración, checksum y rechazo de parciales. La comprobación HTTPS directa
+a YouTube desde cloud vuelve a fallar en el proxy con 403 antes de YouTube.
+La descarga completa con este candidato queda pendiente en Windows; no llamarlo
+solución ni habilitarlo sin el resultado real y revisión de los MP4.
