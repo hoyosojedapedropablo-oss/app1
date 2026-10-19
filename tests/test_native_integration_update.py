@@ -55,7 +55,10 @@ class IntegrationUpdateTests(unittest.TestCase):
    self.assertEqual((root/'native_import.py').read_bytes(),b'custom')
  def test_manifest_matches_install_sources_and_repeat_update_keeps_proof_files(self):
   source=Path(__file__).parents[1]
-  files={name:(source/name).read_bytes() for name in update.FILES}
+  # This installer deliberately preserves the earlier 360p release. Its pinned
+  # sources are immutable even when the working checkout develops HD support.
+  import subprocess
+  files={name:subprocess.check_output(['git','show',update.REVISION+':'+name],cwd=source) for name in update.FILES}
   self.assertTrue(files)
   self.assertTrue(all(update.digest(content)==update.FILES[name] for name,content in files.items()))
   with tempfile.TemporaryDirectory() as tmp:

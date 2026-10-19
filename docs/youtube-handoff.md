@@ -173,3 +173,18 @@ Pasaron 130 pruebas Python, incluyendo 5 nuevas de integración real con el
 complemento, reproducción del rechazo anterior, selección mínima y comprobación
 de resolución. Pendiente: descarga HD real en el PC del usuario, reproducción y
 posterior integración. La app actual debe seguir funcionando en la ruta guardada.
+
+## HD completo confirmado y revisado por el usuario
+
+Se recibió `RESULTADO_DESCARGA_HD.json`: ambos videos completos a 1920×1080 H264,
+3624 s/978302002 bytes y 752 s/551524562 bytes; sin advertencias; cuatro solicitudes,
+dos tokens, cero fallos del relay. El usuario confirmó imagen y audio al inicio,
+a mitad y al final mediante respuesta explícita. La ruta en minúsculas resolvió
+la incompatibilidad reproducida del complemento y permitió estas descargas HD.
+
+Guía actual: `docs/youtube-hd-solucion-validada.md`. Se prepara instalador HD
+separado con revalidación local de los dos archivos, mínimo720, rollback y fuentes
+fijadas. La app preserva dimensiones medidas y excluye los trabajos 360p de la
+caché HD. La opción Rápida descargará 720–1080p; original sigue pendiente.
+No atribuir éxito del botón actualizado en Windows hasta que el usuario lo pruebe.
+El respaldo/tag de la solución anterior se conserva sin cambios.

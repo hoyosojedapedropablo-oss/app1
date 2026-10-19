@@ -57,3 +57,52 @@ class NativeImportTests(unittest.TestCase):
    self.assertEqual(options['extractor_args']['youtube']['player_client'],['mweb'])
    self.assertEqual(options['http_chunk_size'],1024*1024)
    self.assertNotIn('cookiesfrombrowser',options)
+ def test_hd_cache_imports_real_720p_and_keeps_resolution_in_editor_metadata(self):
+  import app as backend
+  with tempfile.TemporaryDirectory() as tmp:
+   root=Path(tmp);path=root/'data/cobalt/hd-validation/proof/download.mp4';path.parent.mkdir(parents=True)
+   subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=size=1280x720:rate=5','-f','lavfi','-i','sine=frequency=440','-t','2','-c:v','libx264','-c:a','aac',str(path)],capture_output=True,check=True)
+   record={'video_id':'JCcuOv5y_9g','success':True,'expected_duration':2,'bytes':path.stat().st_size,'path':str(path.relative_to(root))}
+   config=root/'data/youtube-native.json';config.write_text(json.dumps({'enabled':True,'enabled_modes':['fast'],'verification_version':2,'minimum_height':720,'verified_files':[record]}))
+   jobs=root/'jobs';jobs.mkdir()
+   with patch.object(native,'ROOT',root),patch.object(native,'CONFIG_PATH',config),patch.object(backend,'DATA',jobs),patch.dict(backend.JOBS,{},clear=True),patch.dict(backend.IMPORTS,{},clear=True),patch.object(native,'relay_request',side_effect=AssertionError('cached HD must not download')):
+    ident='f'*32;backend.IMPORTS[ident]={'status':'queued'}
+    backend.import_youtube(ident,'https://www.youtube.com/watch?v=JCcuOv5y_9g')
+    state=backend.IMPORTS[ident]
+    self.assertEqual(state['status'],'ready')
+    self.assertEqual(state['job']['youtube']['video_height'],720)
+    self.assertIn('720p',state['quality'])
+ def test_360p_jobs_and_proof_files_cannot_satisfy_hd_request(self):
+  self.assertFalse(native.reusable_job({'youtube_verification_version':2,'youtube':{'video_width':640,'video_height':360}},{'minimum_height':720}))
+  self.assertFalse(native.reusable_job({'youtube_verification_version':2},{'minimum_height':720}))
+  self.assertTrue(native.reusable_job({'youtube_verification_version':2,'youtube':{'video_width':1920,'video_height':1080}},{'minimum_height':720}))
+  with tempfile.TemporaryDirectory() as tmp:
+   root=Path(tmp);path,record,config=self.fixture(root)
+   destination=root/'data/cobalt/hd-validation/proof/download.mp4';destination.parent.mkdir(parents=True);path.rename(destination)
+   record['path']=str(destination.relative_to(root))
+   with patch.object(native,'ROOT',root):self.assertIsNone(native.cached_source(record,record['video_id'],720))
+ def test_real_360p_output_is_rejected_even_when_extractor_claims_1080p(self):
+  import yt_dlp
+  options={}
+  class Fake:
+   def __init__(self,value):options.update(value)
+   def __enter__(self):return self
+   def __exit__(self,*args):pass
+   def extract_info(self,*a,**k):return {'id':'JCcuOv5y_9g','duration':2,'title':'Example','height':1080}
+   def process_ie_result(self,*a,**k):
+    path=options['outtmpl'].replace('%(ext)s','mp4')
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=size=640x360:rate=5','-f','lavfi','-i','sine=frequency=440','-t','2','-c:v','libx264','-c:a','aac',path],capture_output=True,check=True)
+  with tempfile.TemporaryDirectory() as tmp,patch.object(native,'configuration',return_value={'minimum_height':720}),patch.object(native,'version',return_value='2.0.2'),patch.object(native,'provider_server',return_value=(None,'http://127.0.0.1:1234/test',{})),patch.object(native,'relay_request',return_value=(200,{'version':'2.0.2'})),patch('youtube_import.javascript_options',return_value={}),patch.object(yt_dlp,'YoutubeDL',Fake):
+   with self.assertRaises(native.CobaltFailure):native.download('https://youtu.be/JCcuOv5y_9g',Path(tmp),lambda *a,**k:None)
+   self.assertFalse((Path(tmp)/'download.mp4').exists())
+   self.assertEqual(options['format'].count('[height>=720]'),2)
+ def test_api_does_not_return_previously_imported_360p_job_for_hd(self):
+  import app as backend
+  from fastapi.testclient import TestClient
+  with tempfile.TemporaryDirectory() as tmp,patch.object(backend,'DATA',Path(tmp)),patch.dict(backend.JOBS,{},clear=True),patch.dict(backend.IMPORTS,{},clear=True),patch.object(native,'configuration',return_value={'minimum_height':720}):
+   old='a'*32;folder=Path(tmp)/old;folder.mkdir();(folder/'source').write_bytes(b'old')
+   backend.JOBS[old]={'id':old,'youtube_url':'https://www.youtube.com/watch?v=JCcuOv5y_9g','youtube_quality':'fast','youtube_verification_version':2,'youtube':{'video_width':640,'video_height':360}}
+   with patch.object(backend.import_pool,'submit') as submit:
+    response=TestClient(backend.app).post('/api/youtube',json={'url':'https://youtu.be/JCcuOv5y_9g','quality':'fast'})
+   self.assertEqual(response.status_code,200);self.assertEqual(response.json()['status'],'queued')
+   submit.assert_called_once()

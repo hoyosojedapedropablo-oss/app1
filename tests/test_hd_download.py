@@ -36,12 +36,13 @@ class HDTests(unittest.TestCase):
    provider=BgUtilHTTPPTP(YoutubeIE(ydl),MagicMock(),{'base_url':['http://127.0.0.1:1234/MixedCaseRoute']})
    self.assertEqual(provider._base_url,'http://127.0.0.1:1234/mixedcaseroute')
  def test_original_route_reproduces_403_without_reaching_the_provider(self):
-  import native_import
+  old_spec=importlib.util.spec_from_file_location('original_native_probe',Path(__file__).parents[1]/'services/cobalt/test_native_download.py')
+  original=importlib.util.module_from_spec(old_spec);old_spec.loader.exec_module(original)
   import yt_dlp
   from yt_dlp.extractor.youtube import YoutubeIE
   from yt_dlp.extractor.youtube.pot.provider import PoTokenRequest,PoTokenContext,PoTokenProviderRejectedRequest
-  with patch.object(native_import.secrets,'token_urlsafe',return_value='MixedCaseRoute'):
-   server,base,counters=native_import.provider_server(lambda *args:(200,{'version':'2.0.2'}))
+  with patch.object(original.secrets,'token_urlsafe',return_value='MixedCaseRoute'):
+   server,base,counters=original.provider_server(lambda *args:(200,{'version':'2.0.2'}))
   try:
    with yt_dlp.YoutubeDL({'quiet':True}) as ydl:
     from yt_dlp_plugins.extractor.getpot_bgutil_http import BgUtilHTTPPTP
