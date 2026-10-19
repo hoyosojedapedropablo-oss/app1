@@ -63,3 +63,7 @@ petición de token a un proveedor de prueba, rechazo de 360p aunque los metadato
 digan 1080p, importación de MP4 720p real al editor, y exclusión de caché 360p.
 La evidencia remota válida de HD es el informe Windows y la revisión del usuario;
 las pruebas locales no sustituyen esa descarga real.
+
+La etiqueta `youtube-descarga-hd-validada` conserva esta integración y el instalador
+HD. La suite completa pasó 139 pruebas. El instalador y el código se verificaron
+localmente; la última comprobación pendiente es usar el botón actualizado en Windows.
