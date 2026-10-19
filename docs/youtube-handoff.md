@@ -138,3 +138,38 @@ hace backup y activa el archivo de configuración al final. Si falla una escritu
 restaura fuentes/configuración. No reescribe claves ni borra videos previos.
 La integración con el editor pasó localmente con MP4 real de audio/video y la
 ruta API de reproducción; la comprobación final del botón en Windows está pendiente.
+
+## Respaldo solicitado y mejora HD separada
+
+El usuario confirmó que el botón de la app ya importó el video y posteriormente
+probó un enlace nuevo; informó que la descarga funcionaba pero quedaba en 360p.
+Esto actualiza el estado pendiente del botón: funcionamiento confirmado en su PC,
+con la limitación de calidad indicada. No confundirlo con validación de HD.
+
+La solución quedó identificada por la etiqueta Git `youtube-descarga-completa-validada`
+en `498ecc4dae2c1430b088fc9ec31e412f51dfa26d`. La guía permanente es
+`docs/youtube-solucion-validada.md`. Se generó un ZIP de ese commit con guía y
+manifiesto SHA-256 de fuentes clave, excluyendo datos/venv/credenciales. El usuario
+necesita conservar sus datos y el informe de prueba en un respaldo privado propio.
+
+Se reprodujo una causa concreta del relay sin solicitudes: el complemento oficial
+BgUtilsHTTP 2.0.2 pasa `base_url` por `_configuration_arg` sin `casesense=True`,
+convirtiendo su valor a minúsculas. `secrets.token_urlsafe` genera una ruta con
+posibles mayúsculas y el servidor compara exactamente, por lo que responde 403.
+Prueba con el complemento real y el servidor real local: ruta MixedCaseRoute da
+rechazo sin invocar el proveedor; ruta hexadecimal minúscula permite `/ping` y
+`/get_pot`, conserva content_binding y entrega token de prueba. No es un test de
+aceptación de YouTube ni una validación criptográfica del token simulado.
+
+`services/cobalt/test_hd_download.py` mantiene la prueba fuera del importador
+activo. Usa `secrets.token_hex(24)` y selección H264/MP4 de altura 720–1080, sin
+alternativa 360p. Después de validar audio/duración completos, ffprobe debe medir
+ambas dimensiones de video >=720. Guarda archivos en `data/cobalt/hd-validation`
+y evidencia en `RESULTADO_DESCARGA_HD.json`, incluyendo resolución/códec medidos
+y contadores del proveedor. No cambia la configuración activa, no sobrescribe
+los MP4 previos y no habilita calidades automáticamente.
+
+Pasaron 130 pruebas Python, incluyendo 5 nuevas de integración real con el
+complemento, reproducción del rechazo anterior, selección mínima y comprobación
+de resolución. Pendiente: descarga HD real en el PC del usuario, reproducción y
+posterior integración. La app actual debe seguir funcionando en la ruta guardada.
