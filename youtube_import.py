@@ -132,6 +132,9 @@ class ImportAccessFailure(Exception):
 def download(url,folder,progress,mode='fast',browser='none'):
  """Public first. Reading a browser is an explicit, last-resort opt-in, never a prerequisite."""
  if browser not in ('none','managed','firefox','chrome','edge','brave'):raise ValueError('Navegador no admitido.')
+ from native_import import configuration as native_configuration,download as native_download
+ if native_configuration() is not None:
+  return native_download(url,folder,progress,mode=mode)
  from cobalt_import import configuration,download as service_download
  if configuration() is not None:
   return service_download(url,folder,progress,mode=mode)

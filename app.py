@@ -106,7 +106,8 @@ def import_youtube(ident,url,quality="fast",browser="none"):
   path.rename(folder/'source')
   job=register_video(ident,folder/'source',name)
   job['youtube']={key:IMPORTS[ident][key] for key in ['title','channel','thumbnail','duration','quality'] if key in IMPORTS[ident]}
-  job['youtube_url']=url;job['youtube_quality']=quality;save_job(job)
+  job['youtube_url']=url;job['youtube_quality']=quality
+  job['youtube_verification_version']=IMPORTS[ident].get('verification_version',0);save_job(job)
   IMPORTS[ident].update(status='ready',progress=100,message='Video listo para analizar.',job=job)
  except Exception as e:
   from youtube_import import diagnose_error
@@ -134,7 +135,10 @@ def start_youtube(options:YouTubeInput,request:Request):
  try:url=canonical_url(options.url)
  except ValueError as e:raise HTTPException(400,str(e))
  if any(v['status'] in ('queued','downloading') for v in IMPORTS.values()):raise HTTPException(409,'Ya hay una descarga en curso. Espera a que termine.')
+ from native_import import configuration as native_configuration
+ native_enabled=native_configuration() is not None
  for job in JOBS.values():
+  if native_enabled and job.get('youtube_verification_version')!=2:continue
   if job.get('youtube_url')==url and job.get('youtube_quality')==options.quality and (DATA/job['id']/'source').exists():
    ident=uuid.uuid4().hex
    IMPORTS[ident]=dict(id=ident,status='ready',progress=100,access_mode='cached',integration_version=4,message='Video recuperado: ya estaba descargado.',job=job,**job.get('youtube',{}))

@@ -103,3 +103,38 @@ identidad/duración, checksum y rechazo de parciales. La comprobación HTTPS dir
 a YouTube desde cloud vuelve a fallar en el proxy con 403 antes de YouTube.
 La descarga completa con este candidato queda pendiente en Windows; no llamarlo
 solución ni habilitarlo sin el resultado real y revisión de los MP4.
+
+## Descargas nativas completas confirmadas e integración (18 de octubre)
+
+El usuario aportó `RESULTADO_DESCARGA_NATIVA.json`, `full_downloads_verified:true`:
+JCcuOv5y_9g 3624 s / 247 025 061 bytes; rcPWJKs5It4 752 s / 68 933 234 bytes.
+Ambos pasaron `_verify_media` y el usuario confirmó reproducción/audio correcto.
+Las versiones fueron yt-dlp 2026.8.19 y plugin 2.0.2. Advertencias categorizadas
+HTTP_403 y TOKEN_WARNING en ambos; el relay registró CERO solicitudes/tokens.
+Por tanto, no atribuir el éxito a BgUtils, no afirmar que la atestación funciona
+ni prometer 1080p. La consola mostró itag 18, formato progresivo de calidad
+inferior; la selección de formatos conserva el mejor H264/MP4 disponible hasta
+1080p con fallback progresivo. La calidad original sigue sin validar.
+
+`native_import.py` incorpora exactamente cliente mweb, selección de formatos,
+fragmentos de 1 MiB, límites, EJS/Deno y relay de la prueba. Se enruta antes de
+Cobalt únicamente cuando `data/youtube-native.json` activa versión 2/modo fast.
+Las descargas nuevas requieren identidad/duración original y verificación completa
+antes de devolver el archivo al registro de la app. Nunca leen cookies del
+navegador. El relay mantiene loopback/ruta aleatoria/TLS verificado y se cierra.
+Se conserva por equivalencia con la prueba; su necesidad no quedó demostrada.
+
+Los dos MP4 de la prueba pueden copiarse al nuevo trabajo del editor sin otra
+transferencia; deben estar dentro de `data/cobalt/native-validation`, con bytes
+y duración comprobados nuevamente, tanto en el origen como en la copia. Los
+trabajos antiguos sin `youtube_verification_version:2` no se reutilizan mientras
+esté activa la integración nativa. La app guarda esa versión solo al finalizar
+la verificación. El usuario debe reiniciar la ventana del servidor para cargar
+los módulos nuevos y luego probar Importar video de YouTube en la página.
+
+`services/cobalt/integrate_native.py` verifica el informe y ambos MP4 en el PC,
+descarga cuatro fuentes fijadas por commit/SHA-256, conserva ediciones desconocidas,
+hace backup y activa el archivo de configuración al final. Si falla una escritura,
+restaura fuentes/configuración. No reescribe claves ni borra videos previos.
+La integración con el editor pasó localmente con MP4 real de audio/video y la
+ruta API de reproducción; la comprobación final del botón en Windows está pendiente.
