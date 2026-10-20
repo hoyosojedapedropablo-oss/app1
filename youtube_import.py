@@ -88,7 +88,7 @@ def _download_attempt(url,folder,progress,mode="fast",browser="none"):
   progress(98,'Preparando audio y video para el editor…')
  def match(info,*,incomplete=False):
   if info.get('is_live') or info.get('live_status') in ('is_live','is_upcoming'):return 'Los directos deben haber terminado antes de descargarlos.'
-  if info.get('duration') and info['duration']>7200:return 'La duración máxima es 120 minutos.'
+  if info.get('duration') and info['duration']>12000:return 'La duración máxima es 200 minutos.'
   if info.get('filesize',0) and info['filesize']>MAX_BYTES:return 'El video supera 12 GB.'
  class Logger:
   def debug(self,*args):pass
@@ -117,7 +117,7 @@ def _download_attempt(url,folder,progress,mode="fast",browser="none"):
   ident=parse_qs(urlsplit(url).query)['v'][0]
   progress(0,'Descargando video de YouTube…',title=info.get('title') or 'Video de YouTube',channel=info.get('channel') or info.get('uploader') or '',duration=info.get('duration'),thumbnail=f'https://i.ytimg.com/vi/{ident}/hqdefault.jpg',quality='Hasta 1080p' if mode=='fast' else 'Máxima disponible')
   info=ydl.process_ie_result(info,download=True)
- if not info:raise ValueError('No se pudo importar el video. Verifica que dure hasta 120 minutos y que el directo haya terminado.')
+ if not info:raise ValueError('No se pudo importar el video. Verifica que dure hasta 200 minutos y que el directo haya terminado.')
  path=folder/'download.mp4'
  if not path.exists():raise ValueError('No se obtuvo un archivo de video válido.')
  if path.stat().st_size>MAX_BYTES:raise ValueError('El video supera 12 GB.')

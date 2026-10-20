@@ -46,9 +46,9 @@ def decode_audio(path):
 @app.get('/')
 def home(): return FileResponse(ROOT/'static/index.html',headers={'Cache-Control':'no-store'})
 
-def register_video(ident,path,name):
+def register_video(ident,path,name,*,max_duration=7200):
  info=probe(path);duration=float(info['format']['duration'])
- if not 0<duration<=7200:raise ValueError('La duración máxima es 120 minutos.')
+ if not 0<duration<=max_duration:raise ValueError(f'La duración máxima es {max_duration//60} minutos.')
  stream=next((s for s in info['streams'] if s['codec_type']=='video'),None)
  if stream is None:raise ValueError('El archivo no contiene video.')
  try:fps=float(Fraction(stream.get('avg_frame_rate','30/1')))
@@ -104,7 +104,7 @@ def import_youtube(ident,url,quality="fast",browser="none"):
   progress(0,'Consultando video de YouTube…',access_mode='none',requested_browser=browser,integration_version=4)
   path,name=download(url,folder,progress,mode=quality,browser=browser)
   path.rename(folder/'source')
-  job=register_video(ident,folder/'source',name)
+  job=register_video(ident,folder/'source',name,max_duration=12000)
   job['youtube']={key:IMPORTS[ident][key] for key in ['title','channel','thumbnail','duration','quality','video_width','video_height'] if key in IMPORTS[ident]}
   job['youtube_url']=url;job['youtube_quality']=quality
   job['youtube_verification_version']=IMPORTS[ident].get('verification_version',0);save_job(job)

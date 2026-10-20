@@ -111,7 +111,7 @@ def _read_json(response):
         if isinstance(code, str):
             code = code.removeprefix('error.api.')
         if code == 'content.too_long':
-            raise CobaltFailure('YT-VALIDACION', 'La duración máxima es 120 minutos.')
+            raise CobaltFailure('YT-VALIDACION', 'La duración máxima es 200 minutos.')
         if code in ('content.video.private', 'content.video.age', 'content.video.unavailable', 'content.video.region', 'content.video.live'):
             raise CobaltFailure('YT-RESTRINGIDO', 'El servicio no puede descargar este video por su disponibilidad o restricciones de acceso.')
         if code in ('youtube.no_session_tokens', 'youtube.token_expired'):
@@ -129,7 +129,7 @@ def _source_metadata(payload,url):
     duration=payload.get('expected_duration')
     size=payload.get('expected_media_bytes')
     if (payload.get('source_video_id')!=ident or type(duration) not in (int,float) or
-        not isfinite(duration) or not 0<duration<=7200 or type(size) is not int or not 0<size<=MAX_BYTES):
+        not isfinite(duration) or not 0<duration<=12000 or type(size) is not int or not 0<size<=MAX_BYTES):
         raise CobaltFailure('YT-SERVICIO-RESPUESTA','El servicio no confirmó la identidad, duración y tamaño del video original. No se aceptará una descarga sin esos datos.')
     return float(duration),size
 
