@@ -31,7 +31,7 @@ def cached_source(record,ident,minimum_height=0):
     try:
         if record.get('video_id')!=ident or record.get('success') is not True: return None
         duration=record['expected_duration']
-        if type(duration) not in (int,float) or not math.isfinite(duration) or not 0<duration<=7200:return None
+        if type(duration) not in (int,float) or not math.isfinite(duration) or not 0<duration<=12000:return None
         path=(ROOT/record['path']).resolve()
         proof_dir='hd-validation' if minimum_height else 'native-validation'
         path.relative_to((ROOT/'data/cobalt'/proof_dir).resolve())
@@ -182,7 +182,7 @@ def download(url,folder,progress,mode='fast'):
                     speed=data.get('speed'),eta=data.get('eta'))
         def match(info,*,incomplete=False):
             duration=info.get('duration')
-            if duration is not None and (type(duration) not in (int,float) or not math.isfinite(duration) or not 0<duration<=7200):return 'La duración máxima es 120 minutos.'
+            if duration is not None and (type(duration) not in (int,float) or not math.isfinite(duration) or not 0<duration<=12000):return 'La duración máxima es 200 minutos.'
             if info.get('is_live') or info.get('live_status') in ('is_live','is_upcoming'):return 'Los directos deben haber terminado antes de descargarlos.'
         options={'noplaylist':True,'quiet':True,'logger':Logger(),'cachedir':False,
             'js_runtimes':javascript_options(),'socket_timeout':30,'retries':2,'fragment_retries':2,
@@ -195,7 +195,7 @@ def download(url,folder,progress,mode='fast'):
         with yt_dlp.YoutubeDL(options) as ydl:
             info=ydl.extract_info(url,download=False)
             expected=info.get('duration') if isinstance(info,dict) else None
-            if not info or info.get('id')!=ident or type(expected) not in (int,float) or not math.isfinite(expected) or not 0<expected<=7200:
+            if not info or info.get('id')!=ident or type(expected) not in (int,float) or not math.isfinite(expected) or not 0<expected<=12000:
                 raise CobaltFailure('YT-SERVICIO-RESPUESTA','No se pudo confirmar la identidad y duración del video original.')
             formats=info.get('requested_formats') or [info]
             announced=sum(item.get('filesize') or item.get('filesize_approx') or 0 for item in formats)

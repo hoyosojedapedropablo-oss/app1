@@ -85,7 +85,7 @@ def inspect_media(path,mode,expected_duration=None):
     if expected_duration is not None:
         from cobalt_import import _verify_media
         _verify_media(path,expected_duration)
-    if not 0<duration<=7200 or (mode=='fast' and video['height']>1080):
+    if not 0<duration<=12000 or (mode=='fast' and video['height']>1080):
         raise ValueError('Duración o resolución no admitida.')
     return dict(bytes=path.stat().st_size,duration=duration,width=video['width'],height=video['height'],
         video_codec=video['codec_name'],audio_codec=audio['codec_name'],
@@ -97,7 +97,7 @@ def verified_record(record):
     try:
         expected=float(record['expected_duration']);actual=float(record['duration'])
         return (record.get('success') is True and record.get('verification_version')==2 and
-            isfinite(expected) and 0<expected<=7200 and isfinite(actual) and
+            isfinite(expected) and 0<expected<=12000 and isfinite(actual) and
             abs(actual-expected)<=max(2.,expected*.005) and
             int(record.get('audio_packets',0))>0 and int(record.get('video_packets',0))>0)
     except (KeyError,ValueError,TypeError):return False

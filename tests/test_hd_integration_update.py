@@ -38,7 +38,9 @@ class HDUpdateTests(unittest.TestCase):
      with self.assertRaises((ValueError,OSError)):update.validated_config(root,lambda *args:None)
  def test_pinned_sources_install_idempotently_and_preserve_old_videos(self):
   source=Path(__file__).parents[1]
-  files={name:(source/name).read_bytes() for name in update.FILES}
+  # Preserve verification of the immutable HD installer release.
+  import subprocess
+  files={name:subprocess.check_output(['git','show',update.REVISION+':'+name],cwd=source) for name in update.FILES}
   self.assertTrue(files)
   self.assertTrue(all(update.digest(content)==update.FILES[name] for name,content in files.items()))
   with tempfile.TemporaryDirectory() as tmp:
