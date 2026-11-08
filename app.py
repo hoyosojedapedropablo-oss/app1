@@ -99,6 +99,9 @@ def import_youtube(ident,url,quality="fast",browser="none"):
  import shutil
  from youtube_import import download
  folder=DATA/ident;folder.mkdir(exist_ok=True)
+ # Written by the worker itself, so only a download that really started can be resumed after a restart;
+ # yt-dlp then continues its .part files.
+ (folder/'import.json').write_text(json.dumps(dict(url=url,quality=quality)),encoding='utf-8')
  def progress(value,message,**metadata):IMPORTS[ident].update(status='downloading',progress=value,message=message,**metadata)
  try:
   progress(0,'Consultando video de YouTube…',access_mode='none',requested_browser=browser,integration_version=4)
@@ -108,6 +111,7 @@ def import_youtube(ident,url,quality="fast",browser="none"):
   job['youtube']={key:IMPORTS[ident][key] for key in ['title','channel','thumbnail','duration','quality','video_width','video_height'] if key in IMPORTS[ident]}
   job['youtube_url']=url;job['youtube_quality']=quality
   job['youtube_verification_version']=IMPORTS[ident].get('verification_version',0);save_job(job)
+  (folder/'import.json').unlink(missing_ok=True)
   IMPORTS[ident].update(status='ready',progress=100,message='Video listo para analizar.',job=job)
  except Exception as e:
   from youtube_import import diagnose_error
@@ -147,6 +151,25 @@ def start_youtube(options:YouTubeInput,request:Request):
  IMPORTS[ident]=dict(id=ident,status='queued',progress=0,access_mode='none',requested_browser=options.browser,integration_version=4,message='Consultando título y duración…',thumbnail='https://i.ytimg.com/vi/'+url.split('v=')[1]+'/hqdefault.jpg',title='Preparando video de YouTube…')
  import_pool.submit(import_youtube,ident,url,options.quality,options.browser)
  return IMPORTS[ident]
+
+def resume_imports():
+ """Restart YouTube imports interrupted by closing the server. Browser sessions are never reused automatically."""
+ from youtube_import import canonical_url
+ for marker in DATA.glob('*/import.json'):
+  ident=marker.parent.name
+  if not re.fullmatch(r'[a-f0-9]{32}',ident) or (marker.parent/'source').exists() or ident in IMPORTS:continue
+  try:
+   saved=json.loads(marker.read_text(encoding='utf-8'))
+   url=canonical_url(saved['url']);quality=saved.get('quality','fast')
+   if quality not in ('fast','original'):raise ValueError()
+  except (OSError,ValueError,KeyError,TypeError,AttributeError):continue
+  IMPORTS[ident]=dict(id=ident,status='queued',progress=0,access_mode='none',requested_browser='none',integration_version=4,resumed=True,
+   message='Reanudando la descarga que se interrumpió al cerrar ClipStudio…',thumbnail='https://i.ytimg.com/vi/'+url.split('v=')[1]+'/hqdefault.jpg',title='Reanudando video de YouTube…')
+  import_pool.submit(import_youtube,ident,url,quality,'none')
+
+@app.get('/api/youtube')
+def active_youtube_imports():
+ return [v for v in IMPORTS.values() if v.get('status') in ('queued','downloading')]
 
 @app.get('/api/youtube/{ident}')
 def youtube_status(ident:str):
@@ -627,3 +650,4 @@ def recover_jobs():
   except (OSError,ValueError,RuntimeError):continue
 
 recover_jobs()
+resume_imports()
