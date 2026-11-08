@@ -6,7 +6,8 @@ let job=null,selected=null,cues=[],cueVersion=0,captionPending=false,captionTime
 const edits=new Map();
 const numeric=['title_padding_x','title_padding_y','title_size','title_outline_width','title_x','title_y','caption_x','caption_y','caption_size','outline_width','focus_x','focus_y','start','end','logo_width','logo_x','logo_y','logo_start','logo_end'];
 const styleKeys=['title_padding_x','title_padding_y','title_bg_color','title_text_color','auto_follow','style','font','title_font','title_outline_color','title_size','title_outline_width','title_x','title_y','caption_x','caption_y','caption_size','caption_color','outline_color','outline_width','logo','framing','focus_x','focus_y','logo_width','logo_x','logo_y','logo_start','logo_end'];
-async function request(url,options={}){const r=await fetch(url,options);if(!r.ok){let e;try{e=await r.json()}catch{e={detail:r.statusText}}throw Error(typeof e.detail==='string'?e.detail:'Revisa los campos y el rango de tiempos.')}return r;}
+const OFFLINE='ClipStudio no responde: su servidor está cerrado. Abre INICIAR_WINDOWS.bat, deja abierta esa ventana y recarga la página.';
+async function request(url,options={}){let r;try{r=await fetch(url,options);}catch{const e=Error(OFFLINE);e.offline=true;throw e;}if(!r.ok){let e;try{e=await r.json()}catch{e={detail:r.statusText}}throw Error(typeof e.detail==='string'?e.detail:'Revisa los campos y el rango de tiempos.')}return r;}
 const jsonOptions=value=>({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});
 function showView(name){$('analysisView').classList.toggle('hidden',name!=='analysis');$('editorView').classList.toggle('hidden',name!=='editor');$('goAnalyze').classList.toggle('active',name==='analysis');$('goEditor').classList.toggle('active',name==='editor');if(name==='editor')requestAnimationFrame(paint);}
 $('goAnalyze').onclick=()=>showView('analysis');$('goEditor').onclick=()=>showView('editor');
@@ -150,15 +151,19 @@ function useImportedVideo(videoJob){
  if(videoJob.youtube)paintYoutube({...videoJob.youtube,status:'ready',progress:100});else $('youtubeCard').classList.add('hidden');
  ++pollToken;++cueVersion;clearTimeout(captionTimer);job=videoJob;selected=null;cues=[];captionPending=false;edits.clear();$('clips').replaceChildren();$('all').classList.add('hidden');$('video').src=`/api/jobs/${job.id}/video`;$('filename').textContent=job.name;$('end').value=Math.min(30,job.duration);$('analyze').disabled=false;$('manual').disabled=false;$('goEditor').disabled=false;paint();say(`Video listo · ${(job.duration/60).toFixed(1)} minutos`);
 }
-$('downloadYoutube').onclick=async()=>{
+$('downloadYoutube').onclick=()=>followImport(async()=>(await(await request('/api/youtube',jsonOptions({url:$('youtubeUrl').value,quality:$('youtubeQuality').value,browser:$('youtubeBrowser').value}))).json()).id);
+// A download the server resumed after a restart continues in the page that is reloaded.
+request('/api/youtube').then(r=>r.json()).then(list=>{if(list.length)followImport(async()=>list[0].id);}).catch(()=>{});
+async function followImport(start){
  $('youtubeCard').classList.add('hidden');$('youtubeLocalFallback').classList.add('hidden');
- const requestedMode=$('youtubeBrowser').value;
  const button=$('downloadYoutube');button.disabled=true;$('source').disabled=true;
  const locked=['analyze','manual','reuseJob','export'];const before=locked.map(id=>$(id).disabled);locked.forEach(id=>$(id).disabled=true);let importedOK=false;
  try{
-  const imported=await(await request('/api/youtube',jsonOptions({url:$('youtubeUrl').value,quality:$('youtubeQuality').value,browser:requestedMode}))).json();
+  const id=await start();let offline=0;
   while(true){
-   const state=await(await request('/api/youtube/'+imported.id)).json();
+   let state;
+   try{state=await(await request('/api/youtube/'+id)).json();offline=0;}
+   catch(e){if(!e.offline||++offline>40)throw e;$('youtubeState').textContent='Reconectando con ClipStudio… la descarga se reanudará cuando vuelva a abrirse.';await new Promise(resolve=>setTimeout(resolve,3000));continue;}
    paintYoutube(state);paintYoutubeAccess(state);
    $('youtubeState').textContent=state.status==='error'?youtubeFriendlyError(state):state.message+(state.status==='downloading'?` ${state.progress}%`:'');
    $('youtubeDiagnostics').textContent=state.status==='error'?state.message:'';
@@ -167,7 +172,8 @@ $('downloadYoutube').onclick=async()=>{
    await new Promise(resolve=>setTimeout(resolve,1500));
   }
  }catch(e){$('youtubeState').textContent=e.message;}finally{button.disabled=false;$('source').disabled=false;$('reuseJob').disabled=before[2];if(!importedOK)locked.forEach((id,i)=>$(id).disabled=before[i]);}
-};
+}
+$('video').addEventListener('error',()=>{if($('video').getAttribute('src'))say('No se pudo cargar el video. Si ClipStudio se cerró, abre INICIAR_WINDOWS.bat y recarga la página.');});
 
 function paintYoutube(state){
  if(!state.thumbnail)return;
