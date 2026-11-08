@@ -103,12 +103,15 @@ def transcription_threads():
     return max(1,min(8,(os.cpu_count() or 2)//2))
 
 
-def transcription_plan():
-    """Return (device, reason). GPU only when CUDA works and there is enough free VRAM right now."""
+def transcription_plan(reclaimable_mb=0):
+    """Return (device, reason). GPU only when CUDA works and there is enough free VRAM.
+
+    reclaimable_mb is VRAM that the analysis frees before transcribing (Ollama's model), so the
+    Rendimiento panel reports what will happen rather than the idle state."""
     mode=read_settings()['transcription'];info=detect()
     if mode=='cpu':return 'cpu','Elegiste CPU para la transcripción.'
     if not info['whisper_cuda']:return 'cpu',info['whisper_cuda_reason']
-    free=free_vram_mb()
+    free=free_vram_mb()+reclaimable_mb
     if free<MIN_FREE_VRAM_MB:
         return 'cpu',f'Solo hay {free} MB libres en la GPU; se usa CPU para no saturarla.'
     return 'cuda','Transcripción en GPU (CUDA).'
@@ -117,7 +120,9 @@ def transcription_plan():
 def summary():
     from app import nvenc_available
     import gpu_ai
-    info=detect();settings=read_settings();device,reason=transcription_plan();ai=gpu_ai.status()
+    info=detect();settings=read_settings();ai=gpu_ai.status()
+    device,reason=transcription_plan(ai['gpu_bytes']//1024**2)
+    if device=='cuda' and ai['gpu_loaded']:reason+=' El modelo de IA libera la GPU antes de transcribir.'
     export_gpu=nvenc_available()
     return {**info,'ram':memory(),'gpu':nvidia_gpu() or info['gpu'],'settings':settings,
             'stages':{'transcription':{'device':'GPU' if device=='cuda' else 'CPU','reason':reason},
