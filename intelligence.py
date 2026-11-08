@@ -102,7 +102,32 @@ def clean_title(title,text):
     return title
 
 
-def accept_proposals(data,phrases,transcript,minimum,maximum,speaker='',diagnostics=None):
+def grounded(evidence,text,repair=False):
+    """The quote must appear in the clip. With repair, a near-verbatim quote (>=85% over the same number of words)
+    also counts: models often change a word or an accent of what the ASR wrote, but a paraphrase still fails."""
+    norm=lambda s:re.findall(r'\w+',s.lower())
+    quote,words=norm(evidence),norm(text)
+    if not quote:return False
+    if ' '.join(quote) in ' '.join(words):return True
+    if not repair or len(quote)<4:return False
+    from difflib import SequenceMatcher
+    size=len(quote)
+    return any(SequenceMatcher(None,quote,words[i:i+size]).ratio()>=.85 for i in range(max(1,len(words)-size+1)))
+
+
+def fit_duration(phrases,first,last,minimum,maximum):
+    """Grow a short span with neighbouring phrases or trim a long one at a phrase end; None if impossible."""
+    while phrases[last]['end']-phrases[first]['start']<minimum:
+        grow_after=last+1<len(phrases) and phrases[last+1]['end']-phrases[first]['start']<=maximum
+        if grow_after:last+=1
+        elif first>0 and phrases[last]['end']-phrases[first-1]['start']<=maximum:first-=1
+        else:return None
+    while phrases[last]['end']-phrases[first]['start']>maximum and last>first:last-=1
+    span=phrases[last]['end']-phrases[first]['start']
+    return (first,last) if minimum<=span<=maximum else None
+
+
+def accept_proposals(data,phrases,transcript,minimum,maximum,speaker='',diagnostics=None,repair=False):
     result=[]
     def reject(reason):
         if diagnostics is not None:diagnostics.append(reason)
@@ -114,10 +139,23 @@ def accept_proposals(data,phrases,transcript,minimum,maximum,speaker='',diagnost
             reject('idea incompleta o IDs inválidos');continue
         start,end=phrases[m.first]['start'],phrases[m.last]['end']
         if not minimum<=end-start<=maximum:
-            reject(f'duración {end-start:.1f}s fuera del rango {minimum}–{maximum}s');continue
+            span=fit_duration(phrases,m.first,m.last,minimum,maximum) if repair else None
+            if span is None:
+                reject(f'duración {end-start:.1f}s fuera del rango {minimum}–{maximum}s');continue
+            start,end=phrases[span[0]]['start'],phrases[span[1]]['end']
         words=clip_words(transcript,start,end);text=' '.join(w['text'] for w in words)
-        norm=lambda s:' '.join(re.findall(r'\w+',s.lower()))
-        if not m.evidence.strip() or norm(m.evidence) not in norm(text):
+        if repair and m.evidence.strip() and not grounded(m.evidence,text,True):
+            # The quote is real but sits just outside the proposed span: include its phrases if the range allows.
+            first=next((i for i,p in enumerate(phrases) if p['start']>=start-.01),0);last=max(first,next((i for i,p in reversed(list(enumerate(phrases))) if p['end']<=end+.01),first))
+            for i in range(len(phrases)):
+                k=next((k for k in range(4) if i+k<len(phrases) and grounded(m.evidence,' '.join(p['text'] for p in phrases[i:i+k+1]),True)),None)
+                if k is None:continue
+                span=fit_duration(phrases,min(first,i),max(last,i+k),minimum,maximum)
+                if span and phrases[span[0]]['start']<=phrases[i]['start'] and phrases[span[1]]['end']>=phrases[i+k]['end']:
+                    start,end=phrases[span[0]]['start'],phrases[span[1]]['end']
+                    words=clip_words(transcript,start,end);text=' '.join(w['text'] for w in words)
+                break
+        if not m.evidence.strip() or not grounded(m.evidence,text,repair):
             reject('cita no respaldada por el fragmento');continue
         # Require an early hook and a payoff, not just many buzzwords.
         strength=max(m.novelty,m.emotion,m.discussion)
