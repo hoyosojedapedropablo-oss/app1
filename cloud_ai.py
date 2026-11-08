@@ -49,7 +49,7 @@ def complete(payload,transport=None,cancel=None):
     except httpx.TimeoutException:raise ValueError('La solicitud de IA superó 90 segundos. No se continuará esperando indefinidamente.') from None
     except httpx.HTTPError:raise ValueError('No se pudo conectar con la API. Revisa Internet y vuelve a intentarlo.') from None
 
-def select_cloud(transcript,minimum,maximum,duration,speaker='',context='',profile='',max_clips=10,on_progress=None,cancel=None,transport=None,completion=None,workers=3,stage='cloud',diagnostics=None,topic_ranges=None):
+def select_cloud(transcript,minimum,maximum,duration,speaker='',context='',profile='',max_clips=10,on_progress=None,cancel=None,transport=None,completion=None,workers=3,stage='cloud',diagnostics=None,topic_ranges=None,repair=False):
     from timeline import timed_sentences
     from intelligence import accept_proposals,diverse_selection,Proposals
     phrases=timed_sentences(transcript)
@@ -76,13 +76,13 @@ def select_cloud(transcript,minimum,maximum,duration,speaker='',context='',profi
             last=topic.last
         if topic_ranges is not None:topic_ranges.extend(topics)
         rejected=[]
-        result=accept_proposals(data,chunk,transcript,minimum,maximum,speaker,diagnostics=rejected)
+        result=accept_proposals(data,chunk,transcript,minimum,maximum,speaker,diagnostics=rejected,repair=repair)
         # One targeted correction only: preserve grounding and duration, never fabricate a quota.
         if not result and not topics:
-            repair=dict(payload)
-            repair['revision']={'propuestas_previas':data['moments'][:4],'motivos_de_descarte':rejected,'instruccion':'Revisa el mejor momento concreto del bloque. Corrige IDs, rango y títulos. Si no propusiste nada, busca reacción, humor, descubrimiento o relato con planteamiento y resolución. No exijas emoción, novedad y polémica simultáneamente. No inventes ni fuerces clips de relleno; puedes devolver cero.'}
-            corrected=(completion or complete)(repair,transport=transport,cancel=cancel)
-            result=accept_proposals(corrected,chunk,transcript,minimum,maximum,speaker,diagnostics=rejected)
+            retry=dict(payload)
+            retry['revision']={'propuestas_previas':data['moments'][:4],'motivos_de_descarte':rejected,'instruccion':'Revisa el mejor momento concreto del bloque. Corrige IDs, rango y títulos. Si no propusiste nada, busca reacción, humor, descubrimiento o relato con planteamiento y resolución. No exijas emoción, novedad y polémica simultáneamente. No inventes ni fuerces clips de relleno; puedes devolver cero.'}
+            corrected=(completion or complete)(retry,transport=transport,cancel=cancel)
+            result=accept_proposals(corrected,chunk,transcript,minimum,maximum,speaker,diagnostics=rejected,repair=repair)
         if diagnostics is not None:
             diagnostics.append(dict(start=chunk[0]['start'],end=chunk[-1]['end'],proposed=len(data['moments']),accepted=len(result),rejections=rejected))
         for clip in result:clip['source']=f'{MODEL} · análisis de transcripción'

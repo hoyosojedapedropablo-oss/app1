@@ -1,4 +1,4 @@
-import json, logging, os, re, subprocess, threading, time, uuid
+import json, logging, math, os, re, subprocess, threading, time, uuid
 import tempfile
 from fractions import Fraction
 from typing import Literal
@@ -713,3 +713,110 @@ def recover_jobs():
 
 recover_jobs()
 resume_imports()
+
+# --- Clipping en vivo ---------------------------------------------------------------------------------------
+import live
+LIVE={};LIVE_DIR=DATA/'live'
+
+def recover_live():
+ for state in LIVE_DIR.glob('*/state.json'):
+  try:session=live.LiveSession.load(state.parent);LIVE[session.id]=session
+  except (OSError,ValueError,KeyError,TypeError):continue
+
+class LiveInput(BaseModel):
+ url:str=Field(min_length=8,max_length=2000)
+ minimum:int=Field(default=20,ge=5,le=180)
+ maximum:int=Field(default=60,ge=5,le=180)
+ buffer_minutes:int=Field(default=60,ge=10,le=180)
+ @model_validator(mode='after')
+ def validate_range(self):
+  if self.minimum>self.maximum:raise ValueError('El mínimo no puede superar el máximo.')
+  return self
+
+def live_session(sid):
+ if sid not in LIVE:raise HTTPException(404,'Sesión no encontrada.')
+ return LIVE[sid]
+
+@app.post('/api/live')
+def start_live(options:LiveInput):
+ try:session=live.LiveSession(LIVE_DIR,options.url,options.minimum,options.maximum,options.buffer_minutes)
+ except live.LiveError as e:raise HTTPException(400,str(e))
+ if any(s.status in live.RUNNING for s in LIVE.values()):raise HTTPException(409,'Ya hay una sesión en vivo activa. Detenla antes de iniciar otra.')
+ LIVE[session.id]=session;session.start()
+ return session.public()
+
+@app.get('/api/live')
+def list_live():return sorted((s.public(full=False) for s in LIVE.values()),key=lambda s:s['created'],reverse=True)
+
+@app.get('/api/live/{sid}')
+def live_status(sid:str):return live_session(sid).public()
+
+@app.post('/api/live/{sid}/stop')
+def stop_live(sid:str):
+ session=live_session(sid)
+ if session.status in live.RUNNING:
+  session.status='stopping';session.note('Deteniendo y revisando los últimos minutos…')
+  threading.Thread(target=session.stop,daemon=True).start()
+ return session.public()
+
+@app.post('/api/live/{sid}/resume')
+def resume_live(sid:str):
+ session=live_session(sid)
+ if any(s.status in live.RUNNING for s in LIVE.values()):raise HTTPException(409,'Ya hay una sesión en vivo activa.')
+ if session.status not in ('interrupted','stopped','ended','error'):raise HTTPException(409,'La sesión no se puede reanudar en su estado actual.')
+ session.start();return session.public()
+
+def live_moment(sid,mid):
+ session=live_session(sid)
+ try:return session,session.moment(mid)
+ except live.LiveError as e:raise HTTPException(404,str(e))
+
+@app.get('/api/live/{sid}/moments/{mid}/video')
+def live_moment_video(sid:str,mid:str):
+ session,moment=live_moment(sid,mid);path=session.clips/f'{mid}.mp4'
+ if not path.exists():raise HTTPException(404,'El clip todavía se está preparando.')
+ return FileResponse(path,media_type='video/mp4')
+
+@app.post('/api/live/{sid}/moments/{mid}/discard')
+def discard_live_moment(sid:str,mid:str):
+ session,moment=live_moment(sid,mid);moment['status']='discarded';session.save(force=True);return session.public()
+
+@app.post('/api/live/{sid}/moments/{mid}/open')
+def open_live_moment(sid:str,mid:str):
+ """Turn a live moment into a normal job (source, transcript and one clip) so the full editor applies."""
+ import shutil
+ from editorial import clip_identity
+ session,moment=live_moment(sid,mid)
+ if moment.get('job_id') in JOBS:return JOBS[moment['job_id']]
+ path=session.clips/f'{mid}.mp4'
+ if not path.exists():raise HTTPException(409,'El clip todavía se está preparando.')
+ ident=uuid.uuid4().hex;folder=DATA/ident;folder.mkdir()
+ try:
+  shutil.copyfile(path,folder/'source')
+  name=re.sub(r'[\/:*?"<>|]+',' ',f"{session.channel or 'Directo'} · {moment['title']}")[:120]+'.mp4'
+  job=register_video(ident,folder/'source',name,max_duration=12000)
+  transcript=session.moment_transcript(moment)
+  (folder/'transcript.json').write_text(json.dumps(transcript,ensure_ascii=False),encoding='utf-8')
+  base=moment.get('file_start',moment['start']-live.PAD_S)
+  start,end=round(moment['start']-base,3),round(min(job['duration'],moment['end']-base),3)
+  clip=dict(id=clip_identity(start,end,moment['text']),start=start,end=end,duration=round(end-start,3),title=moment['title'],titles=moment['titles'] or [moment['title']],
+            text=moment['text'],score=moment['score'],category=moment['category'],reason=moment['reason'],evidence=moment['evidence'],source=moment['source'],
+            captions=make_cues(transcript,start,end))
+  job.update(status='ready',clips=[clip],transcript=transcript,analysis_range={'minimum':min(session.minimum,int(end-start)),'maximum':max(session.maximum,math.ceil(end-start))},
+             live={'session':sid,'moment':mid,'channel':session.channel,'stream_title':session.title},message='Momento del directo listo para editar.')
+  save_job(job)
+ except Exception as e:
+  JOBS.pop(ident,None);shutil.rmtree(folder,ignore_errors=True)
+  raise HTTPException(500,f'No se pudo abrir el momento en el editor: {e}')
+ moment['status']='opened';moment['job_id']=ident;session.save(force=True)
+ return job
+
+@app.on_event('shutdown')
+def stop_live_captures():
+ # Never leave an FFmpeg capture running after ClipStudio closes; the saved state is resumed on the next start.
+ for session in LIVE.values():
+  if session.proc and session.proc.poll() is None:
+   session.stop_event.set();session.proc.terminate()
+  session.save(force=True)
+
+recover_live()

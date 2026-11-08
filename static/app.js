@@ -352,3 +352,57 @@ document.addEventListener('keydown',e=>{
  const actions={Escape:()=>setTheater(false),' ':()=>$('play').click(),ArrowLeft:()=>nudge(-5),ArrowRight:()=>nudge(5),'[':()=>stepClip(-1),']':()=>stepClip(1)};
  if(actions[e.key]){e.preventDefault();actions[e.key]();}
 });
+// Clipping en vivo: start/stop a session, follow its status and review the moments it proposes while it runs.
+let liveId=null,liveTimer=null;
+const LIVE_STATES={starting:'Conectando…',live:'● EN VIVO',reconnecting:'Reconectando…',stopping:'Deteniendo…',stopped:'Detenida',ended:'Directo terminado',interrupted:'Interrumpida',error:'Error'};
+const liveRunning=s=>['starting','live','reconnecting','stopping'].includes(s.status);
+function mmss(s){s=Math.round(s);const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return (h?h+':':'')+String(m).padStart(h?2:1,'0')+':'+String(x).padStart(2,'0');}
+function paintLive(s){
+ liveId=s.id;$('liveStatus').hidden=false;
+ $('liveState').textContent=LIVE_STATES[s.status]||s.status;$('liveChannel').textContent=[s.channel,s.title].filter(Boolean).join(' · ');
+ $('liveStats').textContent=`Analizado ${mmss(s.media_s)} · ${s.moments.length} momentos · reconexiones ${s.reconnects}${s.gaps?` · huecos ${s.gaps}`:''}${s.transcription_device?` · transcripción ${s.transcription_device}`:''} · búfer ${s.buffer_minutes} min`;
+ $('liveMessage').textContent=s.message||'';$('liveRecent').textContent=s.recent_text?`«…${s.recent_text}»`:'';
+ $('liveStart').hidden=liveRunning(s);$('liveStop').hidden=!['starting','live','reconnecting'].includes(s.status);$('liveResume').hidden=!['interrupted','stopped','ended','error'].includes(s.status)||s.media_s===0;
+ $('liveMomentsTitle').hidden=!s.moments.length;
+ const box=$('liveMoments'),seen=new Set();
+ for(const m of s.moments){   // prepend in order: newest ends on top
+  seen.add(m.id);let card=box.querySelector(`[data-id="${m.id}"]`);const key=m.status+m.title;
+  if(card&&card.dataset.key===key)continue;
+  const fresh=document.createElement('article');fresh.className='live-moment';fresh.dataset.id=m.id;fresh.dataset.key=key;
+  const h=document.createElement('h4');h.textContent=m.title;
+  const meta=document.createElement('div');meta.className='meta';meta.textContent=`Detectado ${m.detected_at} · minuto ${mmss(m.start)} · ${m.duration.toFixed(0)} s · ${m.source}${m.score!=null?` · ${m.score}/100`:''} · ${{rendering:'preparando…',draft:'borrador',opened:'abierto en el editor',error:'error'}[m.status]||m.status}`;
+  const reason=document.createElement('p');reason.className='meta';reason.textContent=m.reason||'';
+  const row=document.createElement('div');row.className='row';
+  if(['draft','opened'].includes(m.status)){
+   const view=document.createElement('button');view.className='secondary';view.textContent='▶ Ver';
+   view.onclick=()=>{if(fresh.querySelector('video'))return;const v=document.createElement('video');v.controls=true;v.preload='metadata';v.src=`/api/live/${s.id}/moments/${m.id}/video`;fresh.insertBefore(v,row);v.play().catch(()=>{});};
+   const edit=document.createElement('button');edit.textContent='✎ Abrir en el editor';
+   edit.onclick=async()=>{edit.disabled=true;try{openJob(await(await request(`/api/live/${s.id}/moments/${m.id}/open`,{method:'POST'})).json());}catch(e){say(e.message);}finally{edit.disabled=false;}};
+   const drop=document.createElement('button');drop.className='secondary';drop.textContent='Descartar';
+   drop.onclick=async()=>{try{paintLive(await(await request(`/api/live/${s.id}/moments/${m.id}/discard`,{method:'POST'})).json());}catch(e){say(e.message);}};
+   row.append(view,edit,drop);
+  }
+  fresh.append(h,meta,reason,row);
+  if(card)card.replaceWith(fresh);else box.prepend(fresh);
+ }
+ for(const card of [...box.children])if(!seen.has(card.dataset.id))card.remove();
+}
+function openJob(j){
+ ++pollToken;++cueVersion;job=j;selected=null;cues=[];edits.clear();$('filename').textContent=job.name;$('youtubeCard').classList.add('hidden');
+ $('video').src=`/api/jobs/${job.id}/video`;$('analyze').disabled=false;$('manual').disabled=false;$('goEditor').disabled=false;
+ say('Momento del directo abierto en el editor. La sesión en vivo sigue analizando.');render();
+}
+async function followLive(){
+ clearTimeout(liveTimer);if(!liveId)return;
+ try{const s=await(await request('/api/live/'+liveId)).json();paintLive(s);if(liveRunning(s))liveTimer=setTimeout(followLive,3000);}
+ catch(e){$('liveMessage').textContent=e.message;if(e.offline)liveTimer=setTimeout(followLive,5000);}
+}
+$('liveStart').onclick=async()=>{
+ const button=$('liveStart');button.disabled=true;
+ try{paintLive(await(await request('/api/live',jsonOptions({url:$('liveUrl').value,minimum:Number($('liveMin').value),maximum:Number($('liveMax').value),buffer_minutes:Number($('liveBuffer').value)}))).json());followLive();}
+ catch(e){$('liveStatus').hidden=false;$('liveState').textContent='No se pudo iniciar';$('liveMessage').textContent=e.message;}finally{button.disabled=false;}
+};
+$('liveStop').onclick=async()=>{try{paintLive(await(await request(`/api/live/${liveId}/stop`,{method:'POST'})).json());followLive();}catch(e){say(e.message);}};
+$('liveResume').onclick=async()=>{try{paintLive(await(await request(`/api/live/${liveId}/resume`,{method:'POST'})).json());followLive();}catch(e){$('liveMessage').textContent=e.message;}};
+// Show the latest session after a reload (also an interrupted one, with its saved moments).
+request('/api/live').then(r=>r.json()).then(list=>{if(!list.length)return;liveId=list[0].id;$('livePanel').open=liveRunning(list[0])||list[0].moments.length>0;followLive();}).catch(()=>{});
