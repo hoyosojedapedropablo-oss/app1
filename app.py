@@ -567,7 +567,7 @@ def export(ident:str,opts:Export):
   graph.append(f"[{last}][l]overlay=(W-w)*{opts.logo_x/100}:(H-h)*{opts.logo_y/100}:enable='gte(t,{opts.logo_start})*lt(t,{logo_end})'[v2]")
   last='v2'
  args+=['-filter_complex',';'.join(graph),'-map',f'[{last}]','-map','0:a?']
- args+=['-t',str(opts.end-opts.start),'-c:v','libx264','-preset','fast','-r',str(JOBS[ident].get('fps',30)),'-fps_mode','cfr','-crf','18','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-movflags','+faststart',str(output)]
+ args+=['-t',str(opts.end-opts.start),'-r',str(JOBS[ident].get('fps',30)),'-fps_mode','cfr','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-movflags','+faststart',str(output)]
  export_env=None
  if os.name!='nt':
   # Keep host-wide font substitutions from replacing the bundled face used for measurements.
@@ -576,9 +576,36 @@ def export(ident:str,opts:Export):
   config=folder/'fontconfig.xml'
   config.write_text(f'<fontconfig><dir>{escape(str(fonts.resolve()))}</dir><cachedir>{escape(str(cache.resolve()))}</cachedir></fontconfig>',encoding='utf-8')
   export_env={**os.environ,'FONTCONFIG_FILE':str(config.resolve())}
- try: command(args,cwd=folder,env=export_env)
+ try: encode(args,cwd=folder,env=export_env)
  except Exception as e: raise HTTPException(500,str(e))
  return FileResponse(output,media_type='video/mp4',filename=f'clip-{token[:6]}.mp4')
+
+CPU_VIDEO=['-c:v','libx264','-preset','fast','-crf','18']
+# Measured on a real 1080p60 source (60 s vertical crop, RTX 5060 Ti): x264 CRF18 29 s / 54 MB / SSIM 0.9938,
+# NVENC cq26 11 s / 62 MB / SSIM 0.9945. Filters (subtitles, overlays) still run on CPU.
+GPU_VIDEO=['-c:v','h264_nvenc','-preset','p5','-tune','hq','-rc','vbr','-cq','26','-b:v','0','-spatial-aq','1','-profile:v','high']
+_nvenc=None
+
+def nvenc_available():
+ """Probe once per process with a real tiny encode: an encoder listed by FFmpeg may still lack a driver."""
+ global _nvenc
+ if _nvenc is None:
+  if os.environ.get('CLIP_EXPORT_ENCODER','').lower()=='cpu':_nvenc=False
+  else:
+   try:_nvenc=subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=size=256x256:rate=30:duration=0.2','-c:v','h264_nvenc','-f','null','-'],capture_output=True,timeout=30).returncode==0
+   except (OSError,subprocess.SubprocessError):_nvenc=False
+ return _nvenc
+
+def encode(args,cwd=None,env=None):
+ """Run an export with NVENC when available, falling back to libx264 so a GPU problem never blocks the clip."""
+ global _nvenc
+ head,tail=args[:-1],args[-1:]
+ if nvenc_available():
+  try:return command(head+GPU_VIDEO+tail,cwd=cwd,env=env)
+  except RuntimeError as error:
+   logging.getLogger('uvicorn.error').warning('NVENC export failed, using CPU: %s',str(error)[-300:])
+   _nvenc=False
+ return command(head+CPU_VIDEO+tail,cwd=cwd,env=env)
 
 
 def save_job(job):
