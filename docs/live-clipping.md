@@ -53,3 +53,23 @@ En vivo, la transcripción usa la CPU mientras la IA local ocupa la GPU, porque 
 - **Todavía no hay pruebas largas.** Las sesiones de varias horas, los cortes de red reales y los cambios de resolución están cubiertos por la lógica del supervisor y por pruebas simuladas, pero falta una prueba real de varias horas.
 - **Solo hay detección por audio y transcripción.** No hay análisis visual ni del chat.
 - **La responsabilidad es del usuario:** debe respetar los derechos del creador y las normas de cada plataforma. La interfaz lo indica.
+
+## Ajustes tras la prueba del usuario (8 nov 2026)
+
+Correcciones pedidas: calidad baja, clips tardíos, errores en subtítulos, títulos sin gancho y clips que mezclaban temas.
+
+| Cambio | Medido |
+|---|---|
+| Captura a 1080p (elegible 720/1080/1440); momentos con NVENC cq 18 | Clips 1920×1080, 60 fps, ~15–17 Mbps (antes 720p) |
+| Fragmentos de 6 s, análisis cada 30 s, ventana de 180 s o más (2×máximo+30) | Listo tras el momento: 36–63 s en clips cortos, 113–135 s en los largos (antes 1,5–3,5 min) |
+| large-v3-turbo en GPU (int8_float16), idioma fijo, 1,5 s de solape y contexto previo | 93 % frente a 86 % de coincidencia con una referencia de contexto completo, 0,3 s por fragmento de 6 s, VRAM máxima 7,2 de 8 GB junto a Qwen |
+| `viral.py`: título a partir de la afirmación, opinión o confesión más fuerte; 5 candidatos; descarte si sus palabras clave no se dijeron | En Westcol, «Samulx llega a Colombia, ¿dónde está la guarida?» → «Le faltan dos semanas»: Westcol revela cuándo estará lista su guarida |
+| Corte en el cambio de tema; espera de hasta 40 s si el tema sigue abierto | 2 de 3 clips cortados por tema en la primera prueba |
+
+Prueba con Spreen (Kick) durante 8 minutos: 8 momentos, 0 reconexiones, transcripción con Turbo en GPU, limpieza correcta al detener.
+
+Límites:
+
+- La transcripción no identifica quién habla. En charlas con invitados, un título puede atribuirle al streamer una frase ajena.
+- El modelo de 7B a veces interpreta mal un hecho: en una prueba entendió «se ahorcó» donde fue otra persona quien quiso ahorcarlo. Hay que revisar el título antes de publicar.
+- Turbo se usa solo si ya está instalado (lo descarga `INSTALAR_GPU_WINDOWS.bat`). Si no está, se usa small en CPU y la interfaz lo indica.

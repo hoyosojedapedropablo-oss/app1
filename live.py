@@ -16,11 +16,17 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from urllib.parse import urlsplit
 
-SEGMENT_S = 10
-DETECT_EVERY_S = 120
-WINDOW_S = 300
-FIRST_DETECTION_S = 150
-TAIL_CONTEXT_S = 4        # a moment must end this long before the newest audio, so reactions are not cut
+# Speed: short segments and a rolling 30 s analysis put a moment on screen well under a minute after it ends
+# (measured before: 10 s segments every 120 s took 1.5-3.5 min). The window always spans a full clip plus context.
+SEGMENT_S = 6
+DETECT_EVERY_S = 30
+WINDOW_S = 180
+FIRST_DETECTION_S = 45
+TAIL_CONTEXT_S = 6        # a moment must end this long before the newest audio, so reactions are not cut
+MAX_TOPIC_WAIT_S = 40     # waiting for an open topic to close is capped: measured waits of 108-152 s were too slow
+OVERLAP_S = 1.5           # audio carried over from the previous segment so words cut at the boundary are heard whole
+DEFAULT_HEIGHT = 1080     # a 9:16 crop keeps ~56% of the width: 1080p leaves 607x1080 instead of 405x720 at 720p
+LIVE_MODEL = 'large-v3-turbo'
 PAD_S = 3                 # extra source kept around a moment so the editor can nudge its edges
 MIN_FREE_DISK_GB = 5
 SAVE_EVERY_S = 30
@@ -49,7 +55,7 @@ def validate_url(value):
     raise LiveError('Por ahora el clipping en vivo admite YouTube Live y Kick.')
 
 
-def resolve(url, height=720, ydl_factory=None):
+def resolve(url, height=DEFAULT_HEIGHT, ydl_factory=None):
     """Return stream info for a live broadcast, or raise LiveError with a clear reason."""
     import yt_dlp
     from youtube_import import javascript_options, SafeLog
@@ -136,8 +142,25 @@ def peak_moment(peak, phrases, minimum, maximum, window_start, window_end):
     return {'start': round(start, 3), 'end': round(end, 3)}
 
 
+def cut_at_topic_change(clip, topics, phrases, minimum):
+    """End the clip where the conversation changes topic, at the last whole phrase before the change.
+    Returns None when the first topic is shorter than the minimum: mixing two topics is worse than no clip."""
+    boundaries = [t['start'] for t in topics if t.get('boundary') and clip['start'] + 1 < t['start'] < clip['end'] - 1]
+    if not boundaries: return clip
+    change = boundaries[0]
+    ends = [p['end'] for p in phrases if clip['start'] < p['end'] <= change + .3]
+    if not ends or ends[-1] - clip['start'] < minimum: return None
+    return {**clip, 'end': round(ends[-1], 3), 'cut_at_topic': True}
+
+
+def topic_still_open(clip, topics, window_end):
+    """True when the clip ends inside the newest topic and that topic reaches the live edge (still being discussed)."""
+    current = next((t for t in topics if t['start'] <= clip['end'] <= t['end'] + .5), None)
+    return bool(current) and current is topics[-1] and current['end'] >= window_end - TAIL_CONTEXT_S - 2 and clip['end'] >= current['end'] - 3
+
+
 class LiveSession:
-    def __init__(self, root, url, minimum=20, maximum=60, buffer_minutes=60, height=720, sid=None, engine='gpu'):
+    def __init__(self, root, url, minimum=20, maximum=60, buffer_minutes=60, height=DEFAULT_HEIGHT, sid=None, engine='gpu'):
         self.id = sid or uuid.uuid4().hex
         self.root = Path(root) / self.id
         self.segments = self.root / 'segments'
@@ -164,6 +187,9 @@ class LiveSession:
         self.threads = []
         self._saved = 0.0
         self._model = None
+        self._tail, self._tail_end = None, None
+        self.language = ''
+        self.segment_wall = {}        # index -> wall clock when the segment was processed (for real latency)
 
     # --- state -------------------------------------------------------------------------------------------------
     def public(self, full=True):
@@ -192,7 +218,7 @@ class LiveSession:
                      'channel': self.channel, 'created': self.created, 'media_s': self.media_s, 'next_index': self.next_index,
                      'processed_index': self.processed_index, 'segment_times': self.segment_times, 'transcript': self.transcript,
                      'levels': self.levels[-3 * 3600:], 'moments': self.moments, 'gaps': self.gaps, 'reconnects': self.reconnects,
-                     'last_detection': self.last_detection, 'events': self.events}
+                     'last_detection': self.last_detection, 'events': self.events, 'language': self.language}
         self.root.mkdir(parents=True, exist_ok=True)
         temp = self.root / 'state.tmp'
         temp.write_text(json.dumps(state, ensure_ascii=False), encoding='utf-8'); temp.replace(self.root / 'state.json')
@@ -202,9 +228,9 @@ class LiveSession:
     def load(cls, folder):
         state = json.loads((Path(folder) / 'state.json').read_text(encoding='utf-8'))
         session = cls(Path(folder).parent, state['url'], state['minimum'], state['maximum'], state['buffer_s'] // 60,
-                      state.get('height', 720), sid=state['id'], engine=state.get('engine', 'gpu'))
+                      state.get('height', DEFAULT_HEIGHT), sid=state['id'], engine=state.get('engine', 'gpu'))
         for key in ('status', 'message', 'title', 'channel', 'created', 'media_s', 'next_index', 'processed_index', 'transcript',
-                    'levels', 'moments', 'gaps', 'reconnects', 'last_detection', 'events'):
+                    'levels', 'moments', 'gaps', 'reconnects', 'last_detection', 'events', 'language'):
             if key in state: setattr(session, key, state[key])
         session.segment_times = {int(k): v for k, v in state.get('segment_times', {}).items()}
         session.levels = [tuple(x) for x in session.levels]
@@ -304,17 +330,29 @@ class LiveSession:
 
     def _whisper(self):
         if self._model is None:
-            import capabilities
+            import capabilities, os, gpu_ai
             from faster_whisper import WhisperModel
-            import os
-            # The detector keeps the local AI model in VRAM, so live transcription stays on the CPU unless the
-            # GPU clearly has room for both (measured: CPU transcribes a 10 s segment in ~3.5 s, enough for live).
+            from faster_whisper.utils import download_model
+            # large-v3-turbo on the GPU (int8_float16, ~1.7 GB) fits next to the local AI model on an 8 GB card and
+            # transcribes a 6 s segment in ~0.3 s; measured on a real stream it matched a full-context reference 93% vs
+            # 86% for small on CPU. Never download it here: use it only if it is already installed.
+            name = os.getenv('LIVE_WHISPER_MODEL', LIVE_MODEL)
+            try:
+                download_model(name, local_files_only=True)
+                installed = True
+            except Exception:
+                installed = False
+            reserve = 0 if self.engine != 'gpu' or gpu_ai.status().get('gpu_loaded') else 4400   # room the AI model will need
             device, _ = capabilities.transcription_plan()
-            if self.engine == 'gpu' and capabilities.free_vram_mb() < 6500: device = 'cpu'
-            name = os.getenv('WHISPER_MODEL', 'small')
-            self._model = WhisperModel(name, device='cuda', compute_type='float16') if device == 'cuda' else \
-                WhisperModel(name, device='cpu', compute_type='int8', cpu_threads=capabilities.transcription_threads())
-            self.transcription_device = 'GPU' if device == 'cuda' else 'CPU'
+            if installed and device == 'cuda' and capabilities.free_vram_mb() >= 1800 + reserve:
+                try:
+                    self._model = WhisperModel(name, device='cuda', compute_type='int8_float16')
+                    self.transcription_device = f'GPU · {name}'
+                except Exception:
+                    self._model = None
+            if self._model is None:
+                self._model = WhisperModel('small', device='cpu', compute_type='int8', cpu_threads=capabilities.transcription_threads())
+                self.transcription_device = 'CPU · small' + ('' if installed else ' (instala large-v3-turbo para subtítulos más precisos)')
         return self._model
 
     def _ingest(self, path):
@@ -325,15 +363,27 @@ class LiveSession:
         duration = len(audio) / 16000 if len(audio) else probe_duration(path)
         start = self.media_s
         words_segments = []
+        tail = self._tail if self._tail is not None and self._tail_end == round(start, 3) else np.zeros(0, dtype='<f4')
         if len(audio) >= 8000:
-            segments, _ = self._whisper().transcribe(audio, vad_filter=True, word_timestamps=True)
+            # Carry the end of the previous segment so a word cut at the boundary is heard whole, keep the language
+            # fixed once detected (short chunks misdetect it) and give the model the recent text as context.
+            clip = np.concatenate([tail, audio]); offset = start - len(tail) / 16000
+            with self.lock: prompt = ''.join(w['text'] for s in self.transcript[-12:] for w in s.get('words', []))[-200:]
+            segments, info = self._whisper().transcribe(clip, vad_filter=True, word_timestamps=True, language=self.language or None,
+                                                        initial_prompt=prompt or None, condition_on_previous_text=False)
+            segments = list(segments)
+            if not self.language and info is not None and getattr(info, 'language_probability', 0) >= .6 and segments: self.language = info.language
             for s in segments:
-                words = [{'start': round(start + w.start, 3), 'end': round(start + w.end, 3), 'text': w.word} for w in (s.words or [])]
-                if s.text.strip(): words_segments.append({'start': round(start + s.start, 3), 'end': round(start + s.end, 3), 'text': s.text, 'words': words})
+                words = [{'start': round(offset + w.start, 3), 'end': round(offset + w.end, 3), 'text': w.word} for w in (s.words or [])
+                         if offset + w.start >= start - .05]   # words from the carried audio were already transcribed
+                if words: words_segments.append({'start': words[0]['start'], 'end': words[-1]['end'], 'text': ''.join(w['text'] for w in words), 'words': words})
+        self._tail = audio[-int(OVERLAP_S * 16000):].copy() if len(audio) else None
+        self._tail_end = round(start + duration, 3)
         with self.lock:
             self.transcript += words_segments
             self.levels += [(round(start + i, 1), db) for i, db in enumerate(loudness(audio))]
             self.segment_times[index] = [round(start, 3), round(start + duration, 3)]
+            self.segment_wall[index] = time.time()
             self.media_s = start + duration
             self.processed_index = index
 
@@ -346,7 +396,9 @@ class LiveSession:
 
     # --- detection ---------------------------------------------------------------------------------------------
     def _window(self, until):
-        start = max(0.0, until - WINDOW_S, max([g for g in self.gaps if g < until], default=0.0))
+        # Always room for the longest clip plus context before and after it.
+        span = min(400, max(WINDOW_S, 2 * self.maximum + 30))
+        start = max(0.0, until - span, max([g for g in self.gaps if g < until], default=0.0))
         return start, until
 
     def _detect(self, until, final=False):
@@ -358,26 +410,44 @@ class LiveSession:
             window = [s for s in self.transcript if s['start'] >= start and s['end'] <= end]
             levels = list(self.levels)
         if not window or end - start < self.minimum: return
-        candidates = []
+        phrases = timed_sentences(window)
+        candidates, topics = [], []
         try:
-            candidates = self._ai_candidates(window, start, end, cancel=None if final else self.stop_event)
+            candidates, topics = self._ai_candidates(window, start, end, cancel=None if final else self.stop_event)
             source = 'IA local'
         except Exception as error:
             self.note(f'La IA no estuvo disponible ({type(error).__name__}); se usan los picos de audio.')
             source = None
         if source is None:
-            phrases = timed_sentences(window)
             for peak in audio_peaks(levels, start, end):
                 spot = peak_moment(peak, phrases, self.minimum, self.maximum, start, end + TAIL_CONTEXT_S - tail)
                 if spot: candidates.append({**spot, 'title': f'Reacción intensa · minuto {int(spot["start"] // 60)}', 'titles': [],
                                             'category': 'pico de audio', 'score': min(100, round(50 + peak['db'] * 3)), 'reason': f'El volumen subió {peak["db"]:.0f} dB sobre el nivel del directo.',
                                             'evidence': '', 'source': 'Señal de audio'})
         for clip in candidates:
+            clip = cut_at_topic_change(clip, topics, phrases, self.minimum)
+            if clip is None: continue
             if clip['end'] > end - tail: continue
+            # Wait while the conversation is still on the clip's topic: proposing it now would cut it mid-thought.
+            if (not final and topic_still_open(clip, topics, end) and clip['end'] - clip['start'] < self.maximum - 1
+                    and end - clip['end'] < MAX_TOPIC_WAIT_S): continue
             text = ' '.join(w['text'].strip() for s in window for w in s.get('words', []) if clip['start'] <= w['start'] < clip['end'])
             with self.lock:
                 if any(m['status'] != 'discarded' and (overlaps(m, clip) or similar_text(m.get('text', ''), text)) for m in self.moments): continue
+            if source:
+                clip = {**clip, **self._viral_title(text, clip)}
             self._add_moment({**clip, 'text': text, 'source': clip.get('source', source)})
+
+    def _viral_title(self, text, clip):
+        """Hook-first titles from what is actually said; the analyst's own title stays as an alternative."""
+        try:
+            import viral
+            result = viral.generate(text, speaker=self.channel, context=self.title, cancel=self.stop_event)
+        except Exception:
+            return {}
+        if not result: return {}
+        alternatives = [t for t in result['titles'] + [clip.get('title')] + list(clip.get('titles') or []) if t]
+        return {'title': result['title'], 'titles': list(dict.fromkeys(alternatives))[:5], 'claim': result['claim'], 'claim_kind': result['kind']}
 
     def _ai_candidates(self, window, start, end, cancel=None):
         import gpu_ai
@@ -389,29 +459,38 @@ class LiveSession:
         peaks = [f'{p["start"] - start:.0f}s' for p in audio_peaks(self.levels, start, end)]
         # Measured on a real stream: extra instructions here lowered the share of grounded proposals (6 vs 8 in 6 rounds).
         context = f'Transmisión en vivo de {self.channel or "un streamer"}: {self.title}.' + (f' Picos de volumen en: {", ".join(peaks)}.' if peaks else '')
-        diagnostics = []
-        clips = gpu_ai.select_gpu(shifted, self.minimum, self.maximum, end - start, context=context, max_clips=3, cancel=cancel, diagnostics=diagnostics, repair=True)
+        diagnostics, topics = [], []
+        clips = gpu_ai.select_gpu(shifted, self.minimum, self.maximum, end - start, context=context, max_clips=3, cancel=cancel,
+                                  diagnostics=diagnostics, topic_ranges=topics, repair=True)
         proposed = sum(d['proposed'] for d in diagnostics)
         self.note(f'Ronda de análisis (minuto {int(end // 60)}): la IA propuso {proposed} y se aceptaron {len(clips)}.')
-        return [{**c, 'start': round(c['start'] + start, 3), 'end': round(c['end'] + start, 3), 'source': 'IA local'} for c in clips]
+        moved = lambda item: {**item, 'start': round(item['start'] + start, 3), 'end': round(item['end'] + start, 3)}
+        return [{**moved(c), 'source': 'IA local'} for c in clips], [moved(t) for t in topics]
 
     def _final_detection(self):
-        if self.media_s - self.last_detection >= 30 and self.media_s >= self.minimum:
+        if self.media_s - self.last_detection >= 15 and self.media_s >= self.minimum:
             try: self._detect(self.media_s, final=True)
             except Exception: pass
+
+    def _ready_after(self, moment_end):
+        """Seconds between processing the segment where the moment ended and the clip being ready."""
+        index = next((i for i, (a, b) in sorted(self.segment_times.items()) if b >= moment_end), None)
+        wall = self.segment_wall.get(index)
+        return round(time.time() - wall, 1) if wall else None
 
     def _add_moment(self, clip):
         mid = uuid.uuid4().hex[:12]
         moment = {'id': mid, 'start': clip['start'], 'end': clip['end'], 'duration': round(clip['end'] - clip['start'], 1),
                   'title': clip.get('title') or 'Momento del directo', 'titles': clip.get('titles') or [], 'text': clip.get('text', ''),
                   'score': clip.get('score'), 'category': clip.get('category', ''), 'reason': clip.get('reason', ''),
-                  'evidence': clip.get('evidence', ''), 'source': clip.get('source', ''), 'detected_at': datetime.now().strftime('%H:%M:%S'),
-                  'status': 'rendering', 'job_id': None}
+                  'evidence': clip.get('evidence', ''), 'claim': clip.get('claim', ''), 'source': clip.get('source', ''), 'cut_at_topic': bool(clip.get('cut_at_topic')),
+                  'detected_at': datetime.now().strftime('%H:%M:%S'), 'status': 'rendering', 'job_id': None}
         with self.lock: self.moments.append(moment)
         self.note(f'Momento detectado: {moment["title"]}')
         try:
             self._render(moment)
             moment['status'] = 'draft'
+            moment['ready_after_s'] = self._ready_after(moment['end'])
         except Exception as error:
             moment['status'] = 'error'; moment['reason'] = f'No se pudo preparar el clip ({type(error).__name__}).'
         self.save(force=True)
@@ -425,7 +504,8 @@ class LiveSession:
         listing.write_text(''.join(f"file '{(self.segments / f'seg{i:06d}.ts').as_posix()}'\n" for i, _ in parts), encoding='utf-8')
         offset = start - parts[0][1][0]
         from app import nvenc_available
-        video = ['-c:v', 'h264_nvenc', '-preset', 'p5', '-cq', '21'] if nvenc_available() else ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18']
+        # High quality on purpose: this file is the source the 9:16 export crops and upscales from.
+        video = ['-c:v', 'h264_nvenc', '-preset', 'p5', '-tune', 'hq', '-rc', 'vbr', '-cq', '18', '-b:v', '0'] if nvenc_available() else ['-c:v', 'libx264', '-preset', 'fast', '-crf', '16']
         target = self.clips / f'{moment["id"]}.mp4'
         subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', str(listing), '-ss', f'{offset:.3f}', '-t', f'{end - start:.3f}',
                         *video, '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', str(target)], check=True, capture_output=True, timeout=300)
