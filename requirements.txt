@@ -6,7 +6,7 @@ numpy>=1.26,<3
 Pillow>=10,<13
 huggingface-hub>=0.21,<3
 httpx>=0.27,<1
-yt-dlp[default,deno]>=2026.8.19
+yt-dlp[default,deno]>=2026.10.21
 opencv-python-headless>=4.10,<5
 
 bgutil-ytdlp-pot-provider==2.0.2
