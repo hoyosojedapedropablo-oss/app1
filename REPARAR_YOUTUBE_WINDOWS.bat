@@ -8,7 +8,7 @@ if not exist ".venv\Scripts\python.exe" (
  pause
  exit /b 1
 )
-".venv\Scripts\python.exe" -m pip install --upgrade "yt-dlp[default,deno]>=2026.8.19"
+".venv\Scripts\python.exe" -m pip install --upgrade "yt-dlp[default,deno]>=2026.10.21"
 if errorlevel 1 (
  echo No se pudo actualizar. Revisa el error anterior y tu conexion.
  pause

@@ -3,6 +3,25 @@ import re,time
 from urllib.parse import urlsplit,parse_qs
 
 MAX_BYTES=12*1024**3
+from pathlib import Path
+LOG_PATH=Path(__file__).resolve().parent/'data'/'logs'/'youtube-import.log'
+_URL=re.compile(r'https?://\S+');_LONG=re.compile(r'[A-Za-z0-9_\-%=.]{40,}')
+
+def redact(text):
+ return _LONG.sub('<oculto>',_URL.sub('<url>',str(text)))[:500]
+
+class SafeLog:
+ """yt-dlp logger: keeps warnings and errors in data/logs without URLs, tokens or cookie values."""
+ def __init__(self,engine):self.engine=engine
+ def debug(self,*args):pass
+ def warning(self,message):self.write('WARN',message)
+ def error(self,message):self.write('ERROR',message)
+ def write(self,level,message):
+  try:
+   LOG_PATH.parent.mkdir(parents=True,exist_ok=True)
+   if LOG_PATH.exists() and LOG_PATH.stat().st_size>1024**2:LOG_PATH.replace(LOG_PATH.with_name(LOG_PATH.name+'.1'))
+   with LOG_PATH.open('a',encoding='utf-8') as out:out.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {self.engine} {level} {redact(message)}\n")
+  except OSError:pass
 
 def canonical_url(value):
  try:parsed=urlsplit(value.strip())
@@ -38,7 +57,11 @@ def diagnose_error(error):
   if isinstance(current,SessionUnavailable):
    from youtube_session import RETIRED
    return 'YT-CONEXION',RETIRED
-  seen.add(id(current));chain.append(str(current).lower());current=current.__cause__ or current.__context__
+  import subprocess
+  # A failed helper process prints its whole command line (e.g. "docker exec … deno eval <script>"),
+  # which used to be misread as a JavaScript failure. Classify only what the process reported.
+  text=(f'{type(current).__name__} '+str(getattr(current,'stderr','') or '')) if isinstance(current,subprocess.SubprocessError) else str(current)
+  seen.add(id(current));chain.append(text.lower());current=current.__cause__ or current.__context__
  text=' '.join(chain)
  checks=[
   ('YT-COOKIES-YOUTUBE',('no se encontraron cookies de youtube',), 'Se leyó el navegador, pero no tenía cookies de YouTube vigentes. Abre el enlace en el navegador elegido, completa la verificación y cierra ese navegador antes de reintentar.'),
@@ -52,7 +75,7 @@ def diagnose_error(error):
   ('YT-PRIVADO',('private video','members-only','members only','video is not available','video unavailable','removed by','copyright'), 'El video no está disponible públicamente o tiene restricciones. Comprueba que abre en YouTube sin iniciar sesión, o ingresa el archivo descargado.'),
   ('YT-REGION',('not available in your country','geo restricted','geo-restricted'), 'El video tiene una restricción de región y no puede descargarse desde esta conexión.'),
   ('YT-LIMITE',('429','too many requests','rate limit'), 'YouTube limitó temporalmente las descargas. Espera unos minutos antes de intentarlo de nuevo.'),
-  ('YT-JAVASCRIPT',('javascript','deno','ejs','signature extraction','nsig extraction','challenge solving'), 'Falta o falló el soporte JavaScript de YouTube. Cierra la app y ejecuta REPARAR_YOUTUBE_WINDOWS; después abre INICIAR_WINDOWS.'),
+  ('YT-JAVASCRIPT',('javascript','componente ejs','signature extraction','nsig extraction','challenge solving'), 'Falta o falló el soporte JavaScript de YouTube. Cierra la app y ejecuta REPARAR_YOUTUBE_WINDOWS; después abre INICIAR_WINDOWS.'),
   ('YT-FORMATO',('requested format','no video formats','no formats found'), 'YouTube no entregó un formato descargable. Actualiza el descargador con REPARAR_YOUTUBE_WINDOWS e inténtalo de nuevo.'),
   ('YT-403',('403','forbidden'), 'YouTube rechazó el acceso al archivo (403). Cierra la app y ejecuta REPARAR_YOUTUBE_WINDOWS. Si continúa, ingresa el archivo descargado.'),
   ('YT-TIEMPO',('timed out','timeout'), 'La conexión con YouTube agotó el tiempo de espera. Revisa tu conexión e inténtalo de nuevo.'),
@@ -90,13 +113,9 @@ def _download_attempt(url,folder,progress,mode="fast",browser="none"):
   if info.get('is_live') or info.get('live_status') in ('is_live','is_upcoming'):return 'Los directos deben haber terminado antes de descargarlos.'
   if info.get('duration') and info['duration']>12000:return 'La duración máxima es 200 minutos.'
   if info.get('filesize',0) and info['filesize']>MAX_BYTES:return 'El video supera 12 GB.'
- class Logger:
-  def debug(self,*args):pass
-  def warning(self,*args):pass
-  def error(self,*args):pass
  limit='[height<=1080]' if mode=='fast' else ''
  selector=f'bestvideo[ext=mp4][vcodec^=avc1]{limit}+bestaudio[ext=m4a]/best[ext=mp4]{limit}/bestvideo{limit}+bestaudio/best{limit}' if mode=='fast' else 'bestvideo+bestaudio/best'
- options=dict(js_runtimes=javascript_options(),concurrent_fragment_downloads=8,http_chunk_size=10*1024*1024,postprocessor_hooks=[post_hook],noplaylist=True,quiet=True,logger=Logger(),socket_timeout=30,retries=2,fragment_retries=2,progress_hooks=[hook],match_filter=match,max_filesize=MAX_BYTES,outtmpl=str(folder/'download.%(ext)s'),merge_output_format='mp4',format=selector,postprocessors=[dict(key='FFmpegVideoRemuxer',preferedformat='mp4')])
+ options=dict(js_runtimes=javascript_options(),concurrent_fragment_downloads=8,http_chunk_size=10*1024*1024,postprocessor_hooks=[post_hook],noplaylist=True,quiet=True,logger=SafeLog('yt-dlp-publico'),socket_timeout=30,retries=2,fragment_retries=2,progress_hooks=[hook],match_filter=match,max_filesize=MAX_BYTES,outtmpl=str(folder/'download.%(ext)s'),merge_output_format='mp4',format=selector,postprocessors=[dict(key='FFmpegVideoRemuxer',preferedformat='mp4')])
  if browser!='none':
   options['cookiesfrombrowser']=(browser,)
   options['cachedir']=False

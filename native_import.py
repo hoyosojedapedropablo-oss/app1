@@ -13,6 +13,8 @@ from cobalt_import import CobaltFailure,_verify_media
 
 ROOT=Path(__file__).resolve().parent
 CONFIG_PATH=ROOT/'data/youtube-native.json'
+DOCKER_MESSAGE=('El método de respaldo necesita Docker Desktop y no respondió. Abre Docker Desktop, '
+    'espera a que indique «Engine running» y vuelve a intentarlo.')
 
 
 def configuration():
@@ -57,9 +59,13 @@ console.log(JSON.stringify({status:response.status,body:JSON.parse(text)}));
 def relay_request(path,body):
     if path not in ('/ping','/get_pot') or not isinstance(body,dict) or body.get('disable_tls_verification'):
         raise ValueError('INVALID_PROVIDER_REQUEST')
-    result=subprocess.run(['docker','exec','-i','clipstudio-download-pot-provider-1',
-        'deno','eval',RELAY],input=json.dumps({'path':path,'body':body}),
-        capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=60,check=True)
+    try:
+        result=subprocess.run(['docker','exec','-i','clipstudio-download-pot-provider-1',
+            'deno','eval',RELAY],input=json.dumps({'path':path,'body':body}),
+            capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=60,check=True)
+    except (OSError,subprocess.SubprocessError):
+        # The command line embeds the relay script; never let its text reach error classification.
+        raise CobaltFailure('YT-DOCKER',DOCKER_MESSAGE) from None
     if len(result.stdout)>262144:raise ValueError('PROVIDER_RESPONSE_SIZE')
     response=json.loads(result.stdout)
     status=response.get('status')
@@ -138,15 +144,77 @@ def reusable_job(job,config):
     return type(width) is int and type(height) is int and min(width,height)>=minimum
 
 
+# Failures about the video itself: another player client would hit the same limit.
+FINAL_CODES=('YT-VALIDACION','YT-TIEMPO','YT-SERVICIO-RESPUESTA')
+
+
+def _clear_partials(folder):
+    for path in folder.glob('download.*'):
+        if path.is_file():path.unlink(missing_ok=True)
+
+
+def _fetch(url,ident,folder,progress,minimum,engine,extra):
+    import yt_dlp
+    from youtube_import import javascript_options,MAX_BYTES,SafeLog
+    target=folder/'download.mp4'
+    started=time.monotonic();sizes={};received={};announced={'bytes':0}
+    def hook(data):
+        if time.monotonic()-started>7200:raise CobaltFailure('YT-TIEMPO','La descarga superó el tiempo de espera.')
+        name=data.get('filename','video')
+        received[name]=data.get('downloaded_bytes') or 0
+        sizes[name]=data.get('total_bytes') or data.get('total_bytes_estimate') or 0
+        done=sum(received.values())
+        if done>MAX_BYTES:raise CobaltFailure('YT-VALIDACION','El video supera 12 GB.')
+        # Video and audio arrive as separate files; report both so the bar does not restart at 0%.
+        total=max(sum(sizes.values()),announced['bytes'])
+        if data.get('status')=='downloading':
+            value=min(90,int(done/total*90)) if total else 1
+            progress(value,'Descargando video completo…',downloaded_bytes=done,total_bytes=total or None,
+                speed=data.get('speed'),eta=data.get('eta'))
+    def match(info,*,incomplete=False):
+        duration=info.get('duration')
+        if duration is not None and (type(duration) not in (int,float) or not math.isfinite(duration) or not 0<duration<=12000):return 'La duración máxima es 200 minutos.'
+        if info.get('is_live') or info.get('live_status') in ('is_live','is_upcoming'):return 'Los directos deben haber terminado antes de descargarlos.'
+    options={'noplaylist':True,'quiet':True,'logger':SafeLog(engine),'cachedir':False,
+        'js_runtimes':javascript_options(),'socket_timeout':30,'retries':2,'fragment_retries':2,
+        'max_filesize':MAX_BYTES,
+        'format':'bestvideo[ext=mp4][vcodec^=avc1][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4][height<=1080]',
+        'outtmpl':str(folder/'download.%(ext)s'),'merge_output_format':'mp4','match_filter':match,'progress_hooks':[hook],
+        **extra}
+    if minimum:
+        options['format']=options['format'].replace('[height<=1080]','[height>=720][height<=1080]')
+    with yt_dlp.YoutubeDL(options) as ydl:
+        info=ydl.extract_info(url,download=False)
+        expected=info.get('duration') if isinstance(info,dict) else None
+        if not info or info.get('id')!=ident or type(expected) not in (int,float) or not math.isfinite(expected) or not 0<expected<=12000:
+            raise CobaltFailure('YT-SERVICIO-RESPUESTA','No se pudo confirmar la identidad y duración del video original.')
+        formats=info.get('requested_formats') or [info]
+        announced['bytes']=sum(item.get('filesize') or item.get('filesize_approx') or 0 for item in formats)
+        if announced['bytes']>MAX_BYTES:raise CobaltFailure('YT-VALIDACION','El video supera 12 GB.')
+        height=info.get('height') or max((f.get('height') or 0 for f in formats),default=0)
+        if minimum and height<minimum:raise CobaltFailure('YT-CALIDAD','No hay acceso a una pista de al menos 720p para este video. No se descargó en 360p.')
+        progress(1,'Descargando video completo…',title=info.get('title') or 'Video de YouTube',
+            channel=info.get('channel') or info.get('uploader') or '',duration=expected,
+            thumbnail=f'https://i.ytimg.com/vi/{ident}/hqdefault.jpg',download_engine=engine,
+            quality=f'{height}p · calidad disponible' if height else 'Mejor calidad disponible hasta 1080p')
+        ydl.process_ie_result(info,download=True)
+    progress(95,'Verificando audio, video y duración completa…')
+    _verify_media(target,float(expected))
+    measured=inspect_resolution(target,minimum) if minimum else {}
+    progress(99,'Video completo verificado.',verification_version=2,
+        **({'quality':str(measured['video_height'])+'p · HD verificado',**measured} if measured else {}))
+    return target,(info.get('title') or 'Video de YouTube')+'.mp4'
+
+
 def download(url,folder,progress,mode='fast'):
-    from youtube_import import canonical_url,javascript_options,MAX_BYTES
+    from youtube_import import canonical_url
     url=canonical_url(url);ident=url.rsplit('=',1)[-1]
     config=configuration()
     if config is None:raise CobaltFailure('YT-SERVICIO-CONFIG','El método de descarga verificado no está habilitado.')
     if mode!='fast':raise CobaltFailure('YT-SERVICIO-CALIDAD','La calidad original sigue pendiente de validación. Elige Rápida; se descargará la mejor calidad disponible hasta 1080p.')
     minimum=config.get('minimum_height',0)
     folder=Path(folder);target=folder/'download.mp4';server=None;complete=False
-    progress(0,'Consultando video de YouTube…',access_mode='none',download_engine='yt-dlp-mweb',verification_version=0)
+    progress(0,'Consultando video de YouTube…',access_mode='none',download_engine='yt-dlp',verification_version=0)
     try:
         for record in config.get('verified_files',[]):
             progress(1,'Comprobando si el video completo ya está guardado…')
@@ -161,65 +229,37 @@ def download(url,folder,progress,mode='fast'):
                     verification_version=2,quality=(str(measured['video_height'])+'p · HD verificado') if measured else 'Archivo completo verificado',**measured)
                 complete=True
                 return target,ident+'.mp4'
-        import yt_dlp
-        if version('bgutil-ytdlp-pot-provider')!='2.0.2':raise CobaltFailure('YT-SERVICIO-CONFIG','El complemento de descarga requiere revisión de versión.')
-        server,base_url,counters=provider_server()
-        status,payload=relay_request('/ping',{})
-        if status!=200 or payload.get('version')!='2.0.2':raise CobaltFailure('YT-SERVICIO-CONFIG','Abre Docker Desktop y comprueba que el servicio de descarga esté iniciado.')
-        started=time.monotonic()
-        class Logger:
-            def debug(self,*args):pass
-            def warning(self,*args):pass
-            def error(self,*args):pass
-        def hook(data):
-            if time.monotonic()-started>7200:raise CobaltFailure('YT-TIEMPO','La descarga superó el tiempo de espera.')
-            received=data.get('downloaded_bytes') or 0
-            if received>MAX_BYTES:raise CobaltFailure('YT-VALIDACION','El video supera 12 GB.')
-            total=data.get('total_bytes') or data.get('total_bytes_estimate')
-            if data.get('status')=='downloading':
-                value=min(90,int(received/total*90)) if total else 1
-                progress(value,'Descargando video completo…',downloaded_bytes=received,total_bytes=total,
-                    speed=data.get('speed'),eta=data.get('eta'))
-        def match(info,*,incomplete=False):
-            duration=info.get('duration')
-            if duration is not None and (type(duration) not in (int,float) or not math.isfinite(duration) or not 0<duration<=12000):return 'La duración máxima es 200 minutos.'
-            if info.get('is_live') or info.get('live_status') in ('is_live','is_upcoming'):return 'Los directos deben haber terminado antes de descargarlos.'
-        options={'noplaylist':True,'quiet':True,'logger':Logger(),'cachedir':False,
-            'js_runtimes':javascript_options(),'socket_timeout':30,'retries':2,'fragment_retries':2,
-            'concurrent_fragment_downloads':1,'http_chunk_size':1024*1024,'max_filesize':MAX_BYTES,
-            'extractor_args':{'youtube':{'player_client':['mweb']},'youtubepot-bgutilhttp':{'base_url':[base_url]}},
-            'format':'bestvideo[ext=mp4][vcodec^=avc1][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4][height<=1080]',
-            'outtmpl':str(folder/'download.%(ext)s'),'merge_output_format':'mp4','match_filter':match,'progress_hooks':[hook]}
-        if minimum:
-            options['format']=options['format'].replace('[height<=1080]','[height>=720][height<=1080]')
-        with yt_dlp.YoutubeDL(options) as ydl:
-            info=ydl.extract_info(url,download=False)
-            expected=info.get('duration') if isinstance(info,dict) else None
-            if not info or info.get('id')!=ident or type(expected) not in (int,float) or not math.isfinite(expected) or not 0<expected<=12000:
-                raise CobaltFailure('YT-SERVICIO-RESPUESTA','No se pudo confirmar la identidad y duración del video original.')
-            formats=info.get('requested_formats') or [info]
-            announced=sum(item.get('filesize') or item.get('filesize_approx') or 0 for item in formats)
-            if announced>MAX_BYTES:raise CobaltFailure('YT-VALIDACION','El video supera 12 GB.')
-            height=info.get('height') or max((f.get('height') or 0 for f in formats),default=0)
-            if minimum and height<minimum:raise CobaltFailure('YT-CALIDAD','No hay acceso a una pista de al menos 720p para este video. No se descargó en 360p.')
-            progress(1,'Descargando video completo…',title=info.get('title') or 'Video de YouTube',
-                channel=info.get('channel') or info.get('uploader') or '',duration=expected,
-                thumbnail=f'https://i.ytimg.com/vi/{ident}/hqdefault.jpg',
-                quality=f'{height}p · calidad disponible' if height else 'Mejor calidad disponible hasta 1080p')
-            ydl.process_ie_result(info,download=True)
-        progress(95,'Verificando audio, video y duración completa…')
-        _verify_media(target,float(expected))
-        measured=inspect_resolution(target,minimum) if minimum else {}
-        progress(99,'Video completo verificado.',verification_version=2,
-            **({'quality':str(measured['video_height'])+'p · HD verificado',**measured} if measured else {}))
+        try:
+            # yt-dlp's default clients downloaded 1080p without a PO token on the user's PC (Nov 2026),
+            # while mweb+PO token got 403 after ~30 MB. Keep mweb only as the fallback.
+            result=_fetch(url,ident,folder,progress,minimum,'yt-dlp',
+                {'concurrent_fragment_downloads':8,'http_chunk_size':10*1024*1024})
+            complete=True
+            return result
+        except Exception as error:
+            from youtube_import import diagnose_error
+            if isinstance(error,CobaltFailure) and error.code in FINAL_CODES:raise
+            direct_code=diagnose_error(error)[0];direct_error=error
+        _clear_partials(folder)
+        progress(1,'La descarga directa no se completó; probando el método de respaldo…',
+            download_engine='yt-dlp-mweb',direct_error_code=direct_code)
+        try:
+            if version('bgutil-ytdlp-pot-provider')!='2.0.2':raise CobaltFailure('YT-SERVICIO-CONFIG','El complemento de descarga requiere revisión de versión.')
+            server,base_url,counters=provider_server()
+            status,payload=relay_request('/ping',{})
+            if status!=200 or payload.get('version')!='2.0.2':raise CobaltFailure('YT-DOCKER',DOCKER_MESSAGE)
+        except CobaltFailure as failure:
+            if failure.code!='YT-DOCKER':raise
+            raise CobaltFailure('YT-DOCKER',f'La descarga directa falló ({direct_code}). '+DOCKER_MESSAGE) from direct_error
+        result=_fetch(url,ident,folder,progress,minimum,'yt-dlp-mweb',
+            {'concurrent_fragment_downloads':1,'http_chunk_size':1024*1024,
+             'extractor_args':{'youtube':{'player_client':['mweb']},'youtubepot-bgutilhttp':{'base_url':[base_url]}}})
         complete=True
-        return target,(info.get('title') or 'Video de YouTube')+'.mp4'
+        return result
     except Exception as error:
         if minimum and 'requested format is not available' in str(error).lower():
             raise CobaltFailure('YT-CALIDAD','YouTube no ofreció un formato HD accesible para este video. No se descargó en una calidad inferior.') from None
         raise
     finally:
         if server:server.shutdown();server.server_close()
-        if not complete:
-            for path in folder.glob('download.*'):
-                if path.is_file():path.unlink(missing_ok=True)
+        if not complete:_clear_partials(folder)
