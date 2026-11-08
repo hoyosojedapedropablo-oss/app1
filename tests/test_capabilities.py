@@ -62,3 +62,11 @@ class TranscriptionFallbackTests(unittest.TestCase):
 
 if __name__=='__main__':
  unittest.main()
+
+
+class ReclaimableVramTests(unittest.TestCase):
+ def test_vram_freed_by_ollama_counts_for_the_plan(self):
+  capabilities._cache=None;self.addCleanup(setattr,capabilities,'_cache',None)
+  with tempfile.TemporaryDirectory() as tmp,patch.object(capabilities,'SETTINGS',Path(tmp)/'p.json'),patch.object(capabilities,'whisper_cuda_ready',return_value=(True,'ok')),patch.object(capabilities,'free_vram_mb',return_value=1100),patch.object(capabilities,'nvidia_gpu',return_value=None):
+   self.assertEqual(capabilities.transcription_plan()[0],'cpu')
+   self.assertEqual(capabilities.transcription_plan(reclaimable_mb=4700)[0],'cuda')

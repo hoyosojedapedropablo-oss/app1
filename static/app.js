@@ -302,3 +302,53 @@ function loadPerformance(){return request('/api/capabilities').then(r=>r.json())
 $('perfToggle').onclick=()=>{$('perfPanel').classList.toggle('hidden');if(!$('perfPanel').classList.contains('hidden'))loadPerformance();};
 for(const id of ['perfTranscriptionMode','perfExportMode'])$(id).onchange=async()=>{try{paintPerformance(await(await request('/api/performance',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({transcription:$('perfTranscriptionMode').value,export:$('perfExportMode').value})})).json());}catch(e){say(e.message);}};
 loadPerformance();
+// Vista previa ampliada: the editor's own preview grows, so title, captions and logo keep the exact
+// proportions used by the export (every layer is drawn relative to the preview width).
+const previewPanel=()=>$('preview').closest('.canvas-panel');
+const inTheater=()=>previewPanel().classList.contains('theater');
+let renderURL=null;
+function setTheater(on){
+ previewPanel().classList.toggle('theater',on);document.body.classList.toggle('theater-open',on);
+ if(!on){closeRender();if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});}
+ updateTheater();requestAnimationFrame(paint);
+}
+function updateTheater(){
+ const list=job?.clips||[],i=selected?list.findIndex(c=>c.id===selected.id):-1;
+ $('prevClip').disabled=i<=0;$('nextClip').disabled=i<0||i>=list.length-1;
+ $('theaterIndex').textContent=i>=0?`Clip ${i+1} de ${list.length}`:'Clip manual';
+ $('theaterNote').textContent='Vista en vivo: el título y el logo son los mismos que se exportan; los subtítulos y sus contornos los dibuja el navegador y pueden variar ligeramente'+($('auto_follow').checked?', y el seguimiento de rostro se muestra aproximado':'')+'. Usa «Render de comprobación» para ver el MP4 exacto.';
+}
+function nudge(seconds){const v=$('video'),start=Number($('start').value),end=Number($('end').value);v.currentTime=Math.min(end-.05,Math.max(start,v.currentTime+seconds));paintTime();}
+function stepClip(delta){
+ const list=job?.clips||[],i=selected?list.findIndex(c=>c.id===selected.id):-1,next=list[i+delta];
+ if(i<0||!next)return;closeRender();$('video').pause();$('play').textContent='▶ Reproducir clip';choose(next);updateTheater();requestAnimationFrame(paint);
+}
+function closeRender(){
+ const r=$('renderVideo');r.pause();r.hidden=true;$('renderBadge').hidden=true;r.removeAttribute('src');r.load();
+ if(renderURL){URL.revokeObjectURL(renderURL);renderURL=null;}$('renderCheck').textContent='Render de comprobación';
+}
+$('expandPreview').onclick=()=>{if(!selected){say('Elige un clip para verlo en grande.');return;}setTheater(true);};
+$('closeTheater').onclick=()=>setTheater(false);
+$('back5').onclick=()=>nudge(-5);$('fwd5').onclick=()=>nudge(5);
+$('prevClip').onclick=()=>stepClip(-1);$('nextClip').onclick=()=>stepClip(1);
+$('volume').oninput=()=>{$('video').volume=$('renderVideo').volume=Number($('volume').value);};
+$('fullscreenPreview').onclick=()=>{if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});else previewPanel().requestFullscreen().catch(e=>say(e.message));};
+document.addEventListener('fullscreenchange',()=>{$('fullscreenPreview').textContent=document.fullscreenElement?'Salir de pantalla completa':'Pantalla completa';requestAnimationFrame(paint);});
+window.addEventListener('resize',()=>{if(inTheater())paint();});
+$('renderCheck').onclick=async()=>{
+ if(!$('renderVideo').hidden){closeRender();return;}
+ const button=$('renderCheck');button.disabled=true;button.textContent='Renderizando el MP4…';
+ try{
+  clearTimeout(captionTimer);if(captionPending)await refreshCaptions();saveCurrent();
+  const opts=settings();validRange(opts);if(opts.auto_follow)await ensureExportTracking(opts);
+  const blob=await(await request(`/api/jobs/${job.id}/export`,jsonOptions(opts))).blob();
+  $('video').pause();$('play').textContent='▶ Reproducir clip';
+  renderURL=URL.createObjectURL(blob);const r=$('renderVideo');r.src=renderURL;r.hidden=false;$('renderBadge').hidden=false;r.volume=Number($('volume').value);
+  r.play().catch(()=>{});button.textContent='Volver a la vista en vivo';
+ }catch(e){say(e.message);button.textContent='Render de comprobación';}finally{button.disabled=false;}
+};
+document.addEventListener('keydown',e=>{
+ if(!inTheater()||(e.target instanceof Element&&e.target.closest('input,textarea,select')))return;
+ const actions={Escape:()=>setTheater(false),' ':()=>$('play').click(),ArrowLeft:()=>nudge(-5),ArrowRight:()=>nudge(5),'[':()=>stepClip(-1),']':()=>stepClip(1)};
+ if(actions[e.key]){e.preventDefault();actions[e.key]();}
+});
