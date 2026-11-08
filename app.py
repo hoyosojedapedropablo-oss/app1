@@ -1,4 +1,4 @@
-import json, logging, os, re, subprocess, threading, uuid
+import json, logging, os, re, subprocess, threading, time, uuid
 import tempfile
 from fractions import Fraction
 from typing import Literal
@@ -12,6 +12,8 @@ from pydantic import BaseModel, Field, model_validator, SecretStr
 from timeline import make_cues, clip_words
 from intelligence import select_clips
 from styling import FONTS, ass_color, title_layout, title_bitmap
+import capabilities
+capabilities.enable_cuda_libraries()
 
 ROOT=Path(__file__).parent
 DATA=ROOT/'data'; DATA.mkdir(exist_ok=True)
@@ -205,10 +207,47 @@ class Analysis(BaseModel):
   if self.minimum>self.maximum: raise ValueError('El mínimo no puede superar el máximo.')
   return self
 
-def analyze(ident,options):
+def whisper_model(device):
+ """Keep one Whisper model; a GPU model is released after each transcription so Ollama can use the VRAM."""
  global model
+ from faster_whisper import WhisperModel
+ if model is None or model[0]!=device:
+  model=None
+  name=os.getenv('WHISPER_MODEL','small')
+  model=(device,WhisperModel(name,device='cuda',compute_type='float16') if device=='cuda' else WhisperModel(name,device='cpu',compute_type='int8',cpu_threads=capabilities.transcription_threads()))
+ return model[1]
+
+def release_gpu_whisper():
+ global model
+ if model is not None and model[0]=='cuda':
+  model=None;import gc;gc.collect()
+
+def transcribe_audio(audio,job,event):
+ device,reason=capabilities.transcription_plan()
+ job['message']=('Transcribiendo con la GPU' if device=='cuda' else 'Transcribiendo con la CPU')+f' · {reason}'
+ def run(device):
+  segments,info=whisper_model(device).transcribe(audio,vad_filter=True,word_timestamps=True)
+  transcript=[]
+  for s in segments:
+   if event.is_set():raise cloud_ai.AnalysisCancelled()
+   transcript.append(dict(start=s.start,end=s.end,text=s.text,words=[dict(start=w.start,end=w.end,text=w.word) for w in (s.words or [])]))
+   job['progress']=min(60,round(s.end/job['duration']*60))
+  return transcript
+ try:
+  if device=='cuda':
+   try:return run('cuda'),'cuda'
+   except cloud_ai.AnalysisCancelled:raise
+   except Exception as error:
+    # CUDA errors (driver, out of memory) must not cost the user the analysis: redo it on the CPU.
+    logging.getLogger('uvicorn.error').warning('GPU transcription failed, using CPU: %s',str(error)[:300])
+    release_gpu_whisper();job.update(progress=0,message='La GPU no pudo transcribir; continuando con la CPU…')
+  return run('cpu'),'cpu'
+ finally:release_gpu_whisper()
+
+def analyze(ident,options):
  job=JOBS[ident]
  try:
+  job['timings']={}
   job.update(clips=[],progress=0,analysis_range={'minimum':options.minimum,'maximum':options.maximum},status='transcribing',message='Transcribiendo con Whisper local. La primera ejecución descarga el modelo.')
   event=CANCEL.setdefault(ident,threading.Event())
   if event.is_set():raise cloud_ai.AnalysisCancelled()
@@ -223,15 +262,19 @@ def analyze(ident,options):
    transcript=gpu_transcribe.transcribe(DATA/ident/'source',DATA/ident,event,lambda percentage,message:job.update(progress=round(percentage*.6),message=message))
    cached.write_text(json.dumps(transcript,ensure_ascii=False),encoding='utf-8')
   else:
-   from faster_whisper import WhisperModel
-   if model is None:model=WhisperModel(os.getenv('WHISPER_MODEL','small'),device='cpu',compute_type='int8',cpu_threads=4)
-   audio=decode_audio(DATA/ident/'source')
-   segments,info=model.transcribe(audio,vad_filter=True,word_timestamps=True)
-   transcript=[]
-   for s in segments:
-    if event.is_set():raise cloud_ai.AnalysisCancelled()
-    transcript.append(dict(start=s.start,end=s.end,text=s.text,words=[dict(start=w.start,end=w.end,text=w.word) for w in (s.words or [])]))
-    job['progress']=min(60,round(s.end/job['duration']*60))
+   # Free Ollama's VRAM first so the transcription can use the GPU; it is reloaded right after.
+   if options.engine=='gpu':
+    try:
+     gpu_ai.unload()
+     # Ollama frees VRAM asynchronously; starting Whisper earlier overfills an 8 GB card and Windows
+     # spills to shared memory (measured: 172 s instead of 39 s for a 15-min video).
+     for _ in range(30):
+      if not gpu_ai.status()['gpu_loaded']:break
+      time.sleep(.5)
+    except Exception:pass
+   started=time.monotonic();audio=decode_audio(DATA/ident/'source')
+   transcript,device=transcribe_audio(audio,job,event)
+   job['timings']['transcription_s']=round(time.monotonic()-started,1);job['timings']['transcription_device']=device
    cached.write_text(json.dumps(transcript,ensure_ascii=False),encoding='utf-8')
   if not any(segment.get('text','').strip() for segment in transcript):raise ValueError('No se detectó voz transcribible. Revisa el audio o crea un clip manual; no se forzarán fragmentos vacíos.')
   job['transcript']=transcript
@@ -251,7 +294,7 @@ def analyze(ident,options):
   job['analysis_cache_hits']=0
   def cache_hit():job['analysis_cache_hits']+=1
   completion=cached_completion(DATA/ident/'analysis-cache',options.engine+':'+options.quality,base_completion,cache_hit)
-  topics=[]
+  topics=[];started=time.monotonic()
   if options.engine=='cloud':
    job['selection_diagnostics']=[]
    clips=cloud_ai.select_cloud(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,max_clips=options.max_clips,on_progress=progress,cancel=event,diagnostics=job['selection_diagnostics'],topic_ranges=topics,completion=completion)
@@ -260,14 +303,19 @@ def analyze(ident,options):
    clips=gpu_ai.select_gpu(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,max_clips=options.max_clips,on_progress=progress,cancel=event,diagnostics=job['selection_diagnostics'],topic_ranges=topics,completion=completion)
   else:
    clips=select_clips(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,quality=options.quality,max_clips=options.max_clips,on_progress=progress)
+  job['timings']['analysis_s']=round(time.monotonic()-started,1);started=time.monotonic()
   from coverage import complete_coverage,covered,TitleBatch
   job.update(progress=98,message='Separando conversaciones por tema y creando títulos…')
   def title_progress(done,total,stage):job.update(progress=98+round(done/max(1,total)),message=f'Títulos de clips para revisar · {done} de {total}')
   clips=complete_coverage(clips,transcript,job['duration'],options.minimum,options.maximum,completion,speaker=options.speaker,context=options.context,profile=profile,cancel=event,on_progress=title_progress,topics=topics)
+  job['timings']['titles_s']=round(time.monotonic()-started,1)
   job['topics']=topics
   job['coverage_percent']=round(100*covered(clips)/job['duration'],2)
   message=f'{len(clips)} clips · cobertura {job["coverage_percent"]}% del video. Mayor potencial identifica los destacados; el resto queda para tu revisión.' if clips else 'La selección quedó vacía tras la revisión. Esto no demuestra que el video no tenga potencial. Revisa la transcripción y añade contexto para volver a analizar sin transcribir de nuevo.'
   if job['coverage_percent']<75:message+=f' Cobertura {job["coverage_percent"]}%: no se mezclaron temas ni se forzaron respuestas incompletas para llegar al 75%. Puedes reducir el mínimo o ampliar el máximo.'
+  t=job['timings']
+  parts=([f"transcripción {t['transcription_s']} s ({'GPU' if t['transcription_device']=='cuda' else 'CPU'})"] if 'transcription_s' in t else ['transcripción reutilizada'])+[f"análisis {t['analysis_s']} s",f"títulos {t['titles_s']} s"]
+  message+=' Tiempos: '+', '.join(parts)+'.'
   job.update(status='ready',progress=100,clips=clips,message=message)
  except cloud_ai.AnalysisCancelled:job.update(status='cancelled',message='Análisis cancelado. Puedes reutilizar la transcripción completa si ya se guardó.')
  except Exception as e: job.update(status='error',message=str(e))
@@ -311,6 +359,19 @@ def cancel_job(ident:str):
  CANCEL.setdefault(ident,threading.Event()).set()
  JOBS[ident]['message']='Cancelación solicitada. Puedes cerrar la app para detener inmediatamente un cálculo local.'
  return {'ok':True}
+
+@app.get('/api/capabilities')
+def hardware_capabilities():return capabilities.summary()
+
+class Performance(BaseModel):
+ transcription:Literal['auto','gpu','cpu']='auto'
+ export:Literal['auto','gpu','cpu']='auto'
+
+@app.put('/api/performance')
+def set_performance(values:Performance):
+ global _nvenc
+ capabilities.save_settings(values.model_dump());_nvenc=None
+ return capabilities.summary()
 
 @app.get('/api/gpu')
 def gpu_status():return dict(gpu_ai.status(),transcription_installed=gpu_transcribe.installed(),transcription_ready=gpu_transcribe.installed() and (DATA/'cuda-transcription-ready.json').exists())
@@ -612,6 +673,7 @@ _nvenc=None
 def nvenc_available():
  """Probe once per process with a real tiny encode: an encoder listed by FFmpeg may still lack a driver."""
  global _nvenc
+ if capabilities.read_settings()['export']=='cpu':return False
  if _nvenc is None:
   if os.environ.get('CLIP_EXPORT_ENCODER','').lower()=='cpu':_nvenc=False
   else:

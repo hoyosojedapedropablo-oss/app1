@@ -16,6 +16,9 @@ if errorlevel 1 (
  pause
  exit /b 1
 )
+rem cuBLAS 12 lets faster-whisper transcribe on the NVIDIA GPU (about 20x real time instead of 3x on CPU).
+".venv\Scripts\python.exe" -m pip install "nvidia-cublas-cu12>=12.4,<13"
+if errorlevel 1 echo No se instalo cuBLAS: la transcripcion seguira en CPU.
 if not exist "%LOCALAPPDATA%\Programs\Ollama\ollama.exe" (
  where ollama >nul 2>nul
  if errorlevel 1 (
@@ -33,5 +36,5 @@ if errorlevel 1 (
  pause
  exit /b 1
 )
-echo Abre INICIAR_WINDOWS. Usa Local GPU y pulsa Comprobar GPU.
+echo Abre INICIAR_WINDOWS. ClipStudio detecta la GPU automaticamente; revisa el boton Rendimiento.
 pause
