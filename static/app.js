@@ -288,3 +288,17 @@ $('disconnectYoutube').onclick=async()=>{
  finally{$('disconnectYoutube').disabled=false;}
 };
 refreshYoutubeConnection();
+// Rendimiento: the server detects GPU/CPU per stage at startup; the user can override transcription and export.
+function paintPerformance(info){
+ const s=info.stages,gpu=info.gpu;
+ $('perfSummary').textContent=`Transcripción ${s.transcription.device} · IA ${s.ai.device.split(' ')[0]} · Exportar ${s.export.device.split(' ')[0]}`;
+ $('perfHardware').textContent=`${gpu?`${gpu.name} · ${(gpu.vram_free_mb/1024).toFixed(1)} de ${(gpu.vram_total_mb/1024).toFixed(1)} GB de VRAM libres · `:'Sin GPU NVIDIA · '}CPU ${info.cpu.threads} hilos · RAM ${info.ram.free_gb??'?'} de ${info.ram.total_gb??'?'} GB libres`;
+ $('perfTranscription').textContent=s.transcription.device;$('perfTranscriptionWhy').textContent=s.transcription.reason;
+ $('perfAI').textContent=s.ai.device;$('perfAIWhy').textContent=s.ai.reason;
+ $('perfExport').textContent=s.export.device;$('perfExportWhy').textContent=s.export.reason;
+ $('perfTranscriptionMode').value=info.settings.transcription;$('perfExportMode').value=info.settings.export;
+}
+function loadPerformance(){return request('/api/capabilities').then(r=>r.json()).then(paintPerformance).catch(e=>{$('perfSummary').textContent='Rendimiento no disponible';$('perfHardware').textContent=e.message;});}
+$('perfToggle').onclick=()=>{$('perfPanel').classList.toggle('hidden');if(!$('perfPanel').classList.contains('hidden'))loadPerformance();};
+for(const id of ['perfTranscriptionMode','perfExportMode'])$(id).onchange=async()=>{try{paintPerformance(await(await request('/api/performance',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({transcription:$('perfTranscriptionMode').value,export:$('perfExportMode').value})})).json());}catch(e){say(e.message);}};
+loadPerformance();
