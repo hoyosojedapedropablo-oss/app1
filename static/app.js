@@ -370,7 +370,7 @@ function paintLive(s){
   if(card&&card.dataset.key===key)continue;
   const fresh=document.createElement('article');fresh.className='live-moment';fresh.dataset.id=m.id;fresh.dataset.key=key;
   const h=document.createElement('h4');h.textContent=m.title;
-  const meta=document.createElement('div');meta.className='meta';meta.textContent=`Detectado ${m.detected_at} · minuto ${mmss(m.start)} · ${m.duration.toFixed(0)} s · ${m.source}${m.score!=null?` · ${m.score}/100`:''} · ${{rendering:'preparando…',draft:'borrador',opened:'abierto en el editor',error:'error'}[m.status]||m.status}`;
+  const meta=document.createElement('div');meta.className='meta';meta.textContent=`Detectado ${m.detected_at} · minuto ${mmss(m.start)} · ${m.duration.toFixed(0)} s · ${m.source}${m.score!=null?` · ${m.score}/100`:''}${m.ready_after_s!=null?` · listo ${Math.round(m.ready_after_s)} s después`:''} · ${{rendering:'preparando…',draft:'borrador',opened:'abierto en el editor',error:'error'}[m.status]||m.status}`;
   const reason=document.createElement('p');reason.className='meta';reason.textContent=m.reason||'';
   const row=document.createElement('div');row.className='row';
   if(['draft','opened'].includes(m.status)){
@@ -399,7 +399,7 @@ async function followLive(){
 }
 $('liveStart').onclick=async()=>{
  const button=$('liveStart');button.disabled=true;
- try{paintLive(await(await request('/api/live',jsonOptions({url:$('liveUrl').value,minimum:Number($('liveMin').value),maximum:Number($('liveMax').value),buffer_minutes:Number($('liveBuffer').value)}))).json());followLive();}
+ try{paintLive(await(await request('/api/live',jsonOptions({url:$('liveUrl').value,minimum:Number($('liveMin').value),maximum:Number($('liveMax').value),buffer_minutes:Number($('liveBuffer').value),height:Number($('liveHeight').value)}))).json());followLive();}
  catch(e){$('liveStatus').hidden=false;$('liveState').textContent='No se pudo iniciar';$('liveMessage').textContent=e.message;}finally{button.disabled=false;}
 };
 $('liveStop').onclick=async()=>{try{paintLive(await(await request(`/api/live/${liveId}/stop`,{method:'POST'})).json());followLive();}catch(e){say(e.message);}};

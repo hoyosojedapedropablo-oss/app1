@@ -19,6 +19,10 @@ if errorlevel 1 (
 rem cuBLAS 12 lets faster-whisper transcribe on the NVIDIA GPU (about 20x real time instead of 3x on CPU).
 ".venv\Scripts\python.exe" -m pip install "nvidia-cublas-cu12>=12.4,<13"
 if errorlevel 1 echo No se instalo cuBLAS: la transcripcion seguira en CPU.
+rem Whisper large-v3-turbo (~1.6 GB, once): more accurate live subtitles on the GPU. ClipStudio never downloads it by itself.
+set "HF_HOME=%CD%\data\models"
+".venv\Scripts\python.exe" -c "from faster_whisper.utils import download_model; download_model('large-v3-turbo')"
+if errorlevel 1 echo No se descargo large-v3-turbo: el clipping en vivo usara el modelo small.
 if not exist "%LOCALAPPDATA%\Programs\Ollama\ollama.exe" (
  where ollama >nul 2>nul
  if errorlevel 1 (

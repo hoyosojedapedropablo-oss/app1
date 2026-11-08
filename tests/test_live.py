@@ -112,8 +112,8 @@ class LiveSessionTests(unittest.TestCase):
    self.assertGreaterEqual(transcript[0]['start'],0);self.assertLessEqual(duration,live.WINDOW_S)
    return [{'start':10.0,'end':30.0,'title':'Un título'}]
   with patch('gpu_ai.status',return_value={'available':True,'model_ready':True}),patch('gpu_ai.select_gpu',side_effect=fake_select):
-   result=s._ai_candidates([x for x in s.transcript if x['start']>=400],400,700)
-  self.assertEqual((result[0]['start'],result[0]['end']),(410.0,430.0))
+   result,topics=s._ai_candidates([x for x in s.transcript if x['start']>=520],520,700)
+  self.assertEqual((result[0]['start'],result[0]['end']),(530.0,550.0));self.assertEqual(topics,[])
 
  def test_state_survives_restart_as_interrupted(self):
   s=self.session();s.status='live';s.media_s=125.5;s.moments=[{'id':'m1','status':'draft','start':1,'end':20,'title':'t'}];s.segment_times={3:[30,40]};s.save(force=True)

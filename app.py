@@ -728,6 +728,7 @@ class LiveInput(BaseModel):
  minimum:int=Field(default=20,ge=5,le=180)
  maximum:int=Field(default=60,ge=5,le=180)
  buffer_minutes:int=Field(default=60,ge=10,le=180)
+ height:Literal[720,1080,1440]=1080
  @model_validator(mode='after')
  def validate_range(self):
   if self.minimum>self.maximum:raise ValueError('El mínimo no puede superar el máximo.')
@@ -739,7 +740,7 @@ def live_session(sid):
 
 @app.post('/api/live')
 def start_live(options:LiveInput):
- try:session=live.LiveSession(LIVE_DIR,options.url,options.minimum,options.maximum,options.buffer_minutes)
+ try:session=live.LiveSession(LIVE_DIR,options.url,options.minimum,options.maximum,options.buffer_minutes,height=options.height)
  except live.LiveError as e:raise HTTPException(400,str(e))
  if any(s.status in live.RUNNING for s in LIVE.values()):raise HTTPException(409,'Ya hay una sesión en vivo activa. Detenla antes de iniciar otra.')
  LIVE[session.id]=session;session.start()
