@@ -55,7 +55,7 @@ def register_video(ident,path,name,*,max_duration=7200):
  if stream is None:raise ValueError('El archivo no contiene video.')
  try:fps=float(Fraction(stream.get('avg_frame_rate','30/1')))
  except (ValueError,ZeroDivisionError):fps=30
- JOBS[ident]=dict(id=ident,name=name,duration=duration,fps=max(24,min(60,fps)),status='uploaded',clips=[])
+ JOBS[ident]=dict(id=ident,name=name,duration=duration,fps=max(24,min(60,fps)),status='uploaded',clips=[],clip_settings=dict(CLIP_DEFAULTS))
  save_job(JOBS[ident]);return JOBS[ident]
 
 IMPORTS={}
@@ -202,6 +202,7 @@ class Analysis(BaseModel):
  engine:Literal['gpu','cloud','local']='gpu'
  transcribe_gpu:bool=False
  max_clips:int=Field(default=10,ge=1,le=20)
+ clip_settings:dict|None=None
  @model_validator(mode='after')
  def validate_range(self):
   if self.minimum>self.maximum: raise ValueError('El mínimo no puede superar el máximo.')
@@ -334,7 +335,10 @@ def start(ident:str,options:Analysis):
   import importlib.util
   if importlib.util.find_spec('llama_cpp') is None:raise HTTPException(400,'Para usar IA local, ejecuta INSTALAR_IA_LOCAL y reinicia la app. El modo nube no necesita ese motor.')
  CANCEL[ident]=threading.Event()
- JOBS[ident]['analysis_options']=options.model_dump()
+ if options.clip_settings is not None:
+  try:JOBS[ident]['clip_settings']=ClipSettings(**options.clip_settings).model_dump()
+  except ValueError:raise HTTPException(400,'Configuración de clips inválida.')
+ JOBS[ident]['analysis_options']=options.model_dump(exclude={'clip_settings'})
  JOBS[ident]['status']='queued'; JOBS[ident]['started_at']=__import__('time').time();save_job(JOBS[ident]); pool.submit(analyze,ident,options)
  return JOBS[ident]
 
@@ -409,7 +413,7 @@ def list_jobs():
 @app.get('/api/jobs/{ident}')
 def status(ident:str):
  if ident not in JOBS: raise HTTPException(404)
- return {key:value for key,value in JOBS[ident].items() if key!='transcript'}
+ return {**{key:value for key,value in JOBS[ident].items() if key!='transcript'},'clip_settings':clip_settings(JOBS[ident])}
 
 @app.get('/api/jobs/{ident}/video')
 def video(ident:str):
@@ -489,6 +493,12 @@ class Export(BaseModel):
  framing:str='crop'
  focus_x:float=Field(default=50,ge=0,le=100)
  focus_y:float=Field(default=50,ge=0,le=100)
+ # Defaults keep the previous behaviour for old projects; new projects send their saved "Configura tus clips" values.
+ zoom:Literal['soft','balanced','close']='balanced'
+ tracking_person:str=Field(default='auto',pattern=r'^(auto|\d{1,4})$')
+ tracking_motion:Literal['smooth','balanced','fast']='balanced'
+ show_subtitles:bool=True
+ title_corners:Literal['rounded','square']='square'
 
 def stamp(seconds):
  c=round(max(0,seconds)*100); return f'{c//360000}:{c//6000%60:02}:{c//100%60:02}.{c%100:02}'
@@ -533,6 +543,24 @@ def start_tracking(ident:str,opts:TrackingInput):
   TRACKING[(ident,track_key)]=dict(status='queued',progress=0)
   tracking_pool.submit(track_clip,ident,opts.start,opts.end,track_key)
  return dict(key=track_key,**TRACKING[(ident,track_key)])
+
+class PathInput(TrackingInput):
+ person:str=Field(default='auto',pattern=r'^(auto|\d{1,4})$')
+ motion:Literal['smooth','balanced','fast']='balanced'
+ framing:Literal['crop','zoom']='zoom'
+ zoom:Literal['soft','balanced','close']='balanced'
+ focus_y:float=Field(default=50,ge=0,le=100)
+
+@app.post('/api/jobs/{ident}/tracking/path')
+def tracking_path(ident:str,opts:PathInput):
+ """The exact camera path the export will use, so the preview can play the same motion."""
+ import tracking
+ if ident not in JOBS:raise HTTPException(404)
+ cache=DATA/ident/f'tracking-{tracking.key(opts.start,opts.end)}.json'
+ if not cache.exists():raise HTTPException(404,'Calcula el seguimiento primero.')
+ result=json.loads(cache.read_text(encoding='utf-8'))
+ if 'samples' not in result:raise HTTPException(409,'El seguimiento se calculó con una versión anterior. Vuelve a calcularlo.')
+ return dict(tracking.build_path(result,opts.person,opts.motion,opts.framing,opts.zoom,opts.focus_y),persons=result.get('persons',[]))
 
 @app.get('/api/jobs/{ident}/tracking/{track_key}')
 def tracking_status(ident:str,track_key:str):
@@ -594,7 +622,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 def render_title(opts):
  font=opts.title_font if opts.title_font in FONTS else 'Montserrat'
- return title_bitmap(opts.title,font,opts.title_size,opts.title_padding_x,opts.title_padding_y,opts.title_bg_color,opts.title_text_color,opts.title_outline_color,opts.title_outline_width)
+ return title_bitmap(opts.title,font,opts.title_size,opts.title_padding_x,opts.title_padding_y,opts.title_bg_color,opts.title_text_color,opts.title_outline_color,opts.title_outline_width,opts.title_corners)
 
 @app.post('/api/title-preview')
 def title_preview(opts:Export):
@@ -609,7 +637,7 @@ def title_preview(opts:Export):
 def export(ident:str,opts:Export):
  if ident not in JOBS: raise HTTPException(404)
  if opts.end<=opts.start or opts.end>JOBS[ident]['duration'] or opts.end-opts.start>180: raise HTTPException(400,'El clip debe durar entre 0 y 180 segundos y estar dentro del video.')
- if opts.framing not in ['fit','crop']: raise HTTPException(400)
+ if opts.framing not in ['fit','crop','zoom']: raise HTTPException(400)
  if not re.fullmatch(r'(none|kick|roobet|rainbet|[a-f0-9]{32})',opts.logo): raise HTTPException(400)
  logo=DATA/f'{opts.logo}.png'
  if opts.logo!='none' and not logo.exists(): raise HTTPException(400,'Primero carga el archivo del logo seleccionado.')
@@ -623,18 +651,21 @@ def export(ident:str,opts:Export):
   ass_file(ass,opts,JOBS[ident].get('transcript',[]))
   image=render_title(opts)
  except ValueError as e:raise HTTPException(400,str(e))
- geometry='scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black' if opts.framing=='fit' else f'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(iw-ow)*{opts.focus_x/100}:(ih-oh)*{opts.focus_y/100}'
+ import tracking
+ geometry=tracking.static_filter(opts.framing,opts.zoom,opts.focus_x,opts.focus_y)
  if opts.auto_follow:
-  import tracking
-  if opts.framing!='crop':raise HTTPException(400,'El seguimiento necesita el encuadre Llenar pantalla.')
+  if opts.framing not in ('crop','zoom'):raise HTTPException(400,'El seguimiento necesita el encuadre con zoom o pantalla completa.')
   cache=folder/f'tracking-{tracking.key(opts.start,opts.end)}.json'
   if not cache.exists():raise HTTPException(400,'Calcula el seguimiento del clip en el editor antes de exportarlo.')
-  geometry=tracking.commands(json.loads(cache.read_text(encoding='utf-8')),folder/f'{token}-tracking.cmd',opts.end-opts.start)
+  result=json.loads(cache.read_text(encoding='utf-8'))
+  path=tracking.build_path(result,opts.tracking_person,opts.tracking_motion,opts.framing,opts.zoom,opts.focus_y)
+  geometry=tracking.commands(path,folder/f'{token}-tracking.cmd',opts.end-opts.start,JOBS[ident].get('fps',30),result['width'],result['height'])
  # Relative font directory avoids escaping Windows drive letters in FFmpeg filters.
  import shutil
  fonts=folder/'fonts'
  if not fonts.exists():shutil.copytree(ROOT/'static/fonts',fonts)
- filters=f'{geometry},setsar=1,setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=2,ass={ass.name}:fontsdir=fonts'
+ # Without subtitles the transcript still drives the analysis; only the burned-in layer is skipped.
+ filters=f'{geometry},setsar=1,setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=2'+(f',ass={ass.name}:fontsdir=fonts' if opts.show_subtitles else '')
  args=['ffmpeg','-v','error','-y','-ss',str(opts.start),'-t',str(opts.end-opts.start),'-i',str(folder/'source')]
  title_path=folder/f'{token}-title.png'
  graph=[f'[0:v]{filters}[v0]'];last='v0';input_index=1
@@ -692,6 +723,37 @@ def encode(args,cwd=None,env=None):
    _nvenc=False
  return command(head+CPU_VIDEO+tail,cwd=cwd,env=env)
 
+
+# "Configura tus clips": per-project preferences. New projects get the new defaults; projects saved before this
+# feature keep the behaviour they had (full 9:16 crop, square titles, no automatic tracking).
+CLIP_DEFAULTS=dict(framing='zoom',zoom='balanced',tracking=True,tracking_motion='balanced',subtitles=True,title_corners='rounded')
+LEGACY_CLIP_SETTINGS=dict(framing='crop',zoom='balanced',tracking=False,tracking_motion='balanced',subtitles=True,title_corners='square')
+
+class ClipSettings(BaseModel):
+ framing:Literal['zoom','crop','fit']='zoom'
+ zoom:Literal['soft','balanced','close']='balanced'
+ tracking:bool=True
+ tracking_motion:Literal['smooth','balanced','fast']='balanced'
+ subtitles:bool=True
+ title_corners:Literal['rounded','square']='rounded'
+
+def clip_settings(job):
+ return {**LEGACY_CLIP_SETTINGS,**job['clip_settings']} if job.get('clip_settings') else dict(LEGACY_CLIP_SETTINGS,legacy=True)
+
+@app.put('/api/jobs/{ident}/clip-settings')
+def save_clip_settings(ident:str,values:ClipSettings):
+ if ident not in JOBS:raise HTTPException(404)
+ JOBS[ident]['clip_settings']=values.model_dump();save_job(JOBS[ident])
+ return JOBS[ident]['clip_settings']
+
+@app.get('/api/jobs/{ident}/frame')
+def video_frame(ident:str,t:float=0):
+ """Small still of the source, used to preview the two framing styles before generating clips."""
+ if ident not in JOBS:raise HTTPException(404)
+ t=max(0,min(float(t),JOBS[ident]['duration']-.1))
+ result=subprocess.run(['ffmpeg','-v','error','-ss',str(t),'-i',str(DATA/ident/'source'),'-frames:v','1','-vf','scale=640:-2','-f','image2','-vcodec','mjpeg','-'],capture_output=True,timeout=30)
+ if result.returncode or not result.stdout:raise HTTPException(500,'No se pudo leer un fotograma del video.')
+ return Response(result.stdout,media_type='image/jpeg',headers={'Cache-Control':'max-age=3600'})
 
 def save_job(job):
  path=DATA/job['id']/'job.json'
@@ -804,7 +866,8 @@ def open_live_moment(sid:str,mid:str):
             text=moment['text'],score=moment['score'],category=moment['category'],reason=moment['reason'],evidence=moment['evidence'],source=moment['source'],
             captions=make_cues(transcript,start,end))
   job.update(status='ready',clips=[clip],transcript=transcript,analysis_range={'minimum':min(session.minimum,int(end-start)),'maximum':max(session.maximum,math.ceil(end-start))},
-             live={'session':sid,'moment':mid,'channel':session.channel,'stream_title':session.title},message='Momento del directo listo para editar.')
+             live={'session':sid,'moment':mid,'channel':session.channel,'stream_title':session.title},message='Momento del directo listo para editar.',
+             clip_settings=dict(CLIP_DEFAULTS))
   save_job(job)
  except Exception as e:
   JOBS.pop(ident,None);shutil.rmtree(folder,ignore_errors=True)
