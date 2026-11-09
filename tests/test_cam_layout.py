@@ -143,6 +143,17 @@ class ExportTests(unittest.TestCase):
             self.assertEqual(client.post(f'/api/jobs/{ident}/layout/path', json=dict(start=0, end=4)).json()['cam']['x'], 880)
             self.assertEqual(client.put(f'/api/jobs/{ident}/overlay', json=dict(x=1200, y=10, w=380, h=290)).status_code, 400)
 
+    def test_old_automatic_detections_are_redone_but_manual_ones_are_kept(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp, patch.object(backend, 'DATA', Path(tmp)):
+            (Path(tmp) / 'job').mkdir()
+            backend.write_overlay('job', dict(found=True, x=1, y=1, w=50, h=50))                 # saved by detector 1
+            self.assertIsNone(backend.read_overlay('job'))
+            backend.write_overlay('job', dict(found=True, manual=True, x=1, y=1, w=50, h=50))
+            self.assertEqual(backend.read_overlay('job')['w'], 50)
+            backend.write_overlay('job', dict(found=True, detector=layout.DETECTOR_VERSION, x=2, y=2, w=60, h=60))
+            self.assertEqual(backend.read_overlay('job')['w'], 60)
+
     def test_stack_without_a_camera_explains_what_to_do(self):
         client = TestClient(backend.app)
         with tempfile.TemporaryDirectory() as tmp, patch('tracking.make_detector', fake_detector(None)):

@@ -17,6 +17,7 @@ from pathlib import Path
 import numpy as np
 
 VERSION = 1
+DETECTOR_VERSION = 2          # 2: steady/busy seam search (wide cameras with a static room, Spreen)
 CANVAS_W, CANVAS_H = 1080, 1920
 TOP_MIN, TOP_MAX = 768, 960        # camera panel: 40-50 % of the height
 SEAM = 6                           # dark line between camera and game (px)
@@ -130,7 +131,7 @@ def detect_overlay(source, duration=None, samples=40, progress=lambda v: None, s
         grays.append(gray.astype(np.uint8))
         edges_x += np.abs(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)) > 40
         edges_y += np.abs(cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)) > 40
-    none = dict(found=False, kind='none', width=W, height=H, presence=0)
+    none = dict(found=False, kind='none', detector=DETECTOR_VERSION, width=W, height=H, presence=0)
     if not used or not faces: return none
     groups = _clusters(faces, used)
     group = groups[0]; presence = len({f[4] for f in group}) / used
@@ -167,7 +168,7 @@ def detect_overlay(source, duration=None, samples=40, progress=lambda v: None, s
     content = dict(x=even(x0), y=even(y0), w=min(W, even(x1)) - even(x0), h=min(H, even(y1)) - even(y0))
     if content['w'] >= W - 4 and content['h'] >= H - 4: content = dict(x=0, y=0, w=W, h=H)
     progress(100)
-    return dict(found=True, kind='overlay', width=W, height=H, presence=round(presence, 2), content=content, **box,
+    return dict(found=True, kind='overlay', detector=DETECTOR_VERSION, width=W, height=H, presence=round(presence, 2), content=content, **box,
                 face=dict(x=round(fx * ratio, 1), y=round(fy * ratio, 1), w=round(fw * ratio, 1), h=round(fh * ratio, 1)))
 
 
