@@ -110,18 +110,22 @@ function retryThumb(img, url) {
 let hoverTimer = null, hoverFor = null;
 function showBigPreview(c, card) {
   hideBigPreview(); hoverFor = c.id;
-  const video = h('video', { muted: true, playsinline: true, loop: true, autoplay: true, preload: 'auto' }); video.muted = true;
+  // With sound: the user has already clicked in the app, so browsers allow it; if one refuses, it plays muted.
+  const video = h('video', { playsinline: true, loop: true, preload: 'auto' }); video.muted = false;
   const wait = h('div', { class: 'bp-wait' }, h('span', { class: 'bars', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'), h('i')), h('span', { text: 'Preparando la vista previa…' }));
   const panel = h('div', { id: 'bigPreview', class: 'big-preview', role: 'dialog', 'aria-label': `Vista previa de ${c.title}` },
     h('div', { class: 'bp-frame' }, h('img', { src: c.thumb_url, alt: '' }), video, wait),
     h('div', { class: 'bp-info' }, h('b', { text: c.title }), h('span', { class: 'muted', text: `${c.channel} · ${fmtDur(c.duration || 0)}` }),
-      h('button', { class: 'btn ghost', type: 'button', text: '🔊 Con sonido', onclick: (e) => { e.stopPropagation(); video.muted = !video.muted; e.target.textContent = video.muted ? '🔊 Con sonido' : '🔇 Silenciar'; } })));
+      h('button', { class: 'btn ghost bp-sound', type: 'button', text: '🔇 Silenciar', onclick: (e) => { e.stopPropagation(); video.muted = !video.muted; e.target.textContent = video.muted ? '🔊 Con sonido' : '🔇 Silenciar'; } })));
   panel.addEventListener('mouseleave', () => hideBigPreview());
   document.body.append(panel);
   const r = card.getBoundingClientRect(), w = panel.offsetWidth, hgt = panel.offsetHeight;
   const left = r.right + 16 + w < innerWidth ? r.right + 16 : Math.max(16, r.left - 16 - w);
   panel.style.left = left + 'px'; panel.style.top = Math.max(16, Math.min(innerHeight - hgt - 16, r.top + r.height / 2 - hgt / 2)) + 'px';
-  video.addEventListener('canplay', () => { wait.remove(); panel.classList.add('ready'); video.play().catch(() => {}); });
+  video.addEventListener('canplay', () => {
+    wait.remove(); panel.classList.add('ready');
+    video.play().catch(() => { video.muted = true; panel.querySelector('.bp-sound').textContent = '🔊 Con sonido'; video.play().catch(() => {}); });
+  }, { once: true });
   video.addEventListener('error', () => { wait.querySelector('span:last-child').textContent = 'No se pudo preparar la vista previa'; });
   video.src = `/api/library/${encodeURIComponent(c.id)}/preview.mp4`;
 }
@@ -447,12 +451,20 @@ function paintLiveMoments() {
   $('liveBatch').hidden = !liveUI.picked.size; $('liveBatchLabel').textContent = liveUI.picked.size === 1 ? '1 clip seleccionado' : `${liveUI.picked.size} clips seleccionados`;
   const grid = $('liveMomentGrid'); grid.className = liveUI.view === 'grid' ? 'grid live-grid' : 'live-list';
   put(grid, list.map((m) => liveUI.view === 'grid' ? momentCard(s, m) : momentRow(s, m)));
+  const ids = list.filter((m) => m.status !== 'rendering').slice(0, 12).map((m) => momentId(s.id, m.id)).join(',');
+  if (ids && ids !== liveUI.warmed) { liveUI.warmed = ids; api('/api/library?origin=live').then(() => api('/api/library/previews/warm', jsonOptions({ ids: ids.split(',') }))).catch(() => {}); }
 }
 function momentCard(s, m) {
   if (m.status === 'rendering') return h('div', { class: 'card mcard preparing' }, h('div', { class: 'thumb9' }, h('span', { class: 'bars', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'), h('i')), h('span', { class: 'muted', text: 'Preparando el clip…' })), h('b', { class: 't', text: m.title }), h('span', { class: 'muted', text: `Detectado ${m.detected_at}` }));
   const id = momentId(s.id, m.id), picked = liveUI.picked.has(m.id);
-  const box = previewBox(`/api/library/${encodeURIComponent(id)}/thumb`, `/api/live/${s.id}/moments/${m.id}/video`, 3, m.duration);
+  const thumb = `/api/library/${encodeURIComponent(id)}/thumb`;
+  const box = previewBox(thumb, null, 3, m.duration);
   box.classList.add('thumb9');
+  const img = box.querySelector('img'); if (img) retryThumb(img, thumb);
+  // Same big preview with sound as in the library: the moment as it will look, without opening the editor.
+  const look = { id, title: m.title, channel: s.channel || 'Directo', duration: m.duration, thumb_url: thumb };
+  box.addEventListener('mouseenter', () => { clearTimeout(hoverTimer); hoverTimer = setTimeout(() => showBigPreview(look, box), 350); });
+  box.addEventListener('mouseleave', (e) => { clearTimeout(hoverTimer); if (!e.relatedTarget?.closest?.('#bigPreview')) hideBigPreview(); });
   if (m.score != null) box.append(h('span', { class: 'chip score', text: String(Math.round(m.score)) }));
   box.append(h('span', { class: 'chip glass dur', text: fmtDur(m.duration) }));
   const card = h('div', { class: 'card mcard' + (picked ? ' sel' : ''), role: 'button', tabindex: '0', 'aria-pressed': String(picked),
