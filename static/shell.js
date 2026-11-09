@@ -42,7 +42,7 @@ function navigate(name) {
   for (const v of VIEWS) $(v + 'View')?.classList.toggle('hidden', v !== name);
   for (const b of document.querySelectorAll('#sideNav button')) b.classList.toggle('on', b.dataset.view === name);
   window.scrollTo({ top: 0 });
-  ({ home: renderHome, library: renderLibrary, projects: renderProjects, live: renderLiveHistory, settings: renderSettings })[name]?.();
+  ({ home: renderHome, library: renderLibrary, projects: renderProjects, live: () => { buildLiveLayout(); renderLiveHistory(); if (liveId) followLive(); }, settings: renderSettings })[name]?.();
   if (name === 'editor') requestAnimationFrame(() => { try { paint(); } catch {} });
   try { localStorage.setItem('cs.view', name); } catch {}
 }
@@ -269,6 +269,118 @@ async function renderLiveHistory() {
         h('button', { class: 'btn ghost', type: 'button', text: 'Ver sus clips en la biblioteca', onclick: () => { libState.channel = list[0].channel || ''; navigate('library'); } }));
     })) : h('div', { class: 'empty', text: 'Todavía no has hecho clipping en vivo.' }));
 }
+
+// --- Clips en vivo (prototype layout) ---------------------------------------------------------------------------
+// The existing controls (link field, start/stop/resume, the config modal) move into the new layout; their handlers in
+// app.js keep working. paintLive(s) from app.js still runs and also feeds this view.
+const liveUI = { view: 'grid', sort: 'recent', picked: new Set(), session: null, frameTimer: null };
+function buildLiveLayout() {
+  if ($('liveConnect')) return;
+  const host = $('liveHost'); $('livePanel').style.display = 'none';
+  const url = $('liveUrl'); url.placeholder = 'Pega el enlace del directo: kick.com/canal o youtube.com/@canal/live';
+  const connect = h('div', { id: 'liveConnect', class: 'card live-connect' },
+    h('label', { class: 'search big' }, svg('<circle cx="12" cy="12" r="2.5"></circle><path d="M7.5 7.5a6.4 6.4 0 0 0 0 9M16.5 7.5a6.4 6.4 0 0 1 0 9"></path>', 20), url),
+    h('div', { class: 'live-buttons' }, $('liveStart'), $('liveStop'), $('liveResume')),
+    h('p', { class: 'muted', style: 'margin:0', text: 'Usa directos públicos y respeta los derechos del creador y las normas de Kick y YouTube. ClipStudio no evita restricciones de acceso, inicios de sesión ni DRM.' }));
+  const now = h('div', { id: 'liveNow', class: 'live-now', hidden: true },
+    h('div', { class: 'card live-stage' },
+      h('div', { class: 'live-frame' }, h('img', { id: 'liveFrame', alt: 'Imagen actual del directo' }), h('span', { class: 'scan', 'aria-hidden': 'true' }),
+        h('div', { class: 'live-chips' }, h('span', { id: 'liveBadge', class: 'chip live', text: 'EN VIVO' }), h('span', { id: 'livePlatform' }), h('span', { id: 'liveClock', class: 'chip glass' })),
+        h('span', { class: 'chip glass live-note', text: 'Imagen de la grabación local · se actualiza cada pocos segundos' })),
+      h('div', { class: 'live-who' }, h('b', { id: 'liveWho' }), h('span', { id: 'liveTitle', class: 'muted' }), h('span', { id: 'liveConn', class: 'live-conn' }))),
+    h('div', { class: 'live-side' },
+      h('div', { class: 'card live-stats' }, ['liveStatMoments:momentos detectados', 'liveStatReady:clips listos', 'liveStatBuffer:búfer guardado', 'liveStatLang:subtítulos'].map((x) => { const [id, label] = x.split(':'); return h('div', {}, h('b', { id }), h('span', { text: label })); })),
+      h('div', { class: 'card live-ai' }, h('span', { class: 'lbl', text: 'Actividad de la IA' }), h('div', { class: 'live-ai-row' }, h('span', { class: 'bars', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'), h('i')), h('span', { id: 'liveAiDevice' })),
+        h('span', { id: 'liveAiMessage', class: 'muted' }), h('span', { id: 'liveAiText', class: 'live-quote' }))));
+  const moments = h('section', { id: 'liveMomentsBox', hidden: true },
+    h('div', { class: 'section-head', style: 'margin-top:26px' }, h('h2', { text: 'Momentos de esta sesión' }), h('span', { id: 'liveMomentsCount', class: 'muted' }),
+      h('div', { class: 'seg', role: 'group', 'aria-label': 'Ordenar' }, [['recent', 'Recientes'], ['score', 'Relevancia'], ['duration', 'Duración']].map(([v, t]) => h('button', { type: 'button', 'data-sort': v, text: t, onclick: () => { liveUI.sort = v; paintLiveMoments(); } }))),
+      h('div', { class: 'seg', role: 'group', 'aria-label': 'Vista' }, [['grid', 'Cuadrícula'], ['list', 'Lista']].map(([v, t]) => h('button', { type: 'button', 'data-lview': v, text: t, onclick: () => { liveUI.view = v; paintLiveMoments(); } })))),
+    h('div', { id: 'liveBatch', class: 'card live-batch', hidden: true }, h('b', { id: 'liveBatchLabel' }), h('span', { style: 'flex:1' }),
+      h('button', { class: 'btn ghost', type: 'button', text: 'Añadir etiqueta', onclick: () => batchLive('tag') }), h('button', { class: 'btn ghost', type: 'button', text: 'Favoritos', onclick: () => batchLive('fav') }),
+      h('button', { class: 'btn danger', type: 'button', text: 'Descartar', onclick: () => batchLive('discard') }), h('button', { class: 'btn ghost', type: 'button', text: 'Cancelar', onclick: () => { liveUI.picked.clear(); paintLiveMoments(); } })),
+    h('div', { id: 'liveMomentGrid' }));
+  host.prepend(connect, now, moments);
+}
+const momentId = (sid, mid) => `live:${sid}:${mid}`;
+function paintLiveView(s) {
+  buildLiveLayout(); liveUI.session = s;
+  const running = ['starting', 'live', 'reconnecting'].includes(s.status);
+  $('liveNow').hidden = false; $('liveMomentsBox').hidden = !s.moments.length;
+  $('liveBadge').textContent = running ? 'EN VIVO' : ({ stopped: 'DETENIDA', ended: 'TERMINADO', interrupted: 'INTERRUMPIDA', error: 'ERROR', stopping: 'DETENIENDO' })[s.status] || s.status.toUpperCase();
+  $('liveBadge').className = 'chip ' + (running ? 'live' : 'glass');
+  $('livePlatform').replaceChildren(platformLogo(s.platform) || ''); $('livePlatform').className = 'chip glass logo';
+  $('liveClock').textContent = mmss(s.media_s);
+  $('liveWho').textContent = s.channel || 'Directo'; $('liveTitle').textContent = s.title || '';
+  $('liveConn').textContent = running ? (s.status === 'reconnecting' ? 'Reconectando…' : `Conexión estable · ${s.reconnects} reconexiones`) : 'Sesión guardada · sus momentos siguen en la biblioteca';
+  $('liveConn').classList.toggle('ok', running && s.status !== 'reconnecting');
+  const ready = s.moments.filter((m) => ['draft', 'opened'].includes(m.status)).length;
+  $('liveStatMoments').textContent = s.moments.length; $('liveStatReady').textContent = ready;
+  $('liveStatBuffer').textContent = `${s.buffer_minutes} min`; $('liveStatLang').textContent = ({ es: 'Español', en: 'Inglés', pt: 'Portugués', fr: 'Francés', it: 'Italiano', de: 'Alemán' })[s.language] || s.language;
+  $('liveAiDevice').textContent = !running ? 'Sin actividad: la sesión no está en curso' : s.transcription_device ? `Transcribiendo · ${s.transcription_device}` : 'Preparando la transcripción…';
+  document.querySelector('.live-ai .bars').classList.toggle('paused', !running);
+  $('liveAiMessage').textContent = s.message || ''; $('liveAiText').textContent = s.recent_text ? `«…${s.recent_text}»` : '';
+  clearTimeout(liveUI.frameTimer);
+  const refresh = () => { const img = $('liveFrame'); const next = new Image(); next.onload = () => { img.src = next.src; }; next.src = `/api/live/${s.id}/frame?t=${Date.now()}`; if (running && current === 'live') liveUI.frameTimer = setTimeout(refresh, 5000); };
+  refresh();
+  paintLiveMoments();
+}
+function paintLiveMoments() {
+  const s = liveUI.session; if (!s) return;
+  for (const b of document.querySelectorAll('[data-sort]')) b.classList.toggle('on', b.dataset.sort === liveUI.sort);
+  for (const b of document.querySelectorAll('[data-lview]')) b.classList.toggle('on', b.dataset.lview === liveUI.view);
+  const list = s.moments.slice();
+  if (liveUI.sort === 'recent') list.reverse(); else if (liveUI.sort === 'score') list.sort((a, b) => (b.score || 0) - (a.score || 0)); else list.sort((a, b) => b.duration - a.duration);
+  $('liveMomentsCount').textContent = `${s.moments.length} momentos · pasa el cursor para verlos, toca uno para seleccionarlo`;
+  for (const id of [...liveUI.picked]) if (!s.moments.some((m) => m.id === id)) liveUI.picked.delete(id);
+  $('liveBatch').hidden = !liveUI.picked.size; $('liveBatchLabel').textContent = liveUI.picked.size === 1 ? '1 clip seleccionado' : `${liveUI.picked.size} clips seleccionados`;
+  const grid = $('liveMomentGrid'); grid.className = liveUI.view === 'grid' ? 'grid live-grid' : 'live-list';
+  put(grid, list.map((m) => liveUI.view === 'grid' ? momentCard(s, m) : momentRow(s, m)));
+}
+function momentCard(s, m) {
+  if (m.status === 'rendering') return h('div', { class: 'card mcard preparing' }, h('div', { class: 'thumb9' }, h('span', { class: 'bars', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'), h('i')), h('span', { class: 'muted', text: 'Preparando el clip…' })), h('b', { class: 't', text: m.title }), h('span', { class: 'muted', text: `Detectado ${m.detected_at}` }));
+  const id = momentId(s.id, m.id), picked = liveUI.picked.has(m.id);
+  const box = previewBox(`/api/library/${encodeURIComponent(id)}/thumb`, `/api/live/${s.id}/moments/${m.id}/video`, 3, m.duration);
+  box.classList.add('thumb9');
+  if (m.score != null) box.append(h('span', { class: 'chip score', text: String(Math.round(m.score)) }));
+  box.append(h('span', { class: 'chip glass dur', text: fmtDur(m.duration) }));
+  const card = h('div', { class: 'card mcard' + (picked ? ' sel' : ''), role: 'button', tabindex: '0', 'aria-pressed': String(picked),
+    onclick: () => { picked ? liveUI.picked.delete(m.id) : liveUI.picked.add(m.id); paintLiveMoments(); },
+    onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); card.click(); } } }, box,
+    h('b', { class: 't', text: m.title }), h('span', { class: 'muted', text: `${m.detected_at} · ${m.status === 'opened' ? 'Abierto en el editor' : 'Listo'}` }),
+    h('div', { class: 'acts' }, h('button', { class: 'btn primary', type: 'button', text: 'Editar', onclick: (e) => { e.stopPropagation(); openMoment(s, m); } }),
+      h('button', { class: 'btn ghost', type: 'button', text: 'Descartar', onclick: (e) => { e.stopPropagation(); discardMoment(s, m); } })));
+  return card;
+}
+function momentRow(s, m) {
+  return h('div', { class: 'live-row' }, h('img', { src: `/api/library/${encodeURIComponent(momentId(s.id, m.id))}/thumb`, alt: '', loading: 'lazy' }), h('b', { text: m.title, style: 'flex:1;min-width:0' }),
+    h('span', { class: 'muted', text: fmtDur(m.duration) }), h('span', { class: 'muted', text: m.detected_at }), h('span', { class: 'muted', text: m.score != null ? `relevancia ${Math.round(m.score)}` : '' }),
+    m.status === 'rendering' ? h('span', { class: 'muted', text: 'Preparando…' }) : h('button', { class: 'btn ghost', type: 'button', text: 'Editar', onclick: () => openMoment(s, m) }));
+}
+async function openMoment(s, m) {
+  try { const j = await api(`/api/live/${s.id}/moments/${m.id}/open`, { method: 'POST' }); await openProject(j.id); } catch (e) { toast('No se pudo abrir el momento', e.message); }
+}
+async function discardMoment(s, m) {
+  try { paintLive(await api(`/api/live/${s.id}/moments/${m.id}/discard`, { method: 'POST' })); toast('Momento descartado', 'Sigue guardado en la papelera de la biblioteca.'); } catch (e) { toast('No se pudo descartar', e.message); }
+}
+async function batchLive(action) {
+  const s = liveUI.session; const ids = [...liveUI.picked]; if (!s || !ids.length) return;
+  let tag = null; if (action === 'tag') { tag = prompt('Etiqueta para los clips seleccionados:'); if (!tag) return; }
+  for (const mid of ids) {
+    const cid = encodeURIComponent(momentId(s.id, mid));
+    if (action === 'discard') await api(`/api/live/${s.id}/moments/${mid}/discard`, { method: 'POST' }).catch(() => {});
+    else { await api('/api/library?origin=live').catch(() => {}); await api(`/api/library/${cid}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(action === 'fav' ? { favorite: true } : { tags: [tag] }) }).catch(() => {}); }
+  }
+  liveUI.picked.clear(); toast(action === 'discard' ? 'Momentos descartados' : 'Clips actualizados', `${ids.length} clips`);
+  followLive();
+}
+const basePaintLive = paintLive;
+window.paintLive = (s) => { basePaintLive(s); try { paintLiveView(s); } catch (e) { console.warn(e); } };
+paintLive = window.paintLive;
+// openJob (used by the old live cards) now lands in the editor with the moment selected.
+const baseOpenJob = openJob;
+window.openJob = (j) => { baseOpenJob(j); if (job?.clips?.length) { choose(job.clips[0]); navigate('editor'); } };
+openJob = window.openJob;
 
 // --- Configuración --------------------------------------------------------------------------------------------------
 function renderSettings() {

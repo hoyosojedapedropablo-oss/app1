@@ -1140,6 +1140,7 @@ def library_restore(cid:str):
 @app.get('/api/library/{cid}/thumb')
 def library_thumb(cid:str):
  path=LIBRARY.thumb_path(cid)
+ if not path.exists() and LIBRARY.get(cid) is None:library_sync()
  if not path.exists():
   with _thumb_gate:
    try:path=LIBRARY.make_thumb(cid)
@@ -1166,3 +1167,23 @@ def save_clip_edits(ident:str,clip_id:str,edits:ClipEdits):
  cid=library_id(job,clip_id)
  if cid:LIBRARY.mark(cid,'edited')
  return dict(saved=True)
+
+
+# --- Clips en vivo: what the stream looks like now, from the recording ClipStudio already makes -------------------
+_frames={}
+@app.get('/api/live/{sid}/frame')
+def live_frame(sid:str):
+ """A still of the newest finished segment (no second download of the stream; refreshed at most every 4 s)."""
+ session=live_session(sid)
+ cached=_frames.get(sid)
+ if cached and time.time()-cached[0]<4:return Response(cached[1],media_type='image/jpeg',headers={'Cache-Control':'no-store'})
+ segments=sorted(session.segments.glob('seg*.ts')) if session.segments.exists() else []
+ source=segments[-2] if len(segments)>1 else None
+ if source is None:
+  moments=[session.clips/f"{m['id']}.mp4" for m in reversed(session.moments) if (session.clips/f"{m['id']}.mp4").exists()]
+  source=moments[0] if moments else None
+ if source is None:raise HTTPException(404,'Todavía no hay imagen del directo.')
+ result=subprocess.run(['ffmpeg','-v','error','-ss','2','-i',str(source),'-frames:v','1','-vf','scale=960:-2','-f','image2','-vcodec','mjpeg','-'],capture_output=True,timeout=20)
+ if result.returncode or not result.stdout:raise HTTPException(500,'No se pudo leer la imagen del directo.')
+ _frames[sid]=(time.time(),result.stdout)
+ return Response(result.stdout,media_type='image/jpeg',headers={'Cache-Control':'no-store'})
