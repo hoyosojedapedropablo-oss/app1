@@ -530,7 +530,62 @@ function renderSettings() {
   const host = $('settingsHost'); const panel = $('perfPanel');
   if (panel && panel.parentElement !== host) { host.append(panel); }
   panel?.classList.remove('hidden'); try { loadPerformance(); } catch {}
+  renderStorage();
 }
+// Espacio en disco: temporary buffers of stopped live sessions; removed only after an explicit confirmation.
+const gb = (mb) => mb >= 1000 ? `${(mb / 1000).toFixed(1).replace('.', ',')} GB` : `${Math.round(mb)} MB`;
+async function renderStorage() {
+  let box = $('storageBox');
+  if (!box) { box = h('div', { id: 'storageBox', class: 'card', style: 'padding:20px;margin-top:18px' }); $('settingsHost').after(box); }
+  put(box, h('p', { class: 'muted', text: 'Midiendo el espacio…' }));
+  const st = await api('/api/storage').catch((e) => ({ error: e.message, buffers: [] }));
+  const picked = new Set(st.buffers.map((b) => b.id));
+  const total = () => st.buffers.filter((b) => picked.has(b.id)).reduce((a, b) => a + b.mb, 0);
+  const button = h('button', { class: 'btn primary', type: 'button' });
+  const refreshButton = () => { button.textContent = picked.size ? `Liberar ${gb(total())}` : 'Elige qué liberar'; button.disabled = !picked.size; };
+  button.onclick = () => {
+    const modal = h('div', { class: 'cs-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Confirmar liberar espacio' },
+      h('div', { class: 'box' }, h('h2', { text: `¿Liberar ${gb(total())}?` }),
+        h('p', { text: `Se borran los archivos temporales de ${picked.size} directo${picked.size > 1 ? 's' : ''} detenido${picked.size > 1 ? 's' : ''}: la grabación de respaldo que se usa mientras el directo está en curso.` }),
+        h('p', { text: 'Tus clips, los momentos detectados, las transcripciones y los proyectos NO se borran. Lo único que pierdes es poder buscar momentos nuevos en el pasado de esos directos.' }),
+        h('p', { class: 'muted', text: 'Esto no se puede deshacer.' }),
+        h('div', { class: 'acts' }, h('button', { class: 'btn ghost', type: 'button', text: 'Cancelar', onclick: () => modal.remove() }),
+          h('button', { class: 'btn danger', type: 'button', text: 'Sí, liberar espacio', onclick: async () => {
+            const r = await api('/api/storage/clean', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessions: [...picked], confirm: true }) }).catch((e) => ({ error: e.message }));
+            modal.remove(); r.error ? toast('No se pudo liberar el espacio', r.error) : toast('Espacio liberado', `${gb(r.freed_mb)} libres. Tus clips siguen en la biblioteca.`); renderStorage(); } }))));
+    modal.addEventListener('keydown', (e) => { if (e.key === 'Escape') modal.remove(); });
+    document.body.append(modal); modal.querySelector('.btn.ghost').focus();
+  };
+  refreshButton();
+  put(box, h('h3', { text: 'Espacio en disco', style: 'font-size:20px;margin:0 0 6px' }),
+    st.error ? h('p', { text: st.error }) : null,
+    h('div', { class: 'storage-totals' }, [['Clips de directos', st.moments_mb], ['Exportados', st.exports_mb], ['Papelera', st.trash_mb], ['Temporales de directos', st.buffers_mb]].map(([t, v]) => h('div', {}, h('b', { text: gb(v || 0) }), h('span', { text: t })))),
+    st.buffers.length ? h('div', {},
+      h('p', { text: 'Temporales que se pueden liberar (directos ya detenidos):', style: 'margin:14px 0 8px' }),
+      st.buffers.map((b) => { const cb = h('input', { type: 'checkbox', checked: true, onchange: () => { cb.checked ? picked.add(b.id) : picked.delete(b.id); refreshButton(); } });
+        return h('label', { class: 'storage-row' }, cb, h('span', { style: 'flex:1;min-width:0' }, h('b', { text: b.channel }), h('span', { class: 'muted', text: ` · ${fmtDate(b.created)} · ${b.moments} momentos guardados` })), h('b', { text: gb(b.mb) })); }),
+      h('div', { style: 'display:flex;justify-content:flex-end;margin-top:12px' }, button))
+      : h('p', { class: 'muted', text: 'No hay archivos temporales de directos. Todo lo que ocupa espacio son tus clips y exportaciones.' }),
+    h('p', { class: 'muted', text: `La papelera se vacía sola: lo que lleva más de ${st.trash_days || 30} días se borra al abrir la app.` }));
+}
+
+// «Configura tus clips» for a live stream starts with what was used last time for that streamer.
+const baseOpenConfig = openConfig;
+window.openConfig = (mode) => {
+  baseOpenConfig(mode);
+  const note = $('cfgPrefsNote') || h('p', { id: 'cfgPrefsNote', class: 'prefs-note', hidden: true });
+  if (!note.parentElement) $('configIntro').after(note);
+  note.hidden = true;
+  if (mode !== 'live') return;
+  const url = $('liveUrl').value.trim();
+  api('/api/streamers/prefs?url=' + encodeURIComponent(url)).then((p) => {
+    if (!p || !p.clip_settings) return;
+    showConfig({ ...NEW_DEFAULTS, ...p.clip_settings });
+    for (const [id, k] of [['liveMin', 'minimum'], ['liveMax', 'maximum'], ['liveHeight', 'height'], ['liveBuffer', 'buffer_minutes'], ['liveLanguage', 'language']]) if (p[k] != null) $(id).value = String(p[k]);
+    note.textContent = `Usando la configuración que elegiste la última vez para ${p.name}. Puedes cambiarla.`; note.hidden = false;
+  }).catch(() => {});
+};
+openConfig = window.openConfig;
 
 // --- side panel: GPU status -----------------------------------------------------------------------------------------
 api('/api/capabilities').then((c) => { const gpu = c?.gpu?.name || c?.gpu_name || ''; $('sideEquipText').textContent = gpu ? `${gpu} · IA local` : 'Procesamiento local'; }).catch(() => {});

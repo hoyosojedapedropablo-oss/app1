@@ -982,6 +982,9 @@ def start_live(options:LiveInput):
  except live.LiveError as e:raise HTTPException(400,str(e))
  if any(s.status in live.RUNNING for s in LIVE.values()):raise HTTPException(409,'Ya hay una sesión en vivo activa. Detenla antes de iniciar otra.')
  LIVE[session.id]=session;session.start()
+ # Remember this streamer's setup so the next session starts with the same choices.
+ try:STREAMERS.set_prefs(options.url,dict(clip_settings=settings,language=options.language,minimum=options.minimum,maximum=options.maximum,height=options.height,buffer_minutes=options.buffer_minutes))
+ except Exception as e:logging.getLogger('uvicorn.error').warning('Streamer preferences not saved: %s',e)
  return session.public()
 
 @app.get('/api/live')
@@ -1233,3 +1236,43 @@ def streamer_avatar(key:str):
  path=STREAMERS.avatar_path(key)
  if not path:raise HTTPException(404)
  return FileResponse(path,media_type='image/jpeg',headers={'Cache-Control':'max-age=86400'})
+
+
+@app.get('/api/streamers/prefs')
+def streamer_prefs(url:str):
+ return STREAMERS.get_prefs(url) or {}
+
+# --- Espacio en disco: temporary live buffers, only removed when the user confirms ----------------------------------
+def folder_mb(folder):
+ try:return round(sum(f.stat().st_size for f in Path(folder).rglob('*') if f.is_file())/1e6,1)
+ except OSError:return 0
+
+@app.get('/api/storage')
+def storage():
+ """What ClipStudio keeps on disk. «Temporales» are the rolling buffers of stopped live sessions: the detected
+ moments are separate files and are never part of them."""
+ buffers=[]
+ for s in LIVE.values():
+  if s.status in live.RUNNING+('stopping',) or not s.segments.exists():continue
+  mb=folder_mb(s.segments)
+  if mb>0:buffers.append(dict(id=s.id,channel=s.channel or s.url,title=s.title,created=s.created,status=s.status,mb=mb,moments=len(s.moments)))
+ buffers.sort(key=lambda b:-b['mb'])
+ return dict(buffers=buffers,buffers_mb=round(sum(b['mb'] for b in buffers),1),moments_mb=round(sum(folder_mb(s.clips) for s in LIVE.values()),1),
+             exports_mb=folder_mb(DATA/'exports'),trash_mb=folder_mb(DATA/'papelera'),trash_days=library.TRASH_DAYS)
+
+class CleanInput(BaseModel):
+ sessions:list[str]=Field(default_factory=list,max_length=200)
+ confirm:bool=False
+
+@app.post('/api/storage/clean')
+def storage_clean(item:CleanInput):
+ import shutil
+ if not item.confirm:raise HTTPException(400,'Confirma antes de liberar espacio.')
+ freed=0;done=[]
+ for sid in item.sessions:
+  s=LIVE.get(sid)
+  if not s or s.status in live.RUNNING+('stopping',) or not s.segments.exists():continue   # never a session that is recording
+  mb=folder_mb(s.segments);shutil.rmtree(s.segments,ignore_errors=True)
+  freed+=mb;done.append(sid)
+ if done:LIBRARY.log('storage',f'Espacio liberado: {freed/1000:.1f} GB de archivos temporales de {len(done)} directos','')
+ return dict(freed_mb=round(freed,1),sessions=done)
