@@ -67,8 +67,10 @@ async function openProject(id, clipRef, view) {
   if (clip && view !== 'analysis') { choose(clip); navigate('editor'); } else navigate('analysis');
 }
 async function openLibraryClip(item) {
+  if (item.missing) { toast('Este clip no tiene su video', 'El archivo ya no está en el PC. Puedes quitarlo de la biblioteca.'); return; }
   try {
-    if (item.origin === 'live' && !item.project_id) {
+    // Live moments always go through «open»: it reuses their project, or rebuilds it if it is missing.
+    if (item.origin === 'live') {
       const opened = await api(`/api/live/${item.session_id}/moments/${item.clip_ref}/open`, { method: 'POST' });
       item.project_id = opened.id;
     }
@@ -173,7 +175,7 @@ function continueCard(items) {
 }
 function liveCard(s) {
   return h('article', { class: 'card livecard' },
-    h('div', { style: 'position:relative;aspect-ratio:16/9;background:var(--panel2)' }, h('span', { class: 'noimg', style: 'position:absolute;inset:0;display:grid;place-items:center;color:var(--dim);font-size:13px', text: 'Vista del directo · próximamente' }),
+    h('div', { style: 'position:relative;aspect-ratio:16/9;background:var(--panel2);overflow:hidden' }, h('img', { src: `/api/live/${s.id}/frame?t=${Date.now()}`, alt: `Imagen actual del directo de ${s.channel || ''}`, style: 'width:100%;height:100%;object-fit:cover;display:block', onerror: (e) => e.target.remove() }),
       h('span', { class: 'chip live', style: 'position:absolute;left:10px;top:10px', text: '● EN VIVO' }), h('span', { style: 'position:absolute;right:10px;top:12px' }, platformLogo(s.platform))),
     h('div', { style: 'padding:14px;display:flex;flex-direction:column;gap:4px' }, h('b', { text: s.channel || 'Directo', style: 'font:600 16px var(--head)' }), h('span', { class: 'muted', text: s.title || '' }), h('span', { class: 'muted', style: 'color:var(--green)', text: `${(s.moments || []).length} momentos detectados` })),
     h('div', { style: 'padding:0 14px 14px' }, h('button', { class: 'btn primary', type: 'button', style: 'width:100%', text: 'Abrir', onclick: () => { liveId = s.id; followLive(); navigate('live'); } })));
@@ -381,6 +383,76 @@ paintLive = window.paintLive;
 const baseOpenJob = openJob;
 window.openJob = (j) => { baseOpenJob(j); if (job?.clips?.length) { choose(job.clips[0]); navigate('editor'); } };
 openJob = window.openJob;
+
+// --- Editor (prototype layout) ----------------------------------------------------------------------------------
+// Same controls and handlers as before; the layout is rearranged: breadcrumb header with the main actions, tabs in the
+// order Formato · Título · Subtítulos · Logo · Exportar, clips with thumbnails and a subtitle timeline.
+function buildEditorLayout() {
+  if ($('editorCrumb')) return;
+  const heading = document.querySelector('#editorView .editor-heading');
+  heading.querySelector('h1').remove();
+  heading.firstElementChild.prepend(h('span', { id: 'editorCrumb', class: 'muted' }), h('h1', { id: 'editorClipTitle', text: 'Editor' }));
+  const actions = h('div', { class: 'editor-actions' },
+    h('button', { class: 'btn ghost', type: 'button', text: 'Ver en grande', onclick: () => $('expandPreview').click() }),
+    h('button', { class: 'btn ghost', type: 'button', text: 'Comprobar MP4', onclick: () => $('renderCheck').click() }),
+    h('button', { class: 'btn primary', type: 'button', id: 'headExport', text: 'Exportar clip', onclick: () => $('export').click() }));
+  heading.append(actions);
+  // Tabs: «Encuadre» becomes «Formato» and goes first; a new «Exportar» tab gathers resolution and download.
+  const tabs = document.querySelector('#editorView [data-tab="frame"]').parentElement;
+  const frame = tabs.querySelector('[data-tab="frame"]'); frame.textContent = 'Formato'; tabs.prepend(frame);
+  const exportTab = h('button', { 'data-tab': 'export', type: 'button', role: 'tab', 'aria-selected': 'false', text: 'Exportar' });
+  exportTab.className = [...frame.classList].filter((c) => c !== 'active').join(' '); tabs.append(exportTab);
+  const framePanel = $('tab-frame');
+  const panel = h('div', { id: 'tab-export', class: 'tab-panel hidden' }, h('h2', { text: 'Exportar el clip' }));
+  const res = $('resolution'); const resLabel = res.previousElementSibling;
+  panel.append(resLabel, res, h('p', { class: 'muted', id: 'exportWhere' }),
+    h('button', { class: 'btn primary', type: 'button', style: 'width:100%;margin-top:10px', text: '↓ Exportar ahora', onclick: () => $('export').click() }),
+    h('button', { class: 'btn ghost', type: 'button', style: 'width:100%;margin-top:8px', text: 'Comprobar el MP4 antes', onclick: () => $('renderCheck').click() }),
+    h('p', { class: 'muted', text: 'Se guarda en la carpeta de exportados con un nombre legible y la biblioteca lo marca como «Exportado».' }));
+  framePanel.parentElement.append(panel);
+  exportTab.addEventListener('click', () => {
+    for (const b of document.querySelectorAll('[data-tab]')) { b.classList.toggle('active', b === exportTab); b.setAttribute('aria-selected', String(b === exportTab)); }
+    for (const p of document.querySelectorAll('.tab-panel')) p.classList.toggle('hidden', p.id !== 'tab-export');
+  });
+  // Subtitle timeline under the preview: click to jump; the playhead follows playback.
+  $('seek').after(h('div', { id: 'cueTimeline', class: 'cue-timeline', 'aria-label': 'Línea de tiempo de subtítulos',
+    onclick: (e) => { const r = e.currentTarget.getBoundingClientRect(); const d = Number($('end').value) - Number($('start').value); $('video').currentTime = Number($('start').value) + d * (e.clientX - r.left) / r.width; } }));
+  new MutationObserver(decorateClipList).observe($('clips'), { childList: true });
+}
+function libraryIdFor(clipId) { return job?.live ? `live:${job.live.session}:${job.live.moment}` : `job:${job?.id}:${clipId}`; }
+function decorateClipList() {
+  for (const el of document.querySelectorAll('#clips .clip')) {
+    if (el.querySelector('.clip-thumb') || !el.dataset.id) continue;
+    el.prepend(h('img', { class: 'clip-thumb', src: `/api/library/${encodeURIComponent(libraryIdFor(el.dataset.id))}/thumb`, alt: '', loading: 'lazy', onerror: (e) => e.target.remove() }));
+  }
+}
+let cueSignature = '';
+function paintTimeline() {
+  const box = $('cueTimeline'); if (!box || !selected) return;
+  const d = Math.max(.1, Number($('end').value) - Number($('start').value));
+  const sig = d + '|' + cues.map((c) => c.start + ':' + c.end + ':' + c.text).join('|');
+  if (sig !== cueSignature) {
+    cueSignature = sig;
+    put(box, cues.map((c) => h('span', { class: 'cue', title: c.text, text: c.text, style: `left:${(c.start / d) * 100}%;width:${Math.max(.8, ((c.end - c.start) / d) * 100)}%` })), h('span', { class: 'playhead' }));
+  }
+  const t = Math.max(0, Math.min(d, $('video').currentTime - Number($('start').value)));
+  box.querySelector('.playhead').style.left = (t / d * 100) + '%';
+}
+function paintEditorHeader() {
+  if (!job || !selected) return;
+  const channel = job.live?.channel || job.youtube?.channel || 'Mis videos';
+  $('editorCrumb').textContent = `Biblioteca › ${channel} · se guarda automáticamente`;
+  $('editorClipTitle').textContent = $('title').value || selected.title || 'Clip';
+  $('exportWhere').textContent = `Destino: exportados › ${channel}`;
+}
+const baseChoose = choose;
+window.choose = (c) => { buildEditorLayout(); baseChoose(c); cueSignature = ''; paintEditorHeader(); paintTimeline(); };
+choose = window.choose;
+const basePaintTime = paintTime;
+window.paintTime = () => { basePaintTime(); try { paintTimeline(); } catch {} };
+paintTime = window.paintTime;
+$('title').addEventListener('input', () => paintEditorHeader());
+buildEditorLayout();
 
 // --- Configuración --------------------------------------------------------------------------------------------------
 function renderSettings() {
