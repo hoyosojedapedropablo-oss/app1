@@ -138,6 +138,19 @@ class ApiTests(unittest.TestCase):
             lib.db.close()
 
 
+class TitlePositionTests(unittest.TestCase):
+    def test_title_goes_on_the_line_of_each_format(self):
+        import app as backend, layout
+        panels = layout.panels(dict(x=0, y=0, w=460, h=368, width=1920, height=1080))
+        self.assertAlmostEqual(backend.default_title_y('stack', 'balanced', panels), (panels['top'] + 3) / 19.2, places=1)   # camera/game line
+        self.assertEqual(backend.default_title_y('zoom', 'balanced', None), 20.0)                                       # top band edge (1152 px video)
+        self.assertEqual(backend.default_title_y('crop', 'balanced', None), 12)
+        # a leftover camera/game position on a clip that is no longer stack moves to the band line; a hand-made one stays
+        self.assertEqual(backend.title_position('zoom', 'balanced', None, 45.2), 20.0)
+        self.assertEqual(backend.title_position('zoom', 'balanced', None, 70), 70)
+        self.assertEqual(backend.title_position('zoom', 'close', None, 12), backend.default_title_y('zoom', 'close', None))
+
+
 class ShellTests(unittest.TestCase):
     def test_page_has_the_side_menu_and_every_section(self):
         static = Path(__file__).resolve().parents[1] / 'static'

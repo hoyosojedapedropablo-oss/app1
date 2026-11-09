@@ -1143,9 +1143,10 @@ def library_restore(cid:str):
 @app.get('/api/library/{cid}/thumb')
 def library_thumb(cid:str):
  if LIBRARY.get(cid) is None:library_sync()
- try:path=clip_thumb(cid)
+ try:path=clip_thumb(cid,render=False)
  except Exception as e:
   logging.getLogger('uvicorn.error').warning('Clip thumbnail failed (%s): %s',cid,e);path=None
+ if not path:queue_thumb(cid)      # rendered in the background; meanwhile the plain frame (the page asks again)
  if not path:
   with _thumb_gate:
    try:path=LIBRARY.make_thumb(cid)          # plain frame as a fallback
@@ -1353,7 +1354,33 @@ def thumb_spec(r):
  return dict(source=source,t=start+max(.5,(end-start)*.35),framing=framing,zoom=edits.get('zoom',settings.get('zoom','balanced')),overlay=overlay if framing=='stack' else None,
              title=edits.get('title') or r['user_title'] or r['title'] or '',edits=edits,corners=edits.get('title_corners',settings.get('title_corners','rounded')))
 
-def clip_thumb(cid):
+def default_title_y(framing,zoom,panels):
+ """Where the title goes: on the camera/game line, on the line between the top black band and the video, or near the top."""
+ import layout,tracking
+ if framing=='stack' and panels:return round((panels['top']+layout.SEAM/2)/19.2,1)
+ if framing=='zoom':return round((1920-tracking.band_height('zoom',zoom))/2/19.2,1)
+ return 12
+
+def title_position(framing,zoom,panels,saved):
+ """The saved position, unless it is a default left by another format (12 %, or a camera/game line 40-50 % on a clip
+ that is no longer «Cámara + juego»: seen on live clips that had been set to stack by mistake)."""
+ if saved is None:return default_title_y(framing,zoom,panels)
+ v=float(saved)
+ if v==12 or (framing!='stack' and 40<=v<=50.3) or any(abs(v-default_title_y('zoom',z,None))<.6 for z in ('soft','balanced','close')):
+  return default_title_y(framing,zoom,panels)
+ return v
+
+_thumb_pool=ThreadPoolExecutor(max_workers=1);_thumb_queued=set()
+def queue_thumb(cid):
+ if cid in _thumb_queued:return
+ _thumb_queued.add(cid)
+ def run():
+  try:clip_thumb(cid)
+  except Exception as e:logging.getLogger('uvicorn.error').warning('Clip thumbnail failed (%s): %s',cid,e)
+  finally:_thumb_queued.discard(cid)
+ _thumb_pool.submit(run)
+
+def clip_thumb(cid,render=True):
  """Render (once) a 9:16 still of the clip as it will be exported, with its title; cached by what it shows."""
  import layout,tracking
  r=LIBRARY.get(cid)
@@ -1361,10 +1388,10 @@ def clip_thumb(cid):
  spec=thumb_spec(r)
  if spec is None:return None
  ov=spec['overlay'];panels=layout.panels(ov) if ov else None
- title_y=spec['edits'].get('title_y') or (round((panels['top']+layout.SEAM/2)/19.2,1) if panels else 12)
+ title_y=title_position(spec['framing'],spec['zoom'],panels,spec['edits'].get('title_y'))
  sig=hashlib.sha256(json.dumps([3,spec['title'],spec['framing'],spec['zoom'],title_y,spec['corners'],ov and [ov[k] for k in 'xywh'],round(spec['t'],1)]).encode()).hexdigest()[:10]
  target=DATA/'thumbs'/f"{cid.replace(':','_')}-{sig}.jpg"
- if target.exists():return target
+ if target.exists() or not render:return target if target.exists() else None
  target.parent.mkdir(exist_ok=True)
  with _thumb_gate, tempfile.TemporaryDirectory() as tmp:
   if ov:geometry=layout.filter_graph(dict(overlay=ov,panels=panels,motion=dict(xs=[ov['width']/2])),Path(tmp)/'t.cmd',.04,25,follow=False)
@@ -1384,3 +1411,100 @@ def clip_thumb(cid):
  for old in target.parent.glob(f"{cid.replace(':','_')}-*.jpg"):
   if old!=target:old.unlink(missing_ok=True)      # only previous versions of this same thumbnail
  return target if target.exists() else None
+
+
+# --- Library: big preview on hover and high-quality download, both with the clip's own look -----------------------
+def clip_look(cid):
+ """Everything that decides how a library clip looks, shared by the preview video and the download."""
+ import layout
+ r=LIBRARY.get(cid)
+ if r is None:raise HTTPException(404,'Clip no encontrado.')
+ spec=thumb_spec(r)
+ if spec is None:raise HTTPException(404,'El video de este clip no está disponible.')
+ ov=spec['overlay'];panels=layout.panels(ov) if ov else None
+ return r,spec,ov,panels,title_position(spec['framing'],spec['zoom'],panels,spec['edits'].get('title_y'))
+
+_previews=threading.Lock()
+@app.get('/api/library/{cid}/preview.mp4')
+def library_preview(cid:str):
+ """Small MP4 of the whole clip as it will look (format and title), made once on first hover and kept."""
+ import layout,tracking
+ r,spec,ov,panels,title_y=clip_look(cid)
+ job_start,job_end=None,None
+ edits=spec['edits']
+ if r['project_id'] and r['project_id'] in JOBS:
+  job=JOBS[r['project_id']];ref=job['clips'][0]['id'] if job.get('live') and job.get('clips') else r['clip_ref']
+  clip=next((c for c in job.get('clips',[]) if c['id']==ref),None)
+  job_start=float(edits.get('start',clip['start'] if clip else 0));job_end=float(edits.get('end',clip['end'] if clip else job_start+30))
+ else:job_start,job_end=3.0,3.0+float(r['duration'] or 20)
+ sig=hashlib.sha256(json.dumps([2,spec['title'],spec['framing'],spec['zoom'],title_y,spec['corners'],ov and [ov[k] for k in 'xywh'],job_start,job_end]).encode()).hexdigest()[:10]
+ target=DATA/'previews'/f"{cid.replace(':','_')}-{sig}.mp4";target.parent.mkdir(exist_ok=True)
+ if not target.exists():
+  with _previews, tempfile.TemporaryDirectory() as tmp:
+   if not target.exists():
+    if ov:geometry=layout.filter_graph(dict(overlay=ov,panels=panels,motion=dict(xs=[ov['width']/2])),Path(tmp)/'p.cmd',job_end-job_start,24,follow=False)
+    else:geometry=tracking.static_filter(spec['framing'],spec['zoom'],50,50)
+    args=['ffmpeg','-v','error','-y','-ss',f'{job_start:.2f}','-t',f'{job_end-job_start:.2f}','-i',str(spec['source'])]
+    graph=f'[0:v]{geometry},setsar=1[b]';last='b'
+    try:
+     style={k:v for k,v in edits.items() if k in Export.model_fields and k not in ('start','end','title','subtitles','captions','clip_id')}
+     image=render_title(Export(**{**style,'start':0,'end':1,'title':spec['title'][:96],'subtitles':'','title_corners':spec['corners']}))
+    except Exception:image=None
+    if image is not None:
+     image.save(Path(tmp)/'title.png');args+=['-loop','1','-i',str(Path(tmp)/'title.png')]
+     graph+=f";[b][1:v]overlay=x=W*{float(edits.get('title_x',50))/100}-w/2:y=H*{float(title_y)/100}-h/2:shortest=1[t]";last='t'
+    graph+=f';[{last}]scale=360:640:flags=bicubic,fps=24[o]'
+    out=Path(tmp)/'p.mp4'
+    run=subprocess.run(args+['-filter_complex',graph,'-map','[o]','-map','0:a?','-c:v','libx264','-preset','veryfast','-crf','28','-pix_fmt','yuv420p','-c:a','aac','-b:a','96k','-movflags','+faststart','-t',f'{job_end-job_start:.2f}',str(out)],
+                       capture_output=True,timeout=240,cwd=tmp,creationflags=0x00004000 if os.name=='nt' else 0)
+    if run.returncode or not out.exists():raise HTTPException(500,'No se pudo preparar la vista previa.')
+    os.replace(out,target)
+    for old in target.parent.glob(f"{cid.replace(':','_')}-*.mp4"):
+     if old!=target:old.unlink(missing_ok=True)
+ return FileResponse(target,media_type='video/mp4',headers={'Cache-Control':'no-store'})
+
+class LibraryExport(BaseModel):
+ resolution:Literal[1080,1440]=1080
+
+@app.post('/api/library/{cid}/export')
+def library_export(cid:str,item:LibraryExport):
+ """Download a library clip in high quality with its saved edits (or the project's look when it was never edited)."""
+ r,spec,ov,panels,title_y=clip_look(cid)
+ if r['origin']=='live' and not (r['project_id'] and r['project_id'] in JOBS):
+  job=open_live_moment(r['session_id'],r['clip_ref'])      # a live moment becomes a project the first time
+  try:LIBRARY.sync_job(job)
+  except Exception:pass
+ else:job=JOBS.get(r['project_id'])
+ if not job:raise HTTPException(404,'No se encontró el proyecto de este clip.')
+ ref=job['clips'][0]['id'] if job.get('live') else r['clip_ref']
+ clip=next((c for c in job.get('clips',[]) if c['id']==ref),None)
+ if not clip:raise HTTPException(404,'No se encontró el clip en su proyecto.')
+ edits=dict((job.get('clip_edits') or {}).get(ref) or {})
+ settings=clip_settings(job)
+ base=dict(start=clip['start'],end=clip['end'],title=clip.get('title') or '',subtitles=clip.get('text') or '',clip_id=ref,
+           framing=spec['framing'],zoom=spec['zoom'],title_corners=spec['corners'],show_subtitles=bool(settings.get('subtitles',True)),
+           caption_y=85 if spec['framing']=='stack' else 81,tracking_motion=settings.get('tracking_motion','balanced'))
+ values={**base,**{k:v for k,v in edits.items() if k in Export.model_fields},'title_y':title_y,'resolution':item.resolution,'preview':False}
+ if values.get('framing')=='stack' and not ov:values['framing']='zoom'
+ values['auto_follow']=bool(values.get('auto_follow')) and values['framing']!='stack' and (DATA/job['id']/f"tracking-{__import__('tracking').key(values['start'],values['end'])}.json").exists()
+ try:opts=Export(**values)
+ except Exception as e:raise HTTPException(400,f'No se pudo preparar la exportación: {e}')
+ return export(job['id'],opts)
+
+
+_preview_pool=ThreadPoolExecutor(max_workers=1);_preview_queued=set()
+class WarmInput(BaseModel):
+ ids:list[str]=Field(default_factory=list,max_length=30)
+
+@app.post('/api/library/previews/warm')
+def library_previews_warm(item:WarmInput):
+ """Prepare the hover previews of the clips on screen, one at a time at low priority, so hovering plays at once."""
+ for cid in item.ids:
+  if cid in _preview_queued:continue
+  _preview_queued.add(cid)
+  def run(cid=cid):
+   try:library_preview(cid)
+   except Exception:pass
+   finally:_preview_queued.discard(cid)
+  _preview_pool.submit(run)
+ return dict(queued=len(_preview_queued))
