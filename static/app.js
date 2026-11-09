@@ -431,7 +431,7 @@ function showConfig(c){
 }
 function applyProjectToEditor(){
  const c=projectConfig,framing=effectiveFraming(c);$('framing').value=framing;$('zoom').value=c.zoom;$('tracking_motion').value=c.tracking_motion;$('resolution').value=String(c.resolution||1080);
- if(framing==='stack'&&Number($('caption_y').value)===81)$('caption_y').value=stackCaptionY();
+ if(framing==='stack')stackDom();
  $('show_subtitles').checked=!!c.subtitles;$('title_corners').value=c.title_corners;$('auto_follow').checked=!!c.tracking&&c.framing!=='fit';
 }
 function loadProject(j){
@@ -458,7 +458,7 @@ for(const [id,keyName] of Object.entries(EDITOR_TO_PROJECT))$(id).addEventListen
  // Choosing another format by hand for a stream video means: stop switching to «Cámara + juego» automatically.
  if(id==='framing'&&$(id).value!=='stack'&&overlayInfo?.found)projectConfig.auto_stack=false;
  showConfig(projectConfig);saveProjectConfig();saveCurrent();
- if(id==='framing'&&$(id).value==='stack'){if(Number($('caption_y').value)===81){$('caption_y').value=stackCaptionY();saveCurrent();}loadStackPath().catch(e=>say(e.message));}
+ if(id==='framing'&&$(id).value==='stack'){stackDom();saveCurrent();loadStackPath().catch(e=>say(e.message));}
  if(id==='tracking_motion')loadStackPath().catch(()=>{});
  if(['framing','zoom','tracking_motion'].includes(id))loadTrackingPath().catch(()=>{});
  paint();
@@ -522,7 +522,14 @@ $('cfgStart').onclick=async()=>{
 // --- «Cámara + juego»: streamer camera on top, game below ------------------------------------------------------------------
 // The server finds the camera once per video; the preview draws the same two crops the export uses on a canvas.
 function effectiveFraming(c){const cam=!!overlayInfo?.found;if(c.framing==='stack')return cam?'stack':'zoom';return cam&&c.auto_stack?'stack':c.framing;}
-function stackCaptionY(){const top=stackPath?.top||Math.min(960,Math.max(768,overlayInfo?.found?Math.round(1080*overlayInfo.h/overlayInfo.w):864));return Math.round((top+3)/19.2*10)/10;}
+// Centre of the line between camera and game, in % of the height (title_y centres the title there).
+function seamY(){const top=stackPath?.top||Math.min(960,Math.max(768,overlayInfo?.found?Math.round(1080*overlayInfo.h/overlayInfo.w):864));return Math.round((top+3)/19.2*10)/10;}
+// «Cámara + juego» defaults: the title sits on the line; subtitles go low in the game, clear of the centre where the action is.
+// Only values still at their defaults move, so a position chosen by hand is kept.
+const STACK_CAPTION_Y=85,OLD_SEAM=v=>Math.abs(v-seamY())<1.5;
+function stackEdit(e){const t=Number(e.title_y??12),c=Number(e.caption_y??81);return {...e,title_y:t===12?seamY():t,caption_y:c===81||OLD_SEAM(c)?STACK_CAPTION_Y:c};}
+function stackDom(){const e=stackEdit({title_y:$('title_y').value,caption_y:$('caption_y').value});$('title_y').value=e.title_y;$('caption_y').value=e.caption_y;}
+function stackCaptionY(){return STACK_CAPTION_Y;}
 async function watchOverlay(j,t){
  const token=++overlayWatch;overlayInfo=null;stackPath=null;stackKey='';
  $('cfgStackFrame').removeAttribute('src');$('cfgStackNote').textContent='Buscando la cámara del streamer en el video…';
@@ -539,8 +546,8 @@ async function watchOverlay(j,t){
   // Clips not adjusted by hand follow the project choice now that we know the video has a camera.
   // Before the camera was known, clips opened with the fallback format (zoom when the project asks for «Cámara + juego»).
   const framing=effectiveFraming(projectConfig),before=projectConfig.framing==='stack'?'zoom':projectConfig.framing;
-  for(const [id,e] of edits)if(e.framing===before&&framing==='stack')edits.set(id,{...e,framing,caption_y:Number(e.caption_y)===81?stackCaptionY():e.caption_y});
-  if(selected&&framing==='stack'&&$('framing').value===before){$('framing').value=framing;$('auto_follow').checked=false;++trackingRequest;$('trackingState').textContent='';if(Number($('caption_y').value)===81)$('caption_y').value=stackCaptionY();saveCurrent();}
+  for(const [id,e] of edits)if(e.framing===before&&framing==='stack')edits.set(id,stackEdit({...e,framing}));
+  if(selected&&framing==='stack'&&$('framing').value===before){$('framing').value=framing;$('auto_follow').checked=false;++trackingRequest;$('trackingState').textContent='';stackDom();saveCurrent();}
   if($('framing').value==='stack')loadStackPath().catch(e=>say(e.message));
  }
  paint();
@@ -558,7 +565,8 @@ async function loadStackPath(){
  $('stackState').textContent='Preparando «Cámara + juego»: cámara y movimiento del juego…';paint();
  const path=await(await request(`/api/jobs/${job.id}/layout/path`,jsonOptions(body))).json();
  if(keyText!==stackKey)return;
- stackPath={...path,start:body.start,end:body.end};
+ const guess=seamY();stackPath={...path,start:body.start,end:body.end};
+ if(path.found&&Math.abs(Number($('title_y').value)-guess)<.05&&guess!==seamY()){$('title_y').value=seamY();saveCurrent();}
  $('stackState').textContent=path.found?`${overlayInfo?.manual?'Recuadro marcado a mano':'Cámara detectada'} · ${path.game.static?'juego centrado':'sigue la acción del juego con suavidad'}.`+(path.cam_presence<.34?' ⚠ En este clip casi no se ve al streamer en el recuadro (intro o pantalla completa): revisa la vista previa o usa otro encuadre.':''):'No se encontró la cámara del streamer. Pulsa «Ajustar recuadro de cámara» para marcarla.';
  paint();
 }
@@ -606,7 +614,7 @@ $('camSave').onclick=async()=>{
  try{
   overlayInfo=await(await request(`/api/jobs/${job.id}/overlay`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(camBoxValue())})).json();
   $('camModal').classList.add('hidden');paintOverlayInfo(job,$('video').currentTime);
-  if($('framing').value!=='stack'){$('framing').value='stack';projectConfig.framing='stack';saveProjectConfig();if(Number($('caption_y').value)===81)$('caption_y').value=stackCaptionY();saveCurrent();}
+  if($('framing').value!=='stack'){$('framing').value='stack';projectConfig.framing='stack';saveProjectConfig();stackDom();saveCurrent();}
   stackKey='';await loadStackPath();
  }catch(e){say(e.message);}
 };
