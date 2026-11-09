@@ -779,8 +779,12 @@ def overlay_file(ident):return DATA/ident/'overlay.json'
 def read_overlay(ident):
  path=overlay_file(ident)
  if not path.exists():return None
- try:return json.loads(path.read_text(encoding='utf-8'))
+ try:value=json.loads(path.read_text(encoding='utf-8'))
  except (OSError,ValueError):return None
+ import layout
+ # An automatic result from an older detector is computed again; a rectangle marked by hand is always kept.
+ if not value.get('manual') and value.get('detector',1)<layout.DETECTOR_VERSION:return None
+ return value
 
 def write_overlay(ident,value):
  path=overlay_file(ident);tmp=path.with_suffix('.tmp');tmp.write_text(json.dumps(value),encoding='utf-8');tmp.replace(path)
