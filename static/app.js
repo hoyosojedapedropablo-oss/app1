@@ -81,7 +81,7 @@ $('source').onchange=async()=>{
  try{const body=new FormData();body.append('file',f);useImportedVideo(await(await request('/api/upload',{method:'POST',body})).json());}catch(e){say(e.message);}
 };
 $('manual').onclick=()=>{choose({id:'manual',title:'',text:'',start:0,end:Math.min(Number($('maximum').value),job.duration),captions:[]});say('Ajusta los tiempos y escribe los subtítulos de tu clip manual.');};
-$('analyze').onclick=async()=>{
+async function startAnalysis(){
  const minimum=Number($('minimum').value),maximum=Number($('maximum').value);
  if(minimum>maximum||minimum<5||maximum>180){say('Elige un rango válido entre 5 y 180 segundos.');return;}
  try{await request(`/api/jobs/${job.id}/analyze`,jsonOptions({minimum,maximum,speaker:$('speaker').value,context:$('videoContext').value,quality:$('quality').value,engine:$('engine').value,transcribe_gpu:$('transcribe_gpu').checked,max_clips:Number($('maxClips').value),clip_settings:readConfig()}));edits.clear();selected=null;cues=[];$('export').disabled=true;$('analyze').disabled=true;$('source').disabled=true;$('manual').disabled=true;$('all').classList.add('hidden');$('clips').replaceChildren();$('video').pause();paint();$('cancelAnalysis').classList.remove('hidden');poll(++pollToken,job.id);}catch(e){say(e.message);}
@@ -401,9 +401,9 @@ async function followLive(){
  try{const s=await(await request('/api/live/'+liveId)).json();paintLive(s);if(liveRunning(s))liveTimer=setTimeout(followLive,3000);}
  catch(e){$('liveMessage').textContent=e.message;if(e.offline)liveTimer=setTimeout(followLive,5000);}
 }
-$('liveStart').onclick=async()=>{
+async function startLive(){
  const button=$('liveStart');button.disabled=true;
- try{paintLive(await(await request('/api/live',jsonOptions({url:$('liveUrl').value,minimum:Number($('liveMin').value),maximum:Number($('liveMax').value),buffer_minutes:Number($('liveBuffer').value),height:Number($('liveHeight').value)}))).json());followLive();}
+ try{paintLive(await(await request('/api/live',jsonOptions({url:$('liveUrl').value,minimum:Number($('liveMin').value),maximum:Number($('liveMax').value),buffer_minutes:Number($('liveBuffer').value),height:Number($('liveHeight').value),language:$('liveLanguage').value,clip_settings:readConfig()}))).json());followLive();}
  catch(e){$('liveStatus').hidden=false;$('liveState').textContent='No se pudo iniciar';$('liveMessage').textContent=e.message;}finally{button.disabled=false;}
 };
 $('liveStop').onclick=async()=>{try{paintLive(await(await request(`/api/live/${liveId}/stop`,{method:'POST'})).json());followLive();}catch(e){say(e.message);}};
@@ -486,3 +486,26 @@ applyTracking=function(t){
 // Repaint every displayed frame while playing (timeupdate fires only ~4 times per second).
 function frameLoop(){if(!$('video').paused){paintTime();requestAnimationFrame(frameLoop);}}
 $('video').addEventListener('play',()=>requestAnimationFrame(frameLoop));
+
+// --- "Configura tus clips" is asked before anything starts, for a video and for a live stream ----------------------------
+let configMode=null;
+function openConfig(mode){
+ configMode=mode;const modal=$('configModal');modal.classList.toggle('live-mode',mode==='live');modal.classList.toggle('video-mode',mode==='video');
+ $('configTitle').textContent=mode==='live'?'Configura tus clips · Clipping en vivo':'Configura tus clips · Video';
+ $('configIntro').textContent=mode==='live'?'Elige cómo quieres los clips del directo. Los momentos se abrirán en el editor con esta configuración.':'Elige cómo quieres los clips. Se guarda en este proyecto y puedes cambiarlo después en el editor sin repetir el análisis.';
+ $('cfgStart').textContent=mode==='live'?'● Comenzar clipping en vivo':'✦ Comenzar análisis';
+ if(mode==='live'&&!job)document.querySelectorAll('.cfg-frame').forEach(img=>img.removeAttribute('src'));
+ paintConfig();modal.classList.remove('hidden');$('cfgStart').focus();
+}
+function closeConfig(){$('configModal').classList.add('hidden');configMode=null;}
+$('analyze').onclick=()=>{if(job)openConfig('video');};
+$('liveStart').onclick=()=>{if(!$('liveUrl').value.trim()){$('liveStatus').hidden=false;$('liveState').textContent='Falta el enlace';$('liveMessage').textContent='Pega el enlace del directo antes de iniciar.';return;}openConfig('live');};
+$('cfgCancel').onclick=closeConfig;
+$('configModal').addEventListener('keydown',e=>{if(e.key==='Escape')closeConfig();});
+$('cfgStart').onclick=async()=>{
+ const mode=configMode;projectConfig=readConfig();
+ const [min,max]=mode==='live'?[Number($('liveMin').value),Number($('liveMax').value)]:[Number($('minimum').value),Number($('maximum').value)];
+ if(!(min>=5&&max<=180&&min<=max)){say('Elige una duración válida: mínimo ≤ máximo, entre 5 y 180 segundos.');return;}
+ closeConfig();
+ if(mode==='live')await startLive();else{saveProjectConfig();await startAnalysis();}
+};

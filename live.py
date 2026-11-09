@@ -10,7 +10,7 @@ Pipeline (one session at a time):
             drop old segments. "Open in editor" turns a moment into a normal job with transcript and one clip.
 Nothing here bypasses DRM, sign-in, age or region checks: only streams yt-dlp can read publicly are accepted.
 """
-import json, math, re, shutil, subprocess, threading, time, uuid
+import json, math, os, re, shutil, subprocess, threading, time, uuid
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -31,6 +31,51 @@ PAD_S = 3                 # extra source kept around a moment so the editor can 
 MIN_FREE_DISK_GB = 5
 SAVE_EVERY_S = 30
 RUNNING = ('starting', 'live', 'reconnecting')
+LANGUAGE_VOTES = 3        # 'auto' fixes the language only after this many confident detections agree in a row
+_JOB = None
+
+
+def kill_with_app(proc):
+    """Windows: put a capture in a job object closed together with ClipStudio, so it never outlives the app.
+
+    Before this, a forced close left FFmpeg writing segments in the background (found twice, ~4.8 GB)."""
+    global _JOB
+    if os.name != 'nt' or getattr(proc, '_handle', None) is None: return False
+    import ctypes
+    from ctypes import wintypes
+    k = ctypes.windll.kernel32
+    k.CreateJobObjectW.restype = wintypes.HANDLE
+    k.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    k.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    if _JOB is None:
+        class Basic(ctypes.Structure):
+            _fields_ = [('PerProcessUserTimeLimit', ctypes.c_int64), ('PerJobUserTimeLimit', ctypes.c_int64), ('LimitFlags', wintypes.DWORD),
+                        ('MinimumWorkingSetSize', ctypes.c_size_t), ('MaximumWorkingSetSize', ctypes.c_size_t), ('ActiveProcessLimit', wintypes.DWORD),
+                        ('Affinity', ctypes.c_size_t), ('PriorityClass', wintypes.DWORD), ('SchedulingClass', wintypes.DWORD)]
+        class Io(ctypes.Structure):
+            _fields_ = [(name, ctypes.c_uint64) for name in ('Read', 'Write', 'Other', 'ReadBytes', 'WriteBytes', 'OtherBytes')]
+        class Extended(ctypes.Structure):
+            _fields_ = [('Basic', Basic), ('Io', Io), ('ProcessMemoryLimit', ctypes.c_size_t), ('JobMemoryLimit', ctypes.c_size_t),
+                        ('PeakProcessMemoryUsed', ctypes.c_size_t), ('PeakJobMemoryUsed', ctypes.c_size_t)]
+        job = k.CreateJobObjectW(None, None)
+        info = Extended(); info.Basic.LimitFlags = 0x2000          # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not job or not k.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)): return False
+        _JOB = job
+    try: return bool(k.AssignProcessToJobObject(_JOB, int(proc._handle)))
+    except (OSError, TypeError, ValueError): return False
+
+
+def kill_orphan_captures(root):
+    """Stop FFmpeg captures left writing into this app's live folder by an earlier run (e.g. a forced close)."""
+    if os.name != 'nt': return 0
+    folder = str(Path(root).resolve()).replace("'", "''")
+    script = ("$n=0; Get-CimInstance Win32_Process -Filter \"Name='ffmpeg.exe'\" | Where-Object { $_.CommandLine -like '*" + folder +
+              "*segments*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; $n++ }; $n")
+    try:
+        out = subprocess.run(['powershell', '-NoProfile', '-Command', script], capture_output=True, text=True, timeout=30)
+        return int((out.stdout or '0').strip().splitlines()[-1] or 0)
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        return 0
 
 
 class LiveError(ValueError):
@@ -160,7 +205,7 @@ def topic_still_open(clip, topics, window_end):
 
 
 class LiveSession:
-    def __init__(self, root, url, minimum=20, maximum=60, buffer_minutes=60, height=DEFAULT_HEIGHT, sid=None, engine='gpu'):
+    def __init__(self, root, url, minimum=20, maximum=60, buffer_minutes=60, height=DEFAULT_HEIGHT, sid=None, engine='gpu', language='auto', clip_settings=None):
         self.id = sid or uuid.uuid4().hex
         self.root = Path(root) / self.id
         self.segments = self.root / 'segments'
@@ -188,7 +233,10 @@ class LiveSession:
         self._saved = 0.0
         self._model = None
         self._tail, self._tail_end = None, None
-        self.language = ''
+        self.language_choice = language if language else 'auto'
+        self.language = '' if self.language_choice == 'auto' else self.language_choice
+        self._votes = []
+        self.clip_settings = clip_settings or {}
         self.segment_wall = {}        # index -> wall clock when the segment was processed (for real latency)
 
     # --- state -------------------------------------------------------------------------------------------------
@@ -198,6 +246,7 @@ class LiveSession:
                     'status': self.status, 'message': self.message, 'created': self.created, 'media_s': round(self.media_s, 1),
                     'reconnects': self.reconnects, 'gaps': len(self.gaps), 'minimum': self.minimum, 'maximum': self.maximum,
                     'buffer_minutes': self.buffer_s // 60, 'transcription_device': self.transcription_device,
+                    'language': self.language or 'detectando…', 'language_choice': self.language_choice, 'clip_settings': self.clip_settings,
                     'moments': [{k: v for k, v in m.items() if k not in ('captions', 'titles_all')} for m in self.moments if m['status'] != 'discarded']}
             if full:
                 data['recent_text'] = ' '.join(w['text'] for s in self.transcript[-6:] for w in s.get('words', []))[-280:]
@@ -218,7 +267,7 @@ class LiveSession:
                      'channel': self.channel, 'created': self.created, 'media_s': self.media_s, 'next_index': self.next_index,
                      'processed_index': self.processed_index, 'segment_times': self.segment_times, 'transcript': self.transcript,
                      'levels': self.levels[-3 * 3600:], 'moments': self.moments, 'gaps': self.gaps, 'reconnects': self.reconnects,
-                     'last_detection': self.last_detection, 'events': self.events, 'language': self.language}
+                     'last_detection': self.last_detection, 'events': self.events, 'language': self.language, 'language_choice': self.language_choice, 'clip_settings': self.clip_settings}
         self.root.mkdir(parents=True, exist_ok=True)
         temp = self.root / 'state.tmp'
         temp.write_text(json.dumps(state, ensure_ascii=False), encoding='utf-8'); temp.replace(self.root / 'state.json')
@@ -230,7 +279,7 @@ class LiveSession:
         session = cls(Path(folder).parent, state['url'], state['minimum'], state['maximum'], state['buffer_s'] // 60,
                       state.get('height', DEFAULT_HEIGHT), sid=state['id'], engine=state.get('engine', 'gpu'))
         for key in ('status', 'message', 'title', 'channel', 'created', 'media_s', 'next_index', 'processed_index', 'transcript',
-                    'levels', 'moments', 'gaps', 'reconnects', 'last_detection', 'events', 'language'):
+                    'levels', 'moments', 'gaps', 'reconnects', 'last_detection', 'events', 'language', 'language_choice', 'clip_settings'):
             if key in state: setattr(session, key, state[key])
         session.segment_times = {int(k): v for k, v in state.get('segment_times', {}).items()}
         session.levels = [tuple(x) for x in session.levels]
@@ -288,7 +337,8 @@ class LiveSession:
             started = time.monotonic()
             try:
                 self.proc = subprocess.Popen(ffmpeg_capture_command(stream, self.segments, self.next_index), stdin=subprocess.DEVNULL,
-                                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                kill_with_app(self.proc)
             except OSError:
                 with self.lock: self.status = 'error'
                 self.note('No se pudo iniciar FFmpeg.'); self.save(force=True); self.stop_event.set(); return
@@ -344,9 +394,10 @@ class LiveSession:
                 installed = False
             reserve = 0 if self.engine != 'gpu' or gpu_ai.status().get('gpu_loaded') else 4400   # room the AI model will need
             device, _ = capabilities.transcription_plan()
-            if installed and device == 'cuda' and capabilities.free_vram_mb() >= 1800 + reserve:
+            # int8 measured next to Qwen: +940 MB VRAM, 0.42 s per 6 s segment, same text as int8_float16 (+1.12 GB).
+            if installed and device == 'cuda' and capabilities.free_vram_mb() >= 1200 + reserve:
                 try:
-                    self._model = WhisperModel(name, device='cuda', compute_type='int8_float16')
+                    self._model = WhisperModel(name, device='cuda', compute_type='int8')
                     self.transcription_device = f'GPU · {name}'
                 except Exception:
                     self._model = None
@@ -372,7 +423,10 @@ class LiveSession:
             segments, info = self._whisper().transcribe(clip, vad_filter=True, word_timestamps=True, language=self.language or None,
                                                         initial_prompt=prompt or None, condition_on_previous_text=False)
             segments = list(segments)
-            if not self.language and info is not None and getattr(info, 'language_probability', 0) >= .6 and segments: self.language = info.language
+            if not self.language and info is not None and segments:
+                # One noisy chunk (music, a clip in another language) used to lock English on a Spanish stream.
+                self._votes = (self._votes + [info.language])[-LANGUAGE_VOTES:] if getattr(info, 'language_probability', 0) >= .8 else []
+                if len(self._votes) == LANGUAGE_VOTES and len(set(self._votes)) == 1: self.language = self._votes[0]
             for s in segments:
                 words = [{'start': round(offset + w.start, 3), 'end': round(offset + w.end, 3), 'text': w.word} for w in (s.words or [])
                          if offset + w.start >= start - .05]   # words from the carried audio were already transcribed

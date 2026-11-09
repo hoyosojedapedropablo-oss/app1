@@ -781,6 +781,7 @@ import live
 LIVE={};LIVE_DIR=DATA/'live'
 
 def recover_live():
+ live.kill_orphan_captures(LIVE_DIR)
  for state in LIVE_DIR.glob('*/state.json'):
   try:session=live.LiveSession.load(state.parent);LIVE[session.id]=session
   except (OSError,ValueError,KeyError,TypeError):continue
@@ -791,6 +792,8 @@ class LiveInput(BaseModel):
  maximum:int=Field(default=60,ge=5,le=180)
  buffer_minutes:int=Field(default=60,ge=10,le=180)
  height:Literal[720,1080,1440]=1080
+ language:str=Field(default='auto',pattern=r'^(auto|[a-z]{2})$')
+ clip_settings:dict|None=None
  @model_validator(mode='after')
  def validate_range(self):
   if self.minimum>self.maximum:raise ValueError('El mínimo no puede superar el máximo.')
@@ -802,7 +805,9 @@ def live_session(sid):
 
 @app.post('/api/live')
 def start_live(options:LiveInput):
- try:session=live.LiveSession(LIVE_DIR,options.url,options.minimum,options.maximum,options.buffer_minutes,height=options.height)
+ try:settings=ClipSettings(**(options.clip_settings or {})).model_dump()
+ except ValueError:raise HTTPException(400,'Configuración de clips inválida.')
+ try:session=live.LiveSession(LIVE_DIR,options.url,options.minimum,options.maximum,options.buffer_minutes,height=options.height,language=options.language,clip_settings=settings)
  except live.LiveError as e:raise HTTPException(400,str(e))
  if any(s.status in live.RUNNING for s in LIVE.values()):raise HTTPException(409,'Ya hay una sesión en vivo activa. Detenla antes de iniciar otra.')
  LIVE[session.id]=session;session.start()
@@ -867,7 +872,7 @@ def open_live_moment(sid:str,mid:str):
             captions=make_cues(transcript,start,end))
   job.update(status='ready',clips=[clip],transcript=transcript,analysis_range={'minimum':min(session.minimum,int(end-start)),'maximum':max(session.maximum,math.ceil(end-start))},
              live={'session':sid,'moment':mid,'channel':session.channel,'stream_title':session.title},message='Momento del directo listo para editar.',
-             clip_settings=dict(CLIP_DEFAULTS))
+             clip_settings=dict(session.clip_settings or CLIP_DEFAULTS))
   save_job(job)
  except Exception as e:
   JOBS.pop(ident,None);shutil.rmtree(folder,ignore_errors=True)
