@@ -1175,6 +1175,28 @@ def save_clip_edits(ident:str,clip_id:str,edits:ClipEdits):
  return dict(saved=True)
 
 
+# «Aplicar a todos los clips»: the look (logo, title style, subtitles, quality) copied to every clip of the project.
+# Each clip keeps its own text, times, subtitles and framing; the vertical title position depends on each clip's format.
+SHARED_STYLE=('logo','logo_width','logo_x','logo_y','title_font','title_size','title_padding_x','title_padding_y','title_bg_color',
+ 'title_text_color','title_outline_color','title_outline_width','title_corners','title_x','style','font','caption_size','caption_color',
+ 'outline_color','outline_width','caption_x','caption_y','show_subtitles','resolution')
+class SharedEdits(BaseModel):
+ settings:dict
+
+@app.put('/api/jobs/{ident}/edits/shared')
+def save_shared_edits(ident:str,item:SharedEdits):
+ if ident not in JOBS:raise HTTPException(404)
+ style={k:v for k,v in item.settings.items() if k in SHARED_STYLE and isinstance(v,(str,int,float,bool))}
+ job=JOBS[ident];saved=job.setdefault('clip_edits',{})
+ for c in job.get('clips') or []:
+  entry=saved.get(c['id'])
+  # A clip never opened gets its own defaults plus the shared look; «partial» tells the editor to fill the rest.
+  if entry is None:entry=saved[c['id']]=dict(title=c.get('title',''),subtitles=c.get('text',''),start=c['start'],end=c['end'],captions=c.get('captions') or [],clip_id=c['id'],partial=True)
+  entry.update(style)
+ save_job(job)
+ return dict(clip_edits=saved,shared=sorted(style))
+
+
 # --- Clips en vivo: what the stream looks like now, from the recording ClipStudio already makes -------------------
 _frames={}
 @app.get('/api/live/{sid}/frame')

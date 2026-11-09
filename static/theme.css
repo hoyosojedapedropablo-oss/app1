@@ -257,3 +257,11 @@ input,select,textarea{font-family:var(--ui)!important}
 .cs-modal .acts{display:flex;justify-content:flex-end;gap:10px;margin-top:6px}
 
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+
+/* «Aplicar a todos los clips» */
+.share-all{display:flex;gap:10px;align-items:flex-start;margin:10px 12px 0;padding:10px 12px;border:1px solid var(--line,#2a2a30);border-radius:12px;background:var(--panel2,#15151a);cursor:pointer}
+.share-all input{margin-top:3px;accent-color:var(--green)}
+.share-all span{display:flex;flex-direction:column;gap:2px}
+.share-all b{font-size:13px}
+.share-all small{font-size:11.5px;color:var(--muted);line-height:1.35}
+.share-all:has(input:checked){border-color:var(--green-line,#c6ff5e66);background:var(--green-tint,#c6ff5e14)}
