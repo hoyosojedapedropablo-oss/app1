@@ -213,6 +213,13 @@ input,select,textarea{font-family:var(--ui)!important}
 .cue-timeline .playhead{position:absolute;top:0;bottom:0;width:2px;background:var(--green);box-shadow:0 0 10px var(--green);pointer-events:none}
 #tab-export h2{font-size:18px}
 
+/* --- Streamers -------------------------------------------------------------------------------------------------------- */
+.streamer-results{padding:8px;display:flex;flex-direction:column;gap:4px;box-shadow:0 20px 50px rgba(0,0,0,.5)}
+.streamer-row{display:flex;align-items:center;gap:14px;padding:10px;border-radius:12px}
+.streamer-row.on,.streamer-row:hover{background:var(--hover)}
+.player-box{width:min(1100px,100%)!important;border-color:var(--line)!important}
+.player-box iframe{width:100%;aspect-ratio:16/9;border:0;border-radius:12px;background:#000}
+
 /* --- Configuración: the performance panel lives inside the page, not as a dropdown --------------------------------- */
 #settingsHost .perf-panel{position:static;width:auto;max-width:none;box-shadow:none;border:0;background:none;padding:0;margin:0;display:block}
 #settingsHost .perf-panel h3{font-size:20px;margin:0 0 8px}
