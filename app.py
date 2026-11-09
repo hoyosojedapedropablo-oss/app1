@@ -1,4 +1,4 @@
-import json, logging, math, os, re, subprocess, threading, time, uuid
+import hashlib, json, logging, math, os, re, subprocess, threading, time, uuid
 import tempfile
 from fractions import Fraction
 from typing import Literal
@@ -499,6 +499,9 @@ class Export(BaseModel):
  tracking_motion:Literal['smooth','balanced','fast']='balanced'
  show_subtitles:bool=True
  title_corners:Literal['rounded','square']='square'
+ # 'Cámara + juego' (framing='stack'): follow the game's action, and output size (1440 gives YouTube Shorts more bitrate).
+ game_follow:bool=True
+ resolution:Literal[1080,1440]=1080
 
 def stamp(seconds):
  c=round(max(0,seconds)*100); return f'{c//360000}:{c//6000%60:02}:{c//100%60:02}.{c%100:02}'
@@ -637,7 +640,7 @@ def title_preview(opts:Export):
 def export(ident:str,opts:Export):
  if ident not in JOBS: raise HTTPException(404)
  if opts.end<=opts.start or opts.end>JOBS[ident]['duration'] or opts.end-opts.start>180: raise HTTPException(400,'El clip debe durar entre 0 y 180 segundos y estar dentro del video.')
- if opts.framing not in ['fit','crop','zoom']: raise HTTPException(400)
+ if opts.framing not in ['fit','crop','zoom','stack']: raise HTTPException(400)
  if not re.fullmatch(r'(none|kick|roobet|rainbet|[a-f0-9]{32})',opts.logo): raise HTTPException(400)
  logo=DATA/f'{opts.logo}.png'
  if opts.logo!='none' and not logo.exists(): raise HTTPException(400,'Primero carga el archivo del logo seleccionado.')
@@ -652,8 +655,14 @@ def export(ident:str,opts:Export):
   image=render_title(opts)
  except ValueError as e:raise HTTPException(400,str(e))
  import tracking
- geometry=tracking.static_filter(opts.framing,opts.zoom,opts.focus_x,opts.focus_y)
- if opts.auto_follow:
+ if opts.framing=='stack':
+  try:result=clip_layout(ident,opts.start,opts.end)
+  except ValueError as e:raise HTTPException(400,str(e))
+  if not result.get('panels'):raise HTTPException(400,'No se encontró la cámara del streamer en este video. Marca el recuadro en «Ajustar recuadro de cámara» o usa otro encuadre.')
+  import layout
+  geometry=layout.filter_graph(result,folder/f'{token}-layout.cmd',opts.end-opts.start,JOBS[ident].get('fps',30),opts.tracking_motion,opts.game_follow)
+ else:geometry=tracking.static_filter(opts.framing,opts.zoom,opts.focus_x,opts.focus_y)
+ if opts.auto_follow and opts.framing!='stack':
   if opts.framing not in ('crop','zoom'):raise HTTPException(400,'El seguimiento necesita el encuadre con zoom o pantalla completa.')
   cache=folder/f'tracking-{tracking.key(opts.start,opts.end)}.json'
   if not cache.exists():raise HTTPException(400,'Calcula el seguimiento del clip en el editor antes de exportarlo.')
@@ -681,6 +690,8 @@ def export(ident:str,opts:Export):
   graph.append(f'[{input_index}:v]scale={max(1,logo_pixel_width)}:-1[l]')
   graph.append(f"[{last}][l]overlay=(W-w)*{opts.logo_x/100}:(H-h)*{opts.logo_y/100}:enable='gte(t,{opts.logo_start})*lt(t,{logo_end})'[v2]")
   last='v2'
+ if opts.resolution==1440:
+  graph.append(f'[{last}]scale=1440:2560:flags=lanczos[vbig]');last='vbig'
  args+=['-filter_complex',';'.join(graph),'-map',f'[{last}]','-map','0:a?']
  args+=['-t',str(opts.end-opts.start),'-r',str(JOBS[ident].get('fps',30)),'-fps_mode','cfr','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-movflags','+faststart',str(output)]
  export_env=None
@@ -698,7 +709,9 @@ def export(ident:str,opts:Export):
 CPU_VIDEO=['-c:v','libx264','-preset','fast','-crf','18']
 # Measured on a real 1080p60 source (60 s vertical crop, RTX 5060 Ti): x264 CRF18 29 s / 54 MB / SSIM 0.9938,
 # NVENC cq26 11 s / 62 MB / SSIM 0.9945. Filters (subtitles, overlays) still run on CPU.
-GPU_VIDEO=['-c:v','h264_nvenc','-preset','p5','-tune','hq','-rc','vbr','-cq','26','-b:v','0','-spatial-aq','1','-profile:v','high']
+# Nov 2026, measured on a 20 s 1080p60 stream clip: cq 26 39 MB, cq 23 55 MB, cq 21 69 MB (SSIM vs cq 14: .9892/.9920/.9933).
+# cq 23 plus temporal AQ: cleaner uploads (platforms recompress) without doubling the size; 40 Mb/s ceiling.
+GPU_VIDEO=['-c:v','h264_nvenc','-preset','p5','-tune','hq','-rc','vbr','-cq','23','-b:v','0','-maxrate','40M','-bufsize','80M','-spatial-aq','1','-temporal-aq','1','-profile:v','high']
 _nvenc=None
 
 def nvenc_available():
@@ -726,13 +739,15 @@ def encode(args,cwd=None,env=None):
 
 # "Configura tus clips": per-project preferences. New projects get the new defaults; projects saved before this
 # feature keep the behaviour they had (full 9:16 crop, square titles, no automatic tracking).
-CLIP_DEFAULTS=dict(framing='zoom',zoom='balanced',tracking=True,tracking_motion='balanced',subtitles=True,title_corners='rounded')
-LEGACY_CLIP_SETTINGS=dict(framing='crop',zoom='balanced',tracking=False,tracking_motion='balanced',subtitles=True,title_corners='square')
+CLIP_DEFAULTS=dict(framing='zoom',zoom='balanced',tracking=True,tracking_motion='balanced',subtitles=True,title_corners='rounded',auto_stack=True,resolution=1080)
+LEGACY_CLIP_SETTINGS=dict(framing='crop',zoom='balanced',tracking=False,tracking_motion='balanced',subtitles=True,title_corners='square',auto_stack=False,resolution=1080)
 
 class ClipSettings(BaseModel):
- framing:Literal['zoom','crop','fit']='zoom'
+ framing:Literal['zoom','crop','fit','stack']='zoom'
  zoom:Literal['soft','balanced','close']='balanced'
  tracking:bool=True
+ auto_stack:bool=True             # use 'Cámara + juego' automatically when the video has a streamer camera overlay
+ resolution:Literal[1080,1440]=1080
  tracking_motion:Literal['smooth','balanced','fast']='balanced'
  subtitles:bool=True
  title_corners:Literal['rounded','square']='rounded'
@@ -754,6 +769,110 @@ def video_frame(ident:str,t:float=0):
  result=subprocess.run(['ffmpeg','-v','error','-ss',str(t),'-i',str(DATA/ident/'source'),'-frames:v','1','-vf','scale=640:-2','-f','image2','-vcodec','mjpeg','-'],capture_output=True,timeout=30)
  if result.returncode or not result.stdout:raise HTTPException(500,'No se pudo leer un fotograma del video.')
  return Response(result.stdout,media_type='image/jpeg',headers={'Cache-Control':'max-age=3600'})
+
+# --- "Cámara + juego": the streamer camera overlay (per video) and the stacked layout (per clip) ------------------------
+OVERLAY={}
+layout_pool=ThreadPoolExecutor(max_workers=1)
+
+def overlay_file(ident):return DATA/ident/'overlay.json'
+
+def read_overlay(ident):
+ path=overlay_file(ident)
+ if not path.exists():return None
+ try:return json.loads(path.read_text(encoding='utf-8'))
+ except (OSError,ValueError):return None
+
+def write_overlay(ident,value):
+ path=overlay_file(ident);tmp=path.with_suffix('.tmp');tmp.write_text(json.dumps(value),encoding='utf-8');tmp.replace(path)
+
+def detect_job_overlay(ident):
+ import layout
+ state=OVERLAY[ident]
+ try:
+  state.update(status='running',progress=0)
+  value=layout.detect_overlay(DATA/ident/'source',JOBS[ident].get('duration'),progress=lambda v:state.update(progress=v))
+  value.update(status='ready',manual=False);write_overlay(ident,value);state.clear();state.update(value)
+ except Exception as e:state.update(status='error',message=str(e))
+
+@app.post('/api/jobs/{ident}/overlay')
+def start_overlay(ident:str):
+ """Find the streamer's camera once per video (about 40 sampled frames), in the background."""
+ if ident not in JOBS:raise HTTPException(404)
+ saved=read_overlay(ident)
+ if saved:return saved
+ if ident not in OVERLAY or OVERLAY[ident].get('status')=='error':
+  OVERLAY[ident]=dict(status='queued',progress=0);layout_pool.submit(detect_job_overlay,ident)
+ return OVERLAY[ident]
+
+@app.get('/api/jobs/{ident}/overlay')
+def overlay_status(ident:str):
+ if ident not in JOBS:raise HTTPException(404)
+ return read_overlay(ident) or OVERLAY.get(ident) or dict(status='none')
+
+class OverlayBox(BaseModel):
+ x:int=Field(ge=0);y:int=Field(ge=0);w:int=Field(gt=16);h:int=Field(gt=16)
+
+@app.put('/api/jobs/{ident}/overlay')
+def set_overlay(ident:str,box:OverlayBox):
+ """Manual correction of the camera rectangle from the editor."""
+ import layout
+ if ident not in JOBS:raise HTTPException(404)
+ W,H,_=layout._probe(DATA/ident/'source')
+ if box.x+box.w>W or box.y+box.h>H:raise HTTPException(400,'El recuadro se sale del video.')
+ even=lambda v:int(v)//2*2
+ old=read_overlay(ident) or {}
+ face=old.get('face') if old.get('face') and box.x<=old['face']['x']<=box.x+box.w and box.y<=old['face']['y']<=box.y+box.h else None
+ value=dict(found=True,kind='overlay',status='ready',manual=True,width=W,height=H,presence=old.get('presence',1),x=even(box.x),y=even(box.y),w=even(box.w),h=even(box.h))
+ if face:value['face']=face
+ # Keep the detected game area unless the new camera rectangle falls inside it.
+ c=old.get('content')
+ if c and not (value['x']<c['x']+c['w'] and value['x']+value['w']>c['x'] and value['y']<c['y']+c['h'] and value['y']+value['h']>c['y']):value['content']=c
+ write_overlay(ident,value);OVERLAY.pop(ident,None)
+ return value
+
+def clip_layout(ident,start,end):
+ """Per-clip stacked layout, cached; depends on the camera rectangle, so a manual correction recomputes it."""
+ import layout
+ overlay=read_overlay(ident)
+ if overlay is None:
+  overlay=layout.detect_overlay(DATA/ident/'source',JOBS[ident].get('duration'));overlay.update(status='ready',manual=False);write_overlay(ident,overlay)
+ if not overlay.get('found'):return dict(overlay=overlay,panels=None)
+ box=':'.join(str(overlay[k]) for k in ('x','y','w','h'))
+ cache=DATA/ident/f"layout-{layout.key(start,end)}-{hashlib.sha256(box.encode()).hexdigest()[:8]}.json"
+ if cache.exists():return json.loads(cache.read_text(encoding='utf-8'))
+ result=layout.analyze(DATA/ident/'source',start,end,overlay)
+ tmp=cache.with_suffix('.tmp');tmp.write_text(json.dumps(result),encoding='utf-8');tmp.replace(cache)
+ return result
+
+class LayoutInput(TrackingInput):
+ motion:Literal['smooth','balanced','fast']='balanced'
+ follow:bool=True
+
+@app.post('/api/jobs/{ident}/layout/path')
+def layout_path(ident:str,opts:LayoutInput):
+ """The camera crop and the per-frame game crop the export will use, for the editor preview."""
+ import layout
+ if ident not in JOBS:raise HTTPException(404)
+ if not opts.start<opts.end<=JOBS[ident]['duration'] or opts.end-opts.start>180:raise HTTPException(400,'Elige un clip válido de hasta 180 segundos.')
+ try:result=clip_layout(ident,opts.start,opts.end)
+ except ValueError as e:raise HTTPException(400,str(e))
+ if not result.get('panels'):return dict(found=False,kind=result['overlay'].get('kind','none'))
+ return layout.preview_path(result,opts.motion,opts.follow)
+
+@app.get('/api/jobs/{ident}/layout-preview')
+def layout_preview(ident:str,t:float=0):
+ """Still of the stacked layout (camera centred, game centred), for the «Configura tus clips» card."""
+ import layout
+ if ident not in JOBS:raise HTTPException(404)
+ overlay=read_overlay(ident)
+ if not overlay or not overlay.get('found'):raise HTTPException(404,'Sin cámara detectada.')
+ t=max(0,min(float(t),JOBS[ident]['duration']-.1))
+ fake=dict(overlay=overlay,panels=layout.panels(overlay),motion=dict(xs=[overlay['width']/2]))
+ with tempfile.TemporaryDirectory() as tmp:
+  graph=layout.filter_graph(fake,Path(tmp)/'still.cmd',.04,25,follow=False)
+  result=subprocess.run(['ffmpeg','-v','error','-ss',str(t),'-i',str(DATA/ident/'source'),'-frames:v','1','-filter_complex',f'[0:v]{graph},scale=360:640[o]','-map','[o]','-f','image2','-vcodec','mjpeg','-'],capture_output=True,timeout=60,cwd=tmp)
+ if result.returncode or not result.stdout:raise HTTPException(500,'No se pudo crear la vista previa.')
+ return Response(result.stdout,media_type='image/jpeg',headers={'Cache-Control':'no-store'})
 
 def save_job(job):
  path=DATA/job['id']/'job.json'
