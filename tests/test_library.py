@@ -1,0 +1,155 @@
+"""Biblioteca permanente: nothing disappears when switching streamer, restarting, opening other projects or editing."""
+import json, os, sys, tempfile, unittest
+from pathlib import Path
+from unittest.mock import patch
+sys.path.insert(0, str(Path(__file__).parent))
+import library
+
+
+def job(ident, clips, channel=None, live=None):
+    j = dict(id=ident, name=f'{ident}.mp4', duration=600, clips=[dict(id=f'c{i}', start=10.0 * i, end=10.0 * i + 30, title=f'Clip {i}', text='hola', score=70 + i) for i in range(clips)])
+    if channel: j['youtube'] = dict(channel=channel)
+    if live: j['live'] = live
+    return j
+
+
+def session(root, sid, channel, moments, url='https://kick.com/x'):
+    folder = Path(root) / 'live' / sid; (folder / 'moments').mkdir(parents=True)
+    state = dict(id=sid, url=url, channel=channel, created='2026-11-08T23:00:00+00:00',
+                 moments=[dict(id=f'm{i}', start=100.0 + i, end=130.0 + i, duration=30, title=f'{channel} momento {i}', text='x', score=80, status='draft') for i in range(moments)])
+    for m in state['moments']: (folder / 'moments' / f"{m['id']}.mp4").write_bytes(b'video')
+    (folder / 'state.json').write_text(json.dumps(state), encoding='utf-8')
+    return folder, state
+
+
+class LibraryTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.root = Path(self.tmp.name)
+        (self.root / 'v1').mkdir(); (self.root / 'v1' / 'source').write_bytes(b'video'); (self.root / 'v1' / 'job.json').write_text('{}', encoding='utf-8')
+        self.lib = library.Library(self.root)
+
+    def tearDown(self):
+        self.lib.db.close(); self.tmp.cleanup()
+
+    def test_first_start_makes_a_backup_and_sync_is_additive(self):
+        self.assertEqual(len(list((self.root / 'backups').glob('*.zip'))), 1)
+        session(self.root, 's1', 'Spreen', 3)
+        jobs = [job('v1', 2, channel='TheDonato')]
+        self.assertEqual(self.lib.sync_all(jobs, self.root / 'live'), 5)
+        self.assertEqual(self.lib.sync_all(jobs, self.root / 'live'), 0)          # no duplicates
+        s = self.lib.summary(); self.assertEqual((s['total'], s['live'], s['video']), (5, 3, 2))
+        self.assertEqual(s['channels'][0]['channel'], 'Spreen')                    # most clipped first
+
+    def test_switching_streamer_and_restarting_keeps_every_clip(self):
+        session(self.root, 's1', 'Spreen', 3); self.lib.sync_all([], self.root / 'live')
+        session(self.root, 's2', 'JuanFerLaMata', 2); self.lib.sync_all([], self.root / 'live')
+        self.lib.db.close(); self.lib = library.Library(self.root)                 # the app restarts
+        names = sorted({c['channel'] for c in self.lib.list()})
+        self.assertEqual(names, ['JuanFerLaMata', 'Spreen']); self.assertEqual(len(self.lib.list()), 5)
+        self.assertEqual(len(list((self.root / 'backups').glob('*.zip'))), 1)     # backup only before the first build
+
+    def test_user_changes_survive_a_refresh(self):
+        folder, state = session(self.root, 's1', 'Spreen', 1); self.lib.sync_all([], self.root / 'live')
+        cid = 'live:s1:m0'
+        self.lib.update(cid, favorite=True, tags=['humor', ' top '], title='Mi título'); self.lib.mark(cid, 'edited')
+        state['moments'][0]['title'] = 'Título nuevo de la IA'; (folder / 'state.json').write_text(json.dumps(state), encoding='utf-8')
+        self.lib.sync_all([], self.root / 'live')
+        c = self.lib.public(self.lib.get(cid))
+        self.assertEqual((c['favorite'], c['tags'], c['title'], c['status']), (True, ['humor', 'top'], 'Mi título', 'edited'))
+        self.lib.mark(cid, 'draft'); self.assertEqual(self.lib.get(cid)['status'], 'edited')   # status never goes back
+
+    def test_a_clip_whose_source_disappears_stays_listed(self):
+        folder, _ = session(self.root, 's1', 'Spreen', 1); self.lib.sync_all([], self.root / 'live')
+        (folder / 'state.json').unlink(); (folder / 'moments' / 'm0.mp4').unlink()
+        self.lib.sync_all([], self.root / 'live')
+        c = self.lib.list()[0]; self.assertTrue(c['missing']); self.assertEqual(c['title'], 'Spreen momento 0')
+
+    def test_remove_restore_and_trash_move_only_the_clips_own_files(self):
+        folder, _ = session(self.root, 's1', 'Spreen', 2); self.lib.sync_all([job('v1', 1)], self.root / 'live')
+        self.lib.remove('live:s1:m0')                                                # only the record
+        self.assertTrue((folder / 'moments' / 'm0.mp4').exists()); self.assertEqual(len(self.lib.list()), 2)
+        self.lib.restore('live:s1:m0'); self.assertEqual(len(self.lib.list()), 3)
+        moved = self.lib.remove('live:s1:m1', files=True)                           # its MP4 goes to the trash
+        self.assertFalse((folder / 'moments' / 'm1.mp4').exists()); self.assertTrue(Path(moved[0]['trash']).exists())
+        self.lib.restore('live:s1:m1'); self.assertTrue((folder / 'moments' / 'm1.mp4').exists())
+        self.lib.remove('job:v1:c0', files=True)                                    # a project video is shared: never moved
+        self.assertTrue((self.root / 'v1' / 'source').exists())
+
+    def test_old_trash_is_emptied_after_30_days_only(self):
+        old = self.root / 'papelera' / '2026-09-01'; old.mkdir(parents=True); (old / 'x.mp4').write_bytes(b'v')
+        new = self.root / 'papelera' / '2026-11-08'; new.mkdir(parents=True)
+        os.utime(old, (0, 0))
+        self.assertEqual(self.lib.empty_trash(), 1); self.assertFalse(old.exists()); self.assertTrue(new.exists())
+
+    def test_filters_search_and_sort(self):
+        session(self.root, 's1', 'Spreen', 2); self.lib.sync_all([job('v1', 3, channel='TheDonato')], self.root / 'live')
+        self.assertEqual(len(self.lib.list(origin='live')), 2); self.assertEqual(len(self.lib.list(channel='TheDonato')), 3)
+        self.assertEqual(len(self.lib.list(q='momento 1')), 1)
+        self.lib.update('job:v1:c1', favorite=True); self.assertEqual([c['id'] for c in self.lib.list(favorite=True)], ['job:v1:c1'])
+        scores = [c['score'] for c in self.lib.list(sort='score')]; self.assertEqual(scores, sorted(scores, reverse=True))
+
+
+class ApiTests(unittest.TestCase):
+    def test_export_is_kept_and_recorded_but_a_preview_is_not(self):
+        import app as backend
+        from fastapi.testclient import TestClient
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = library.Library(Path(tmp))
+            with patch.object(backend, 'LIBRARY', lib), patch.object(backend, 'DATA', Path(tmp)), patch.object(backend, 'LIVE_DIR', Path(tmp) / 'live'), patch.dict(backend.JOBS, {}, clear=True):
+                client = TestClient(backend.app); source = Path(tmp) / 'src.mp4'
+                backend.command(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=gray:size=640x360:rate=24', '-t', '3', '-c:v', 'libx264', str(source)])
+                with source.open('rb') as raw: ident = client.post('/api/upload', files={'file': ('src.mp4', raw, 'video/mp4')}).json()['id']
+                backend.JOBS[ident]['clips'] = [dict(id='c0', start=0, end=2, title='Clip', text='')]; lib.sync_job(backend.JOBS[ident])
+                cid = f'job:{ident}:c0'
+                body = dict(start=0, end=2, title='Mi clip', subtitles='', framing='zoom', clip_id='c0')
+                self.assertEqual(client.post(f'/api/jobs/{ident}/export', json=dict(body, preview=True)).status_code, 200)
+                self.assertEqual(lib.exports(cid), [])
+                r = client.post(f'/api/jobs/{ident}/export', json=body); self.assertEqual(r.status_code, 200)
+                ex = lib.exports(cid); self.assertEqual(len(ex), 1); self.assertTrue(Path(ex[0]['path']).exists())
+                self.assertIn('Mi clip', Path(ex[0]['path']).name); self.assertEqual(lib.get(cid)['status'], 'exported')
+                self.assertIn('Mi%20clip', r.headers['content-disposition'])          # readable download name
+                # editor changes are saved with the project
+                self.assertEqual(client.put(f'/api/jobs/{ident}/clips/c0/edits', json=dict(settings=dict(title='Otro', caption_y=85))).status_code, 200)
+                self.assertEqual(json.loads((Path(tmp) / ident / 'job.json').read_text(encoding='utf-8'))['clip_edits']['c0']['caption_y'], 85)
+                # library API
+                listing = client.get('/api/library').json(); self.assertIn(cid, [c['id'] for c in listing['items']])
+                self.assertTrue(client.patch(f'/api/library/{cid}', json=dict(favorite=True)).json()['favorite'])
+                self.assertEqual(client.get(f'/api/library/{cid}/thumb').status_code, 200)
+                self.assertTrue(client.delete(f'/api/library/{cid}').json()['removed'])
+                self.assertNotIn(cid, [c['id'] for c in client.get('/api/library').json()['items']])
+                self.assertEqual(client.post(f'/api/library/{cid}/restore').status_code, 200)
+            lib.db.close()
+
+    def test_opened_live_moment_shares_the_video_instead_of_copying_it(self):
+        import app as backend, live
+        from fastapi.testclient import TestClient
+        from test_live import FakeWhisper, make_segment
+        with tempfile.TemporaryDirectory() as tmp, patch.object(backend, 'DATA', Path(tmp)), patch.dict(backend.JOBS, {}, clear=True), patch.dict(backend.LIVE, {}, clear=True):
+            lib = library.Library(Path(tmp))
+            with patch.object(backend, 'LIBRARY', lib), patch('layout.detect_overlay', return_value=dict(found=False)):
+                s = live.LiveSession(Path(tmp) / 'live', 'https://kick.com/canal', minimum=10, maximum=30); s.segments.mkdir(parents=True); s.clips.mkdir(parents=True)
+                s._model = FakeWhisper(); s.channel = 'Canal'
+                for i in range(3): make_segment(s.segments / f'seg{i:06d}.ts')
+                for p in s._closed_segments(): s._ingest(p)
+                s._add_moment({'start': 10.5, 'end': 24.5, 'title': 'Momento', 'text': 'Frase 2 uno dos', 'score': 70, 'source': 'IA local'})
+                backend.LIVE[s.id] = s; mid = s.moments[0]['id']
+                job = TestClient(backend.app).post(f'/api/live/{s.id}/moments/{mid}/open').json()
+                self.assertTrue(os.path.samefile(s.clips / f'{mid}.mp4', Path(tmp) / job['id'] / 'source'))
+            lib.db.close()
+
+
+class ShellTests(unittest.TestCase):
+    def test_page_has_the_side_menu_and_every_section(self):
+        static = Path(__file__).resolve().parents[1] / 'static'
+        html = (static / 'index.html').read_text(encoding='utf-8')
+        for view in ('home', 'analysis', 'live', 'library', 'editor', 'projects', 'settings'):
+            self.assertIn(f'data-view="{view}"', html); self.assertIn(f'id="{view}View"', html)
+        self.assertIn('/static/shell.js', html); self.assertIn('/static/theme.css', html); self.assertIn('id="removeModal"', html)
+        self.assertNotIn('Ã', html)                                            # no broken accents
+        js = (static / 'shell.js').read_text(encoding='utf-8')
+        self.assertNotIn('innerHTML = c', js); self.assertIn('textContent', js)   # stream/AI text never goes in as HTML
+        for img in ('clipping-en-vivo.webp', 'kick.png', 'youtube.png'): self.assertTrue((static / 'img' / img).exists())
+
+
+if __name__ == '__main__':
+    unittest.main()

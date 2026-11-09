@@ -321,6 +321,8 @@ def analyze(ident,options):
   message+=' Tiempos: '+', '.join(parts)+'.'
   job.update(status='ready',progress=100,clips=clips,message=message)
   if wants_stack(job):layout_pool.submit(prepare_layouts,ident)
+  try:LIBRARY.sync_job(job);LIBRARY.log('analysis',f"Análisis terminado: {len(clips)} clips · {job.get('name','video')}",ident)
+  except Exception as e:logging.getLogger('uvicorn.error').warning('Library sync failed: %s',e)
  except cloud_ai.AnalysisCancelled:job.update(status='cancelled',message='Análisis cancelado. Puedes reutilizar la transcripción completa si ya se guardó.')
  except Exception as e: job.update(status='error',message=str(e))
  finally:save_job(job)
@@ -411,7 +413,14 @@ def disconnect_ai(request:Request):
 
 @app.get('/api/jobs')
 def list_jobs():
- return [dict(id=j['id'],name=j['name'],duration=j['duration'],cached=(DATA/j['id']/'transcript.json').exists()) for j in JOBS.values()]
+ def info(j):
+  meta=DATA/j['id']/'job.json'
+  live=j.get('live') or {};yt=j.get('youtube') or {}
+  return dict(id=j['id'],name=j['name'],duration=j['duration'],cached=(DATA/j['id']/'transcript.json').exists(),
+              clips=len(j.get('clips') or []),status=j.get('status'),kind='live' if live else 'youtube' if yt else 'local',
+              channel=live.get('channel') or yt.get('channel') or '',title=live.get('stream_title') or yt.get('title') or j['name'],
+              updated=meta.stat().st_mtime if meta.exists() else 0,edited=len(j.get('clip_edits') or {}))
+ return [info(j) for j in JOBS.values()]
 
 @app.get('/api/jobs/{ident}')
 def status(ident:str):
@@ -505,6 +514,7 @@ class Export(BaseModel):
  # 'Cámara + juego' (framing='stack'): follow the game's action, and output size (1440 gives YouTube Shorts more bitrate).
  game_follow:bool=True
  resolution:Literal[1080,1440]=1080
+ preview:bool=False               # «Comprobar MP4»: not an export, not recorded in the library
 
 def stamp(seconds):
  c=round(max(0,seconds)*100); return f'{c//360000}:{c//6000%60:02}:{c//100%60:02}.{c%100:02}'
@@ -707,7 +717,15 @@ def export(ident:str,opts:Export):
   export_env={**os.environ,'FONTCONFIG_FILE':str(config.resolve())}
  try: encode(args,cwd=folder,env=export_env)
  except Exception as e: raise HTTPException(500,str(e))
- return FileResponse(output,media_type='video/mp4',filename=f'clip-{token[:6]}.mp4')
+ name=f'clip-{token[:6]}.mp4'
+ cid=library_id(JOBS[ident],opts.clip_id)
+ if not opts.preview and cid:
+  # Keep every real export with a readable name and record it, so the library shows it as «Exportado».
+  try:
+   target=export_target(JOBS[ident],opts.title or 'clip',opts.resolution);os.replace(output,target);output=target;name=target.name
+   LIBRARY.record_export(cid,target,opts.resolution);LIBRARY.log('export',f'Clip exportado en {opts.resolution}p · {opts.title or "sin título"}',cid)
+  except OSError as e:logging.getLogger('uvicorn.error').warning('Export not moved to the library folder: %s',e)
+ return FileResponse(output,media_type='video/mp4',filename=name)
 
 CPU_VIDEO=['-c:v','libx264','-preset','fast','-crf','18']
 # Measured on a real 1080p60 source (60 s vertical crop, RTX 5060 Ti): x264 CRF18 29 s / 54 MB / SSIM 0.9938,
@@ -1013,7 +1031,8 @@ def open_live_moment(sid:str,mid:str):
  if not path.exists():raise HTTPException(409,'El clip todavía se está preparando.')
  ident=uuid.uuid4().hex;folder=DATA/ident;folder.mkdir()
  try:
-  shutil.copyfile(path,folder/'source')
+  try:os.link(path,folder/'source')            # same file on disk, no extra space; either can be removed safely
+  except OSError:shutil.copyfile(path,folder/'source')
   name=re.sub(r'[\/:*?"<>|]+',' ',f"{session.channel or 'Directo'} · {moment['title']}")[:120]+'.mp4'
   job=register_video(ident,folder/'source',name,max_duration=12000)
   transcript=session.moment_transcript(moment)
@@ -1048,3 +1067,102 @@ def stop_live_captures():
   session.save(force=True)
 
 recover_live()
+
+
+# --- Biblioteca permanente (Fase 1) --------------------------------------------------------------------------------
+import library
+LIBRARY=library.Library(DATA)
+_thumb_gate=threading.Semaphore(2)
+
+def library_id(job,clip_id):
+ if not clip_id:return None
+ live=job.get('live')
+ return f"live:{live['session']}:{live['moment']}" if live else f"job:{job['id']}:{clip_id}"
+
+def export_target(job,title,resolution):
+ channel=(job.get('live') or {}).get('channel') or (job.get('youtube') or {}).get('channel') or 'Mis videos'
+ clean=lambda v:re.sub(r'[\\/:*?"<>|]+',' ',v).strip()[:60] or 'clip'
+ folder=DATA/'exports'/clean(channel);folder.mkdir(parents=True,exist_ok=True)
+ base=f"{time.strftime('%Y-%m-%d %H%M')} {clean(title)}{' 1440p' if resolution==1440 else ''}"
+ target=folder/f'{base}.mp4';n=2
+ while target.exists():target=folder/f'{base} ({n}).mp4';n+=1
+ return target
+
+def library_sync():
+ try:LIBRARY.sync_all(list(JOBS.values()),LIVE_DIR)
+ except Exception as e:logging.getLogger('uvicorn.error').warning('Library sync failed: %s',e)
+
+def library_startup():
+ library_sync();LIBRARY.empty_trash()
+ for item in LIBRARY.list(limit=60):           # warm the latest thumbnails, one at a time
+  try:LIBRARY.make_thumb(item['id'])
+  except Exception:continue
+
+threading.Thread(target=library_startup,daemon=True).start()
+
+@app.get('/api/library')
+def library_list(q:str='',origin:str='',status:str='',platform:str='',channel:str='',favorite:bool=False,removed:bool=False,sort:str='recent',
+                 min_score:float|None=None,min_dur:float|None=None,max_dur:float|None=None):
+ library_sync()
+ return dict(items=LIBRARY.list(q[:100],origin,status,platform,channel,favorite,removed,sort,min_score,min_dur,max_dur),**LIBRARY.summary())
+
+class LibraryPatch(BaseModel):
+ favorite:bool|None=None
+ tags:list[str]|None=Field(default=None,max_length=12)
+ title:str|None=Field(default=None,max_length=120)
+ status:Literal['detected','draft','edited','exported']|None=None
+
+@app.patch('/api/library/{cid}')
+def library_patch(cid:str,change:LibraryPatch):
+ try:LIBRARY.update(cid,change.favorite,change.tags,change.title,change.status)
+ except KeyError:raise HTTPException(404,'Clip no encontrado.')
+ return LIBRARY.public(LIBRARY.get(cid))
+
+@app.get('/api/library/{cid}/files')
+def library_files(cid:str):
+ """What «also the file» would move to the trash, so the confirmation can say it exactly."""
+ if LIBRARY.get(cid) is None:raise HTTPException(404)
+ files=LIBRARY.owned_files(cid)
+ return dict(files=[dict(name=f.name,mb=round(f.stat().st_size/1e6,1)) for f in files],exports=LIBRARY.exports(cid))
+
+@app.delete('/api/library/{cid}')
+def library_remove(cid:str,files:bool=False):
+ try:moved=LIBRARY.remove(cid,files)
+ except KeyError:raise HTTPException(404,'Clip no encontrado.')
+ return dict(removed=True,moved=moved,trash_days=library.TRASH_DAYS)
+
+@app.post('/api/library/{cid}/restore')
+def library_restore(cid:str):
+ try:LIBRARY.restore(cid)
+ except KeyError:raise HTTPException(404,'Clip no encontrado.')
+ return LIBRARY.public(LIBRARY.get(cid))
+
+@app.get('/api/library/{cid}/thumb')
+def library_thumb(cid:str):
+ path=LIBRARY.thumb_path(cid)
+ if not path.exists():
+  with _thumb_gate:
+   try:path=LIBRARY.make_thumb(cid)
+   except Exception:path=None
+ if not path or not Path(path).exists():raise HTTPException(404,'Sin miniatura.')
+ return FileResponse(path,media_type='image/jpeg',headers={'Cache-Control':'max-age=86400'})
+
+@app.get('/api/library/{cid}/video')
+def library_video(cid:str):
+ """The clip's video for previews: a live moment's own MP4, or the project video (the page seeks to the clip)."""
+ r=LIBRARY.get(cid)
+ if r is None or not r['file'] or not Path(r['file']).exists():raise HTTPException(404,'El video de este clip no está disponible.')
+ return FileResponse(r['file'],media_type='video/mp4')
+
+class ClipEdits(BaseModel):
+ settings:dict
+
+@app.put('/api/jobs/{ident}/clips/{clip_id}/edits')
+def save_clip_edits(ident:str,clip_id:str,edits:ClipEdits):
+ """Editor changes are saved with the project, so closing the app or switching streamer never loses them."""
+ if ident not in JOBS:raise HTTPException(404)
+ if len(json.dumps(edits.settings))>200000:raise HTTPException(413,'Demasiados datos de edición.')
+ job=JOBS[ident];job.setdefault('clip_edits',{})[clip_id]=edits.settings;save_job(job)
+ cid=library_id(job,clip_id)
+ if cid:LIBRARY.mark(cid,'edited')
+ return dict(saved=True)
