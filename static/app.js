@@ -541,7 +541,7 @@ async function watchOverlay(j,t){
  }
  if(token!==overlayWatch)return;
  if(state.status==='error'){$('cfgStackNote').textContent='No se pudo revisar la cámara: '+state.message;return;}
- overlayInfo=state;paintOverlayInfo(j,t);
+ overlayInfo=state;paintOverlayInfo(j,t);paintTime();
  if(state.found&&job?.id===j.id){
   // Clips not adjusted by hand follow the project choice now that we know the video has a camera.
   // Before the camera was known, clips opened with the fallback format (zoom when the project asks for «Cámara + juego»).
@@ -570,14 +570,22 @@ async function loadStackPath(){
  $('stackState').textContent=path.found?`${overlayInfo?.manual?'Recuadro marcado a mano':'Cámara detectada'} · ${path.game.static?'juego centrado':'sigue la acción del juego con suavidad'}.`+(path.cam_presence<.34?' ⚠ En este clip casi no se ve al streamer en el recuadro (intro o pantalla completa): revisa la vista previa o usa otro encuadre.':''):'No se encontró la cámara del streamer. Pulsa «Ajustar recuadro de cámara» para marcarla.';
  paint();
 }
+// While «Cámara + juego» is still being prepared, show that instead of another format that would jump later.
+function stackPending(){
+ if(!job||!selected)return false;
+ const wants=projectConfig.framing==='stack'||projectConfig.auto_stack!==false,before=projectConfig.framing==='stack'?'zoom':projectConfig.framing;
+ if(overlayInfo===null)return wants&&$('framing').value===before;
+ return $('framing').value==='stack'&&!!overlayInfo.found;
+}
 function drawStack(t){
  const canvas=$('stackCanvas'),video=$('video'),stack=$('framing').value==='stack';
  $('stackBox').classList.toggle('hidden',!stack);
- const p=stackPath,on=stack&&p?.found&&p.start===Number($('start').value)&&p.end===Number($('end').value);
- canvas.hidden=!on;video.style.opacity=on?'0':'';if(!on)return;
+ const p=stackPath,on=stack&&p?.found&&p.start===Number($('start').value)&&p.end===Number($('end').value),wait=!on&&stackPending();
+ canvas.hidden=!(on||wait);video.style.opacity=on||wait?'0':'';if(!on&&!wait)return;
  const preview=$('preview'),dpr=window.devicePixelRatio||1,w=Math.round(preview.clientWidth*dpr),h=Math.round(preview.clientHeight*dpr);
  if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}
  const ctx=canvas.getContext('2d'),r=w/1080;ctx.fillStyle='#0b0b0b';ctx.fillRect(0,0,w,h);
+ if(wait){ctx.fillStyle='#9aa0a6';ctx.font=`${Math.round(34*r)}px Montserrat, sans-serif`;ctx.textAlign='center';ctx.fillText('Preparando «Cámara + juego»…',w/2,h/2);return;}
  if(video.readyState<2)return;
  ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
  const cam=p.cam;ctx.drawImage(video,cam.x,cam.y,cam.w,cam.h,0,0,w,p.top*r);

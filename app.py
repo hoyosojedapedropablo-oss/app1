@@ -255,6 +255,8 @@ def analyze(ident,options):
   if options.engine=='gpu':
    job.update(message='Cargando el modelo local y comprobando memoria GPU…')
    job['gpu_status']=gpu_ai.warmup()
+  # «Cámara + juego»: look for the streamer camera on the CPU while the GPU transcribes, so clips open ready.
+  if wants_stack(job):start_overlay(ident)
   cached=DATA/ident/'transcript.json'
   if cached.exists():
    transcript=json.loads(cached.read_text(encoding='utf-8'))
@@ -318,6 +320,7 @@ def analyze(ident,options):
   parts=([f"transcripción {t['transcription_s']} s ({'GPU' if t['transcription_device']=='cuda' else 'CPU'})"] if 'transcription_s' in t else ['transcripción reutilizada'])+[f"análisis {t['analysis_s']} s",f"títulos {t['titles_s']} s"]
   message+=' Tiempos: '+', '.join(parts)+'.'
   job.update(status='ready',progress=100,clips=clips,message=message)
+  if wants_stack(job):layout_pool.submit(prepare_layouts,ident)
  except cloud_ai.AnalysisCancelled:job.update(status='cancelled',message='Análisis cancelado. Puedes reutilizar la transcripción completa si ya se guardó.')
  except Exception as e: job.update(status='error',message=str(e))
  finally:save_job(job)
@@ -834,19 +837,46 @@ def set_overlay(ident:str,box:OverlayBox):
  write_overlay(ident,value);OVERLAY.pop(ident,None)
  return value
 
+def wants_stack(job):
+ settings=clip_settings(job)
+ return settings.get('framing')=='stack' or bool(settings.get('auto_stack'))
+
+def layout_cache(ident,start,end,overlay):
+ import layout
+ box=':'.join(str(overlay[k]) for k in ('x','y','w','h'))
+ return DATA/ident/f"layout-{layout.key(start,end)}-{hashlib.sha256(box.encode()).hexdigest()[:8]}.json"
+
+LAYOUT_LOCKS={};_layout_locks=threading.Lock()
+
 def clip_layout(ident,start,end):
  """Per-clip stacked layout, cached; depends on the camera rectangle, so a manual correction recomputes it."""
  import layout
  overlay=read_overlay(ident)
  if overlay is None:
-  overlay=layout.detect_overlay(DATA/ident/'source',JOBS[ident].get('duration'));overlay.update(status='ready',manual=False);write_overlay(ident,overlay)
+  with _layout_locks:lock=LAYOUT_LOCKS.setdefault((ident,'overlay'),threading.Lock())
+  with lock:
+   overlay=read_overlay(ident)
+   if overlay is None:
+    overlay=layout.detect_overlay(DATA/ident/'source',JOBS[ident].get('duration'));overlay.update(status='ready',manual=False);write_overlay(ident,overlay)
  if not overlay.get('found'):return dict(overlay=overlay,panels=None)
- box=':'.join(str(overlay[k]) for k in ('x','y','w','h'))
- cache=DATA/ident/f"layout-{layout.key(start,end)}-{hashlib.sha256(box.encode()).hexdigest()[:8]}.json"
- if cache.exists():return json.loads(cache.read_text(encoding='utf-8'))
- result=layout.analyze(DATA/ident/'source',start,end,overlay)
- tmp=cache.with_suffix('.tmp');tmp.write_text(json.dumps(result),encoding='utf-8');tmp.replace(cache)
+ cache=layout_cache(ident,start,end,overlay)
+ with _layout_locks:lock=LAYOUT_LOCKS.setdefault(cache.name,threading.Lock())
+ with lock:
+  if cache.exists():return json.loads(cache.read_text(encoding='utf-8'))
+  result=layout.analyze(DATA/ident/'source',start,end,overlay)
+  tmp=cache.with_suffix(f'.{uuid.uuid4().hex[:6]}.tmp');tmp.write_text(json.dumps(result),encoding='utf-8');tmp.replace(cache)
  return result
+
+def prepare_layouts(ident):
+ """After the analysis: prepare «Cámara + juego» for every clip, in list order (the first ones are opened first)."""
+ job=JOBS.get(ident)
+ if not job:return
+ clips=list(job.get('clips',[]));job['layout_ready']=0
+ for n,clip in enumerate(clips,1):
+  try:
+   if not clip_layout(ident,clip['start'],clip['end']).get('panels'):job['layout_ready']=len(clips);return   # no camera: nothing to prepare
+  except Exception as e:logging.getLogger('uvicorn.error').warning('Layout preparation failed: %s',e)
+  job['layout_ready']=n
 
 class LayoutInput(TrackingInput):
  motion:Literal['smooth','balanced','fast']='balanced'
@@ -997,6 +1027,12 @@ def open_live_moment(sid:str,mid:str):
              live={'session':sid,'moment':mid,'channel':session.channel,'stream_title':session.title},message='Momento del directo listo para editar.',
              clip_settings=dict(session.clip_settings or CLIP_DEFAULTS))
   save_job(job)
+  # «Cámara + juego» prepared by the live session while the moment was rendered: the clip opens ready.
+  ready=session.clips/f'{mid}.layout.json'
+  if ready.exists():
+   prepared=json.loads(ready.read_text(encoding='utf-8'));overlay=dict(prepared['overlay'],status='ready',manual=False)
+   write_overlay(ident,overlay)
+   if prepared.get('panels'):layout_cache(ident,start,end,overlay).write_text(json.dumps(dict(prepared,start=start,end=end,overlay=overlay)),encoding='utf-8')
  except Exception as e:
   JOBS.pop(ident,None);shutil.rmtree(folder,ignore_errors=True)
   raise HTTPException(500,f'No se pudo abrir el momento en el editor: {e}')

@@ -543,6 +543,7 @@ class LiveSession:
         self.note(f'Momento detectado: {moment["title"]}')
         try:
             self._render(moment)
+            self._prepare_layout(moment)
             moment['status'] = 'draft'
             moment['ready_after_s'] = self._ready_after(moment['end'])
         except Exception as error:
@@ -565,6 +566,21 @@ class LiveSession:
                         *video, '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', str(target)], check=True, capture_output=True, timeout=300)
         listing.unlink(missing_ok=True)
         moment['file_start'] = round(start, 3)
+
+    def _prepare_layout(self, moment):
+        """«Cámara + juego»: find the camera and the game motion now, so the moment opens ready in the editor."""
+        settings = self.clip_settings or {}
+        if not (settings.get('framing') == 'stack' or settings.get('auto_stack', True)): return
+        try:
+            import layout
+            target = self.clips / f'{moment["id"]}.mp4'
+            base = moment.get('file_start', moment['start'] - PAD_S)
+            start, end = max(0.0, moment['start'] - base), moment['end'] - base
+            overlay = layout.detect_overlay(target, end + PAD_S, samples=24)
+            result = layout.analyze(target, round(start, 3), round(end, 3), overlay)
+            (self.clips / f'{moment["id"]}.layout.json').write_text(json.dumps(result), encoding='utf-8')
+        except Exception:
+            pass        # the editor computes it when the moment is opened
 
     def moment(self, mid):
         found = next((m for m in self.moments if m['id'] == mid), None)
