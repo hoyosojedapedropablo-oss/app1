@@ -169,6 +169,51 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(backend.clip_settings({})['framing'], 'crop')
 
 
+class ReadyOnOpenTests(unittest.TestCase):
+    """Clips must open already in «Cámara + juego»: nothing is computed when the user opens them."""
+    OVERLAY = dict(found=True, kind='overlay', detector=layout.DETECTOR_VERSION, width=1280, height=720, presence=1, content=dict(x=0, y=0, w=1280, h=720), **BOX)
+
+    def fake_analyze(self, calls):
+        def analyze(source, start, end, overlay, progress=lambda v: None):
+            calls.append((round(start, 3), round(end, 3)))
+            return dict(version=layout.VERSION, start=start, end=end, overlay=overlay, panels=layout.panels(overlay), cam_presence=1, motion=dict(xs=[640.0] * 8))
+        return analyze
+
+    def test_analysis_prepares_every_clip_before_it_is_opened(self):
+        client = TestClient(backend.app); calls = []
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'stream.mp4'; make_stream(source, seconds=4)
+            with source.open('rb') as raw: ident = client.post('/api/upload', files={'file': ('stream.mp4', raw, 'video/mp4')}).json()['id']
+        job = backend.JOBS[ident]; job['clips'] = [dict(start=0.0, end=2.0), dict(start=1.0, end=3.5)]
+        backend.write_overlay(ident, self.OVERLAY)
+        with patch('layout.analyze', self.fake_analyze(calls)):
+            backend.prepare_layouts(ident)
+            self.assertEqual(calls, [(0.0, 2.0), (1.0, 3.5)]); self.assertEqual(job['layout_ready'], 2)
+            path = client.post(f'/api/jobs/{ident}/layout/path', json=dict(start=1.0, end=3.5)).json()
+        self.assertTrue(path['found']); self.assertEqual(len(calls), 2)          # opening the clip computed nothing new
+
+    def test_live_moment_opens_with_its_layout_already_prepared(self):
+        import sys, live
+        sys.path.insert(0, str(Path(__file__).parent))
+        from test_live import FakeWhisper, make_segment
+        calls = []
+        with tempfile.TemporaryDirectory() as tmp, patch.object(backend, 'DATA', Path(tmp)), patch.dict(backend.JOBS, {}, clear=True), patch.dict(backend.LIVE, {}, clear=True):
+            s = live.LiveSession(Path(tmp) / 'live', 'https://kick.com/canal', minimum=10, maximum=30, clip_settings=dict(backend.CLIP_DEFAULTS))
+            s.segments.mkdir(parents=True); s.clips.mkdir(parents=True); s._model = FakeWhisper()
+            for i in range(3): make_segment(s.segments / f'seg{i:06d}.ts')
+            for p in s._closed_segments(): s._ingest(p)
+            with patch('layout.detect_overlay', return_value=dict(self.OVERLAY)), patch('layout.analyze', self.fake_analyze(calls)):
+                s._add_moment({'start': 10.5, 'end': 24.5, 'title': 'Momento', 'text': 'Frase 2 uno dos', 'score': 70, 'source': 'IA local'})
+            mid = s.moments[0]['id']
+            self.assertEqual(s.moments[0]['status'], 'draft'); self.assertTrue((s.clips / f'{mid}.layout.json').exists()); self.assertEqual(len(calls), 1)
+            backend.LIVE[s.id] = s; client = TestClient(backend.app)
+            job = client.post(f'/api/live/{s.id}/moments/{mid}/open').json(); clip = job['clips'][0]
+            self.assertTrue(backend.read_overlay(job['id'])['found'])
+            with patch('layout.analyze', side_effect=AssertionError('computed again on open')):
+                path = client.post(f'/api/jobs/{job["id"]}/layout/path', json=dict(start=clip['start'], end=clip['end'])).json()
+            self.assertTrue(path['found'])
+
+
 class QualityTests(unittest.TestCase):
     def test_gpu_export_uses_more_bitrate_than_before(self):
         args = backend.GPU_VIDEO
