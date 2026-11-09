@@ -75,6 +75,21 @@ class StreamerTests(unittest.TestCase):
         self.assertIn('kick:spreen', again.items)
 
 
+class SearchScopeTests(unittest.TestCase):
+    def test_kick_suggestions_link_and_local_scopes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s = streamers.Streamers(tmp, ydl_factory=FakeYDL); s.follow('https://kick.com/juanferlamata', clips=102, name='JuanFerLaMata')
+            fake = dict(channels=[dict(slug='spreen', isLive=True, followersCount=2000000, user=dict(username='Spreen', profilePic='https://p/s.jpg')),
+                                  dict(slug='elspreendmc', isLive=False, followersCount=21000, user=dict(username='ElSpreenDMC'))])
+            with patch.object(streamers.Streamers, '_json', return_value=fake):
+                kick = s.search_scope('spre', 'kick')
+            self.assertEqual([r['name'] for r in kick], ['Spreen', 'ElSpreenDMC'])          # live first
+            self.assertEqual(kick[0]['title'], 'MI MUNDO HARDCORE')                          # details for live results
+            self.assertEqual([r['name'] for r in s.search_scope('juan', 'local')], ['JuanFerLaMata'])
+            link = s.search_scope('https://kick.com/Spreen', 'link'); self.assertEqual((link[0]['name'], link[0]['live']), ('Spreen', True))
+            self.assertEqual(s.search_scope('hola', 'link'), [])
+
+
 class PrefsAndStorageTests(unittest.TestCase):
     def test_last_setup_per_streamer_is_remembered(self):
         with tempfile.TemporaryDirectory() as tmp:

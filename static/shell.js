@@ -39,6 +39,7 @@ function navigate(name) {
   if (!VIEWS.includes(name)) name = 'home';
   if (name === 'editor' && !job) { toast('Abre un clip primero', 'Elige uno en la biblioteca o en proyectos.'); name = 'library'; }
   current = name;
+  if (name !== 'live') { try { stopLivePlayer(); } catch {} }
   for (const v of VIEWS) $(v + 'View')?.classList.toggle('hidden', v !== name);
   for (const b of document.querySelectorAll('#sideNav button')) b.classList.toggle('on', b.dataset.view === name);
   window.scrollTo({ top: 0 });
@@ -326,9 +327,61 @@ function paintLiveView(s) {
   document.querySelector('.live-ai .bars').classList.toggle('paused', !running);
   $('liveAiMessage').textContent = s.message || ''; $('liveAiText').textContent = s.recent_text ? `«…${s.recent_text}»` : '';
   clearTimeout(liveUI.frameTimer);
-  const refresh = () => { const img = $('liveFrame'); const next = new Image(); next.onload = () => { img.src = next.src; }; next.src = `/api/live/${s.id}/frame?t=${Date.now()}`; if (running && current === 'live') liveUI.frameTimer = setTimeout(refresh, 5000); };
+  // Still image as a fallback (and for stopped sessions); while recording, the video player below takes over.
+  const refresh = () => { const img = $('liveFrame'); const next = new Image(); next.onload = () => { img.src = next.src; }; next.src = `/api/live/${s.id}/frame?t=${Date.now()}`; if (running && current === 'live' && !livePlayer.playing) liveUI.frameTimer = setTimeout(refresh, 5000); };
   refresh();
+  runLivePlayer(s, running);
   paintLiveMoments();
+}
+
+// Continuous preview: the recorded 6 s segments play one after another (two video elements: while one plays, the
+// next one is already loaded, so there is no pause between them). About one segment behind the stream.
+const livePlayer = { sid: null, playing: false, index: -1, muted: true, token: 0 };
+function liveVideos() {
+  const frame = document.querySelector('.live-frame');
+  if (!frame.querySelector('.live-vid')) for (const id of ['liveVidA', 'liveVidB']) { const v = h('video', { id, class: 'live-vid', playsinline: true, preload: 'auto' }); v.muted = true; frame.insertBefore(v, frame.querySelector('.scan')); }
+  if (!$('liveSound')) document.querySelector('.live-who').append(h('button', { id: 'liveSound', class: 'btn ghost', type: 'button', text: '🔇 Activar sonido', hidden: true,
+    onclick: () => { livePlayer.muted = !livePlayer.muted; for (const v of document.querySelectorAll('.live-vid')) v.muted = livePlayer.muted; $('liveSound').textContent = livePlayer.muted ? '🔇 Activar sonido' : '🔊 Silenciar'; } }));
+  return [$('liveVidA'), $('liveVidB')];
+}
+function stopLivePlayer() {
+  livePlayer.token++; livePlayer.playing = false; livePlayer.sid = null;
+  for (const v of document.querySelectorAll('.live-vid')) { v.pause(); v.removeAttribute('src'); v.load(); v.classList.remove('on'); }
+  if ($('liveSound')) $('liveSound').hidden = true;
+}
+async function runLivePlayer(s, running) {
+  if (!running) { stopLivePlayer(); return; }
+  if (livePlayer.sid === s.id && livePlayer.playing) return;
+  stopLivePlayer(); livePlayer.sid = s.id; const token = livePlayer.token;
+  const [a, b] = liveVideos();
+  const ready = async (index) => {   // wait until that segment is finished
+    for (let i = 0; i < 30 && token === livePlayer.token; i++) {
+      const seg = await api(`/api/live/${s.id}/segments`).catch(() => ({ done: [] }));
+      if (seg.done.includes(index)) return true;
+      if (seg.done.length && seg.done[seg.done.length - 1] > index + 3) { livePlayer.index = seg.done[seg.done.length - 2] - 1; return false; }   // fell behind: jump ahead
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+    return false;
+  };
+  const load = (video, index) => { video.muted = livePlayer.muted; video.src = `/api/live/${s.id}/segment/${index}`; video.load(); };
+  const seg = await api(`/api/live/${s.id}/segments`).catch(() => ({ done: [] }));
+  if (token !== livePlayer.token || seg.done.length < 1) { if (token === livePlayer.token) setTimeout(() => { if (livePlayer.sid === s.id) { livePlayer.sid = null; runLivePlayer(s, true); } }, 4000); return; }
+  livePlayer.index = seg.done[seg.done.length - 1];
+  let current = a, next = b;
+  load(current, livePlayer.index);
+  const advance = async () => {
+    if (token !== livePlayer.token) return;
+    const want = livePlayer.index + 1;
+    if (await ready(want)) { livePlayer.index = want; load(next, want); }
+    else if (token === livePlayer.token) { load(next, ++livePlayer.index); }
+  };
+  current.oncanplay = () => { if (token !== livePlayer.token) return; current.play().catch(() => {}); current.classList.add('on'); livePlayer.playing = true; $('liveSound').hidden = false; current.oncanplay = null; advance(); };
+  const swap = () => {
+    if (token !== livePlayer.token || current === null) return;
+    if (current.currentTime === 0 && !current.ended) return;
+    next.play().then(() => { next.classList.add('on'); current.classList.remove('on'); [current, next] = [next, current]; advance(); }).catch(() => setTimeout(swap, 500));
+  };
+  for (const v of [a, b]) v.onended = () => { if (v === current) swap(); };
 }
 function paintLiveMoments() {
   const s = liveUI.session; if (!s) return;
@@ -449,7 +502,7 @@ function paintEditorHeader() {
   $('exportWhere').textContent = `Destino: exportados › ${channel}`;
 }
 const baseChoose = choose;
-window.choose = (c) => { buildEditorLayout(); baseChoose(c); cueSignature = ''; paintEditorHeader(); paintTimeline(); };
+window.choose = (c) => { buildEditorLayout(); baseChoose(c); if (overlayInfo && !overlayInfo.found) dropStack(); cueSignature = ''; paintEditorHeader(); paintTimeline(); };
 choose = window.choose;
 const basePaintTime = paintTime;
 window.paintTime = () => { basePaintTime(); try { paintTimeline(); } catch {} };
@@ -504,15 +557,30 @@ function setupStreamerSearch() {
   input.placeholder = 'Busca a tu streamer por su nombre o pega el enlace del directo';
   const box = h('div', { id: 'streamerResults', class: 'card streamer-results', hidden: true });
   $('liveConnect').insertBefore(box, $('liveConnect').children[1]);
+  input.addEventListener('focus', () => { if (!input.value.trim()) showResults('', [{ key: 'local', items: streamersCache }], true); });
   input.addEventListener('input', () => {
     clearTimeout(searchTimer); const q = input.value.trim();
-    if (!q || /^https?:|\.com\//i.test(q)) { box.hidden = true; return; }
-    searchTimer = setTimeout(async () => {
-      const token = ++searchToken; put(box, h('p', { class: 'muted', style: 'margin:6px 10px', text: `Buscando «${q}» en Kick y YouTube…` })); box.hidden = false;
-      const found = await api('/api/streamers/search?q=' + encodeURIComponent(q)).catch(() => []);
-      if (token !== searchToken) return;
-      put(box, h('span', { class: 'lbl', style: 'padding:6px 10px', text: found.length ? `Resultados para «${q}»` : 'Sin resultados: prueba con el nombre exacto del canal o pega el enlace' }),
-        found.map((s) => h('div', { class: 'streamer-row' + (input.value === s.url ? ' on' : '') }, avatarImg(s, 52),
+    if (!q) { box.hidden = true; return; }
+    const isLink = /^https?:|kick\.com\/|youtu/i.test(q);
+    // Your streamers appear at once; Kick and YouTube suggestions are added as each one answers.
+    searchTimer = setTimeout(() => {
+      const token = ++searchToken, groups = [];
+      const scopes = isLink ? ['link'] : ['local', 'kick', 'youtube'];
+      let pending = scopes.length;
+      showResults(q, groups, false);
+      for (const scope of scopes) api(`/api/streamers/search?scope=${scope}&q=${encodeURIComponent(q)}`).catch(() => []).then((items) => {
+        if (token !== searchToken) return;
+        groups.push({ key: scope, items }); pending--; showResults(q, groups, pending === 0);
+      });
+    }, isLink ? 0 : 250);
+  });
+  function showResults(q, groups, finished) {
+    const order = ['link', 'local', 'kick', 'youtube'], seen = new Set(), found = [];
+    for (const g of groups.slice().sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key))) for (const s of g.items) if (!seen.has(s.key)) { seen.add(s.key); found.push(s); }
+    found.sort((a, b) => (b.live - a.live) || ((b.clips || 0) - (a.clips || 0)));
+    box.hidden = false;
+    put(box, h('span', { class: 'lbl', style: 'padding:6px 10px', text: !q ? 'Tus streamers' : found.length ? `Resultados para «${q}»${finished ? '' : ' · buscando en Kick y YouTube…'}` : finished ? 'Sin resultados: prueba con otro nombre o pega el enlace del directo' : `Buscando «${q}» en Kick y YouTube…` }),
+        found.slice(0, 12).map((s) => h('div', { class: 'streamer-row' + (input.value === s.url ? ' on' : '') }, avatarImg(s, 52),
           h('span', { style: 'display:flex;flex-direction:column;gap:4px;min-width:0;flex:1' },
             h('span', { style: 'display:flex;align-items:center;gap:10px;flex-wrap:wrap' }, h('b', { text: s.name, style: 'font:600 17px var(--head)' }),
               h('span', { class: 'chip ' + (s.live ? 'live' : 'glass'), text: s.live ? '● EN VIVO' : 'Desconectado' }), platformLogo(s.platform)),
@@ -521,8 +589,8 @@ function setupStreamerSearch() {
           h('button', { class: 'btn ' + (s.live ? 'primary' : 'ghost'), type: 'button', text: s.live ? 'Elegir directo' : 'Seguir',
             onclick: async () => { input.value = s.url; box.hidden = true; if (s.new) await api('/api/streamers/follow', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: s.url }) }).catch(() => {});
               toast(s.live ? `${s.name} elegido` : `Sigues a ${s.name}`, s.live ? 'Pulsa «Iniciar clipping en vivo» para empezar.' : 'Te avisaremos en Inicio cuando esté en directo.'); } }))));
-    }, 450);
-  });
+  }
+  document.addEventListener('click', (e) => { if (!box.contains(e.target) && e.target !== input) box.hidden = true; });
 }
 
 // --- Configuración --------------------------------------------------------------------------------------------------

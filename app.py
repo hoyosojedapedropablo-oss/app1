@@ -1217,9 +1217,13 @@ def streamers_list():
  return STREAMERS.listing()
 
 @app.get('/api/streamers/search')
-def streamers_search(q:str=''):
- if len(q)>60:raise HTTPException(400,'Escribe un nombre más corto.')
- return STREAMERS.search(q)
+def streamers_search(q:str='',scope:Literal['all','link','local','kick','youtube']='all'):
+ if len(q)>300:raise HTTPException(400,'Escribe un nombre más corto.')
+ if scope=='all':return STREAMERS.search(q)
+ try:return STREAMERS.search_scope(q,scope)
+ except Exception as e:
+  logging.getLogger('uvicorn.error').warning('Streamer search (%s) failed: %s',scope,e)
+  return []
 
 class FollowInput(BaseModel):
  url:str=Field(min_length=8,max_length=300)
@@ -1276,3 +1280,29 @@ def storage_clean(item:CleanInput):
   freed+=mb;done.append(sid)
  if done:LIBRARY.log('storage',f'Espacio liberado: {freed/1000:.1f} GB de archivos temporales de {len(done)} directos','')
  return dict(freed_mb=round(freed,1),sessions=done)
+
+
+# --- Live preview as video: the recorded 6 s segments, remuxed to MP4 (no re-encode, no second download) ----------
+_segments_mp4={}
+@app.get('/api/live/{sid}/segments')
+def live_segments(sid:str):
+ """Indexes of the finished segments (the newest file is still being written)."""
+ session=live_session(sid)
+ if not session.segments.exists():return dict(done=[],running=session.status in live.RUNNING)
+ names=sorted(session.segments.glob('seg*.ts'))
+ done=[int(n.stem[3:]) for n in names[:-1]][-6:] if session.status in live.RUNNING else [int(n.stem[3:]) for n in names][-6:]
+ return dict(done=done,running=session.status in live.RUNNING,segment_s=live.SEGMENT_S)
+
+@app.get('/api/live/{sid}/segment/{index}')
+def live_segment(sid:str,index:int):
+ session=live_session(sid)
+ if index<0:raise HTTPException(400)
+ path=session.segments/f'seg{index:06d}.ts'
+ if not path.exists():raise HTTPException(404,'Ese fragmento ya no está en el búfer.')
+ cached=_segments_mp4.get((sid,index))
+ if cached is None:
+  r=subprocess.run(['ffmpeg','-v','error','-i',str(path),'-map','0:v:0','-map','0:a:0?','-c','copy','-bsf:a','aac_adtstoasc','-movflags','frag_keyframe+empty_moov+default_base_moof','-f','mp4','-'],capture_output=True,timeout=20)
+  if r.returncode or not r.stdout:raise HTTPException(500,'No se pudo preparar el fragmento.')
+  cached=r.stdout;_segments_mp4[(sid,index)]=cached
+  for key in sorted(k for k in _segments_mp4 if k[0]==sid)[:-6]:_segments_mp4.pop(key,None)   # keep the last 6
+ return Response(cached,media_type='video/mp4',headers={'Cache-Control':'no-store'})

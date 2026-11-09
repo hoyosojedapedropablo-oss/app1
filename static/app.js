@@ -546,6 +546,8 @@ async function watchOverlay(j,t){
  if(token!==overlayWatch)return;
  if(state.status==='error'){$('cfgStackNote').textContent='No se pudo revisar la cámara: '+state.message;return;}
  overlayInfo=state;paintOverlayInfo(j,t);paintTime();
+ // No camera inset (one-camera stream): clips saved as «Cámara + juego» go back to the project's normal format.
+ if(!state.found&&job?.id===j.id)dropStack();
  if(state.found&&job?.id===j.id){
   // Clips not adjusted by hand follow the project choice now that we know the video has a camera.
   // Before the camera was known, clips opened with the fallback format (zoom when the project asks for «Cámara + juego»).
@@ -630,3 +632,10 @@ $('camSave').onclick=async()=>{
   stackKey='';await loadStackPath();
  }catch(e){say(e.message);}
 };
+
+function dropStack(){
+ if(overlayInfo?.found||overlayInfo?.manual)return;
+ const fallback=projectConfig.framing==='stack'?'zoom':projectConfig.framing;
+ for(const [id,e] of edits)if(e.framing==='stack')edits.set(id,{...e,framing:fallback});
+ if($('framing').value==='stack'){$('framing').value=fallback;saveCurrent();paint();}
+}

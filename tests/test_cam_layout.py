@@ -49,6 +49,14 @@ class DetectionTests(unittest.TestCase):
         with patch('tracking.make_detector', fake_detector((40, 200, 60, 70, .9))):     # a face, but in the game
             self.assertEqual(layout.cam_presence(self.source, 0, 5, o), 0)
 
+    def test_a_one_camera_stream_is_not_camera_plus_game(self):
+        """NaimDarrechi (IRL, Nov 2026): a face always in the middle of a moving picture, no fixed edges: normal framing."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'irl.mp4'; make_stream(source, cam=False)
+            with patch('tracking.make_detector', fake_detector((290, 90, 60, 80, .9))):
+                o = layout.detect_overlay(source, 6, samples=16)
+        self.assertFalse(o['found']); self.assertIn(o['kind'], ('single', 'none'))
+
     def test_no_face_means_no_overlay(self):
         with patch('tracking.make_detector', fake_detector(None)):
             self.assertFalse(layout.detect_overlay(self.source, 6, samples=8)['found'])
