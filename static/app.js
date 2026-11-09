@@ -1,11 +1,12 @@
 const $=id=>document.getElementById(id);
 let titleImageSignature='',titleImageURL=null,titleImageVersion=0,titleImageTimer;
 
+let overlayInfo=null,overlayWatch=0,stackPath=null,stackKey='';
 let trackingPoints=[],trackingRange=null,trackingRequest=0;
 let job=null,selected=null,cues=[],cueVersion=0,captionPending=false,captionTimer,pollToken=0;
 const edits=new Map();
-const numeric=['title_padding_x','title_padding_y','title_size','title_outline_width','title_x','title_y','caption_x','caption_y','caption_size','outline_width','focus_x','focus_y','start','end','logo_width','logo_x','logo_y','logo_start','logo_end'];
-const styleKeys=['zoom','tracking_person','tracking_motion','show_subtitles','title_corners','title_padding_x','title_padding_y','title_bg_color','title_text_color','auto_follow','style','font','title_font','title_outline_color','title_size','title_outline_width','title_x','title_y','caption_x','caption_y','caption_size','caption_color','outline_color','outline_width','logo','framing','focus_x','focus_y','logo_width','logo_x','logo_y','logo_start','logo_end'];
+const numeric=['title_padding_x','title_padding_y','title_size','title_outline_width','title_x','title_y','caption_x','caption_y','caption_size','outline_width','focus_x','focus_y','start','end','logo_width','logo_x','logo_y','logo_start','logo_end','resolution'];
+const styleKeys=['game_follow','resolution','zoom','tracking_person','tracking_motion','show_subtitles','title_corners','title_padding_x','title_padding_y','title_bg_color','title_text_color','auto_follow','style','font','title_font','title_outline_color','title_size','title_outline_width','title_x','title_y','caption_x','caption_y','caption_size','caption_color','outline_color','outline_width','logo','framing','focus_x','focus_y','logo_width','logo_x','logo_y','logo_start','logo_end'];
 const OFFLINE='ClipStudio no responde: su servidor está cerrado. Abre INICIAR_WINDOWS.bat, deja abierta esa ventana y recarga la página.';
 async function request(url,options={}){let r;try{r=await fetch(url,options);}catch{const e=Error(OFFLINE);e.offline=true;throw e;}if(!r.ok){let e;try{e=await r.json()}catch{e={detail:r.statusText}}throw Error(typeof e.detail==='string'?e.detail:'Revisa los campos y el rango de tiempos.')}return r;}
 const jsonOptions=value=>({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});
@@ -13,7 +14,7 @@ function showView(name){$('analysisView').classList.toggle('hidden',name!=='anal
 $('goAnalyze').onclick=()=>showView('analysis');$('goEditor').onclick=()=>showView('editor');
 for(const button of document.querySelectorAll('[data-tab]'))button.onclick=()=>{for(const b of document.querySelectorAll('[data-tab]')){b.classList.toggle('active',b===button);b.setAttribute('aria-selected',String(b===button));}for(const panel of document.querySelectorAll('.tab-panel'))panel.classList.toggle('hidden',panel.id!=='tab-'+button.dataset.tab);};
 function say(text){$('status').textContent=text;}
-const CHECKS=['auto_follow','show_subtitles'];
+const CHECKS=['auto_follow','show_subtitles','game_follow'];
 function styles(){return Object.fromEntries(styleKeys.map(k=>[k,CHECKS.includes(k)?$(k).checked:k==='logo_end'&&!$(k).value?null:numeric.includes(k)?Number($(k).value):$(k).value]));}
 function settings(){return {...styles(),title:$('title').value,subtitles:$('subtitles').value,start:Number($('start').value),end:Number($('end').value),clip_id:selected&&selected.id!=='manual'?selected.id:null,captions:cues.map(c=>({...c}))};}
 function saveCurrent(){if(selected)edits.set(selected.id,settings());}
@@ -36,7 +37,7 @@ function paint(){
 }
 function paintTime(){
  const t=$('video').currentTime-Number($('start').value),duration=Number($('end').value)-Number($('start').value);
- applyTracking(t);
+ applyTracking(t);drawStack(t);
  const editing=$('video').paused&&$('editLayers').checked&&selected;const active=cues.find(c=>t>=c.start&&t<c.end);$('previewCaption').textContent=$('show_subtitles').checked?(active?.text||(editing?cues[0]?.text||'Subtítulos de ejemplo':'')):'';
  $('previewTitle').hidden=!selected||!$('title').value||(!editing&&(t<0||t>=duration));
  $('seek').value=Math.max(0,t);$('clock').textContent=`${Math.max(0,t).toFixed(1)} / ${Math.max(0,duration).toFixed(1)} s`;
@@ -106,13 +107,13 @@ function choose(c){
 ++cueVersion;clearTimeout(captionTimer);captionPending=false;selected=c;
  const fresh=!edits.has(c.id);if(fresh)applyProjectToEditor();$('tracking_person').value='auto';
  const e=edits.get(c.id)||{title:c.title,subtitles:c.text,start:c.start,end:c.end};for(const [k,v]of Object.entries(e))if($(k)){if(CHECKS.includes(k))$(k).checked=!!v;else $(k).value=v;}
- if($('auto_follow').checked)prepareTracking().catch(e=>say(e.message));
+ if($('framing').value==='stack')loadStackPath().catch(e=>say(e.message));else if($('auto_follow').checked)prepareTracking().catch(e=>say(e.message));
  cues=(e.captions||c.captions||[]).map(cue=>({...cue}));$('video').pause();$('video').currentTime=Number($('start').value);$('play').textContent='▶ Reproducir clip';$('export').disabled=false;
  $('titleChoices').replaceChildren();const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent=c.titles?.length?'Elegir otra propuesta':'Sin propuestas automáticas';$('titleChoices').append(placeholder);$('titleChoices').disabled=!(c.titles?.length);for(const title of c.titles||[]){const option=document.createElement('option');option.value=title;option.textContent=title;$('titleChoices').append(option);}
  document.querySelectorAll('.clip').forEach(el=>el.classList.toggle('active',el.dataset.id===c.id));renderCueEditor();paint();saveCurrent();
 }
 async function download(opts){
- const duration=validRange(opts);if(opts.auto_follow)await ensureExportTracking(opts);say(`Exportando ${duration.toFixed(1)} segundos en 1080 × 1920…`);
+ const duration=validRange(opts);if(opts.auto_follow&&opts.framing!=='stack')await ensureExportTracking(opts);say(`Exportando ${duration.toFixed(1)} segundos en ${opts.resolution==1440?'1440 × 2560':'1080 × 1920'}…`);
  const r=await request(`/api/jobs/${job.id}/export`,jsonOptions(opts));const blob=await r.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='clip-'+Math.round(opts.start)+'-'+Math.round(duration)+'s.mp4';a.click();setTimeout(()=>URL.revokeObjectURL(url),10000);
 }
 $('export').onclick=async()=>{
@@ -344,7 +345,7 @@ $('renderCheck').onclick=async()=>{
  const button=$('renderCheck');button.disabled=true;button.textContent='Renderizando el MP4…';
  try{
   clearTimeout(captionTimer);if(captionPending)await refreshCaptions();saveCurrent();
-  const opts=settings();validRange(opts);if(opts.auto_follow)await ensureExportTracking(opts);
+  const opts=settings();validRange(opts);if(opts.auto_follow&&opts.framing!=='stack')await ensureExportTracking(opts);
   const blob=await(await request(`/api/jobs/${job.id}/export`,jsonOptions(opts))).blob();
   $('video').pause();$('play').textContent='▶ Reproducir clip';
   renderURL=URL.createObjectURL(blob);const r=$('renderVideo');r.src=renderURL;r.hidden=false;$('renderBadge').hidden=false;r.volume=Number($('volume').value);
@@ -414,28 +415,30 @@ request('/api/live').then(r=>r.json()).then(list=>{if(!list.length)return;liveId
 // --- Configura tus clips: per-project framing, zoom, tracking, subtitles and title corners -------------------------------
 // Same proportions as tracking.ZOOM on the server: the video band uses this share of the 9:16 height.
 const ZOOM={soft:.5,balanced:.6,close:.72};
-const NEW_DEFAULTS={framing:'zoom',zoom:'balanced',tracking:true,tracking_motion:'balanced',subtitles:true,title_corners:'rounded'};
+const NEW_DEFAULTS={framing:'zoom',zoom:'balanced',tracking:true,tracking_motion:'balanced',subtitles:true,title_corners:'rounded',auto_stack:true,resolution:1080};
 let projectConfig={...NEW_DEFAULTS},configTimer=null;
 const radio=name=>document.querySelector(`input[name="${name}"]:checked`)?.value;
 const setRadio=(name,value)=>{const el=document.querySelector(`input[name="${name}"][value="${value}"]`);if(el)el.checked=true;};
-function readConfig(){return {framing:radio('cfgFraming')||'zoom',zoom:radio('cfgZoom')||'balanced',tracking:$('cfgTracking').checked,tracking_motion:radio('cfgMotion')||'balanced',subtitles:radio('cfgSubtitles')!=='off',title_corners:radio('cfgCorners')||'rounded'};}
+function readConfig(){return {framing:radio('cfgFraming')||'zoom',zoom:radio('cfgZoom')||'balanced',tracking:$('cfgTracking').checked,tracking_motion:radio('cfgMotion')||'balanced',subtitles:radio('cfgSubtitles')!=='off',title_corners:radio('cfgCorners')||'rounded',auto_stack:$('cfgAutoStack').checked,resolution:Number(radio('cfgResolution')||1080)};}
 function paintConfig(){
  const c=readConfig();$('cfgZoomGroup').classList.toggle('is-off',c.framing!=='zoom');$('cfgMotionGroup').classList.toggle('is-off',!c.tracking);
  document.querySelector('.mini916[data-style="zoom"]').style.setProperty('--band',(ZOOM[c.zoom]*100)+'%');
 }
 function showConfig(c){
  // "fit" (old big-bands layout) is still available in the editor; the two styles offered here are zoom and full screen.
- setRadio('cfgFraming',c.framing==='crop'?'crop':'zoom');setRadio('cfgZoom',c.zoom);$('cfgTracking').checked=!!c.tracking;setRadio('cfgMotion',c.tracking_motion);
+ setRadio('cfgFraming',['crop','stack'].includes(c.framing)?c.framing:'zoom');$('cfgAutoStack').checked=c.auto_stack!==false;setRadio('cfgResolution',String(c.resolution||1080));setRadio('cfgZoom',c.zoom);$('cfgTracking').checked=!!c.tracking;setRadio('cfgMotion',c.tracking_motion);
  setRadio('cfgSubtitles',c.subtitles?'on':'off');setRadio('cfgCorners',c.title_corners);paintConfig();
 }
 function applyProjectToEditor(){
- const c=projectConfig;$('framing').value=c.framing;$('zoom').value=c.zoom;$('tracking_motion').value=c.tracking_motion;
+ const c=projectConfig,framing=effectiveFraming(c);$('framing').value=framing;$('zoom').value=c.zoom;$('tracking_motion').value=c.tracking_motion;$('resolution').value=String(c.resolution||1080);
+ if(framing==='stack'&&Number($('caption_y').value)===81)$('caption_y').value=stackCaptionY();
  $('show_subtitles').checked=!!c.subtitles;$('title_corners').value=c.title_corners;$('auto_follow').checked=!!c.tracking&&c.framing!=='fit';
 }
 function loadProject(j){
  projectConfig={...NEW_DEFAULTS,...(j.clip_settings||{})};delete projectConfig.legacy;showConfig(projectConfig);
  const t=Math.max(0,Math.min((j.duration||0)/3,(j.duration||0)-1));
  document.querySelectorAll('.cfg-frame').forEach(img=>{img.src=`/api/jobs/${j.id}/frame?t=${t.toFixed(1)}`;});
+ watchOverlay(j,t).catch(()=>{});
  if(!selected)applyProjectToEditor();
 }
 function saveProjectConfig(){
@@ -445,13 +448,18 @@ function saveProjectConfig(){
 document.querySelectorAll('#configure input').forEach(input=>input.addEventListener('change',()=>{
  projectConfig=readConfig();paintConfig();saveProjectConfig();
  // Applies to every clip of the project, including ones already adjusted in the editor.
- for(const [id,e] of edits)edits.set(id,{...e,framing:projectConfig.framing,zoom:projectConfig.zoom,tracking_motion:projectConfig.tracking_motion,show_subtitles:projectConfig.subtitles,title_corners:projectConfig.title_corners});
- if(selected){applyProjectToEditor();saveCurrent();if($('auto_follow').checked)prepareTracking().catch(e=>say(e.message));else paint();}
+ for(const [id,e] of edits)edits.set(id,{...e,framing:effectiveFraming(projectConfig),zoom:projectConfig.zoom,tracking_motion:projectConfig.tracking_motion,show_subtitles:projectConfig.subtitles,title_corners:projectConfig.title_corners,resolution:projectConfig.resolution});
+ if(selected){applyProjectToEditor();saveCurrent();if($('framing').value==='stack')loadStackPath().catch(e=>say(e.message));else if($('auto_follow').checked)prepareTracking().catch(e=>say(e.message));else paint();}
 }));
 // Editor changes to these options also become the project's preference.
-const EDITOR_TO_PROJECT={framing:'framing',zoom:'zoom',tracking_motion:'tracking_motion',show_subtitles:'subtitles',title_corners:'title_corners',auto_follow:'tracking'};
+const EDITOR_TO_PROJECT={framing:'framing',zoom:'zoom',tracking_motion:'tracking_motion',show_subtitles:'subtitles',title_corners:'title_corners',auto_follow:'tracking',resolution:'resolution'};
 for(const [id,keyName] of Object.entries(EDITOR_TO_PROJECT))$(id).addEventListener('change',()=>{
- projectConfig[keyName]=CHECKS.includes(id)?$(id).checked:$(id).value;showConfig(projectConfig);saveProjectConfig();saveCurrent();
+ projectConfig[keyName]=CHECKS.includes(id)?$(id).checked:id==='resolution'?Number($(id).value):$(id).value;
+ // Choosing another format by hand for a stream video means: stop switching to «Cámara + juego» automatically.
+ if(id==='framing'&&$(id).value!=='stack'&&overlayInfo?.found)projectConfig.auto_stack=false;
+ showConfig(projectConfig);saveProjectConfig();saveCurrent();
+ if(id==='framing'&&$(id).value==='stack'){if(Number($('caption_y').value)===81){$('caption_y').value=stackCaptionY();saveCurrent();}loadStackPath().catch(e=>say(e.message));}
+ if(id==='tracking_motion')loadStackPath().catch(()=>{});
  if(['framing','zoom','tracking_motion'].includes(id))loadTrackingPath().catch(()=>{});
  paint();
 });
@@ -508,4 +516,96 @@ $('cfgStart').onclick=async()=>{
  if(!(min>=5&&max<=180&&min<=max)){say('Elige una duración válida: mínimo ≤ máximo, entre 5 y 180 segundos.');return;}
  closeConfig();
  if(mode==='live')await startLive();else{saveProjectConfig();await startAnalysis();}
+};
+
+
+// --- «Cámara + juego»: streamer camera on top, game below ------------------------------------------------------------------
+// The server finds the camera once per video; the preview draws the same two crops the export uses on a canvas.
+function effectiveFraming(c){const cam=!!overlayInfo?.found;if(c.framing==='stack')return cam?'stack':'zoom';return cam&&c.auto_stack?'stack':c.framing;}
+function stackCaptionY(){const top=stackPath?.top||Math.min(960,Math.max(768,overlayInfo?.found?Math.round(1080*overlayInfo.h/overlayInfo.w):864));return Math.round((top+3)/19.2*10)/10;}
+async function watchOverlay(j,t){
+ const token=++overlayWatch;overlayInfo=null;stackPath=null;stackKey='';
+ $('cfgStackFrame').removeAttribute('src');$('cfgStackNote').textContent='Buscando la cámara del streamer en el video…';
+ let state=await(await request(`/api/jobs/${j.id}/overlay`,{method:'POST'})).json();
+ while(token===overlayWatch&&!['ready','error'].includes(state.status)){
+  $('cfgStackNote').textContent=`Buscando la cámara del streamer… ${state.progress||0}%`;
+  await new Promise(r=>setTimeout(r,1000));if(token!==overlayWatch)return;
+  state=await(await request(`/api/jobs/${j.id}/overlay`)).json();
+ }
+ if(token!==overlayWatch)return;
+ if(state.status==='error'){$('cfgStackNote').textContent='No se pudo revisar la cámara: '+state.message;return;}
+ overlayInfo=state;paintOverlayInfo(j,t);
+ if(state.found&&job?.id===j.id){
+  // Clips not adjusted by hand follow the project choice now that we know the video has a camera.
+  const framing=effectiveFraming(projectConfig);
+  for(const [id,e] of edits)if(e.framing===projectConfig.framing&&framing==='stack')edits.set(id,{...e,framing,caption_y:Number(e.caption_y)===81?stackCaptionY():e.caption_y});
+  if(selected&&$('framing').value!==framing&&$('framing').value===projectConfig.framing){$('framing').value=framing;if(Number($('caption_y').value)===81)$('caption_y').value=stackCaptionY();saveCurrent();}
+  if($('framing').value==='stack')loadStackPath().catch(e=>say(e.message));
+ }
+ paint();
+}
+function paintOverlayInfo(j,t){
+ const img=$('cfgStackFrame');
+ if(overlayInfo?.found){img.src=`/api/jobs/${j.id}/layout-preview?t=${(t||0).toFixed(1)}&v=${overlayInfo.x}-${overlayInfo.y}-${overlayInfo.w}-${overlayInfo.h}`;$('cfgStackNote').textContent=(overlayInfo.manual?'Recuadro marcado a mano':'Cámara del streamer detectada')+' · arriba la cámara, abajo el juego.';}
+ else{img.removeAttribute('src');$('cfgStackNote').textContent=overlayInfo?.kind==='fullcam'?'Este video es solo la cámara: se usará el encuadre elegido. Puedes marcar un recuadro a mano en el editor.':'No se encontró una cámara superpuesta. Se usará el encuadre elegido; en el editor puedes marcarla a mano.';}
+}
+async function loadStackPath(){
+ if(!job||!selected||$('framing').value!=='stack')return;
+ const body={start:Number($('start').value),end:Number($('end').value),motion:$('tracking_motion').value,follow:$('game_follow').checked};
+ const keyText=JSON.stringify(body)+JSON.stringify(overlayInfo&&[overlayInfo.x,overlayInfo.y,overlayInfo.w,overlayInfo.h]);
+ if(keyText===stackKey&&stackPath)return;stackKey=keyText;stackPath=null;
+ $('stackState').textContent='Preparando «Cámara + juego»: cámara y movimiento del juego…';paint();
+ const path=await(await request(`/api/jobs/${job.id}/layout/path`,jsonOptions(body))).json();
+ if(keyText!==stackKey)return;
+ stackPath={...path,start:body.start,end:body.end};
+ $('stackState').textContent=path.found?`${overlayInfo?.manual?'Recuadro marcado a mano':'Cámara detectada'} · ${path.game.static?'juego centrado':'sigue la acción del juego con suavidad'}.`+(path.cam_presence<.34?' ⚠ En este clip casi no se ve al streamer en el recuadro (intro o pantalla completa): revisa la vista previa o usa otro encuadre.':''):'No se encontró la cámara del streamer. Pulsa «Ajustar recuadro de cámara» para marcarla.';
+ paint();
+}
+function drawStack(t){
+ const canvas=$('stackCanvas'),video=$('video'),stack=$('framing').value==='stack';
+ $('stackBox').classList.toggle('hidden',!stack);
+ const p=stackPath,on=stack&&p?.found&&p.start===Number($('start').value)&&p.end===Number($('end').value);
+ canvas.hidden=!on;video.style.opacity=on?'0':'';if(!on)return;
+ const preview=$('preview'),dpr=window.devicePixelRatio||1,w=Math.round(preview.clientWidth*dpr),h=Math.round(preview.clientHeight*dpr);
+ if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}
+ const ctx=canvas.getContext('2d'),r=w/1080;ctx.fillStyle='#0b0b0b';ctx.fillRect(0,0,w,h);
+ if(video.readyState<2)return;
+ ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
+ const cam=p.cam;ctx.drawImage(video,cam.x,cam.y,cam.w,cam.h,0,0,w,p.top*r);
+ // Same numbers as layout.filter_graph: the game area is cropped at even offsets and scaled to the panel.
+ const g=p.game,i=Math.max(0,t)*g.fps,a=Math.min(g.left.length-1,Math.floor(i)),b=Math.min(g.left.length-1,a+1);
+ const left=g.left[a]+(g.left[b]-g.left[a])*Math.max(0,i-a),x=Math.min(Math.max(0,Math.round(left/2)*2),p.width-g.w);
+ ctx.drawImage(video,x,g.y,g.w,g.h,0,(p.top+p.seam)*r,w,p.bottom*r);
+}
+$('game_follow').addEventListener('change',()=>{saveCurrent();loadStackPath().catch(e=>say(e.message));});
+for(const key of ['start','end'])$(key).addEventListener('change',()=>{if($('framing').value==='stack')loadStackPath().catch(e=>say(e.message));});
+$('video').addEventListener('loadeddata',()=>paintTime());$('video').addEventListener('seeked',()=>paintTime());
+
+// Manual correction of the camera rectangle.
+let camDrag=null,camScale=1;
+function placeCamBox(box){const b=$('camBox');b.style.left=box.x/camScale+'px';b.style.top=box.y/camScale+'px';b.style.width=box.w/camScale+'px';b.style.height=box.h/camScale+'px';}
+function camBoxValue(){const b=$('camBox');return {x:Math.round(b.offsetLeft*camScale),y:Math.round(b.offsetTop*camScale),w:Math.round(b.offsetWidth*camScale),h:Math.round(b.offsetHeight*camScale)};}
+$('adjustCam').onclick=()=>{
+ if(!job)return;const img=$('camFrame');
+ img.onload=()=>{
+  const width=overlayInfo?.width||img.naturalWidth,height=overlayInfo?.height||img.naturalHeight;camScale=width/img.clientWidth;
+  placeCamBox(overlayInfo?.found?overlayInfo:{x:width*.7,y:height*.03,w:width*.27,h:height*.34});
+ };
+ img.src=`/api/jobs/${job.id}/frame?t=${Math.max(0,$('video').currentTime).toFixed(1)}`;$('camModal').classList.remove('hidden');
+};
+$('camBox').addEventListener('pointerdown',e=>{const b=$('camBox');camDrag={resize:e.target.id==='camHandle',x:e.clientX,y:e.clientY,left:b.offsetLeft,top:b.offsetTop,w:b.offsetWidth,h:b.offsetHeight};b.setPointerCapture(e.pointerId);e.preventDefault();});
+$('camBox').addEventListener('pointermove',e=>{
+ if(!camDrag)return;const b=$('camBox'),stage=$('camFrame'),dx=e.clientX-camDrag.x,dy=e.clientY-camDrag.y,W=stage.clientWidth,H=stage.clientHeight;
+ if(camDrag.resize){b.style.width=Math.max(24,Math.min(W-camDrag.left,camDrag.w+dx))+'px';b.style.height=Math.max(24,Math.min(H-camDrag.top,camDrag.h+dy))+'px';}
+ else{b.style.left=Math.max(0,Math.min(W-camDrag.w,camDrag.left+dx))+'px';b.style.top=Math.max(0,Math.min(H-camDrag.h,camDrag.top+dy))+'px';}
+});
+$('camBox').addEventListener('pointerup',()=>{camDrag=null;});
+$('camCancel').onclick=()=>$('camModal').classList.add('hidden');
+$('camSave').onclick=async()=>{
+ try{
+  overlayInfo=await(await request(`/api/jobs/${job.id}/overlay`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(camBoxValue())})).json();
+  $('camModal').classList.add('hidden');paintOverlayInfo(job,$('video').currentTime);
+  if($('framing').value!=='stack'){$('framing').value='stack';projectConfig.framing='stack';saveProjectConfig();if(Number($('caption_y').value)===81)$('caption_y').value=stackCaptionY();saveCurrent();}
+  stackKey='';await loadStackPath();
+ }catch(e){say(e.message);}
 };
