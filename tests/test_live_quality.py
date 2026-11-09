@@ -71,8 +71,9 @@ class TranscriptionTests(unittest.TestCase):
     s._ingest(Path('seg000000.ts'));s._ingest(Path('seg000001.ts'))
   starts=[w['start'] for seg in s.transcript for w in seg['words']]
   self.assertEqual(starts,sorted(set(starts)))                   # no duplicated words from the overlap
-  self.assertEqual(starts[:7],[0,1,2,3,4,5,6.5]);self.assertEqual(s.language,'es')
-  self.assertIsNone(calls[0]['language']);self.assertEqual(calls[1]['language'],'es')
+  self.assertEqual(starts[:7],[0,1,2,3,4,5,6.5])
+  self.assertEqual(s.language,'')                                   # 'auto' needs several agreeing detections (test_configure_first)
+  self.assertIsNone(calls[0]['language']);self.assertIsNone(calls[1]['language'])
   self.assertTrue(calls[1]['initial_prompt'])
 
  def test_missing_turbo_model_falls_back_to_small_on_cpu_without_downloading(self):
@@ -90,7 +91,7 @@ class TranscriptionTests(unittest.TestCase):
   import capabilities
   with tempfile.TemporaryDirectory() as tmp,patch('faster_whisper.WhisperModel',Fake),patch('faster_whisper.utils.download_model',return_value='x'),patch('gpu_ai.status',return_value={'gpu_loaded':True}),patch.object(capabilities,'transcription_plan',return_value=('cuda','ok')),patch.object(capabilities,'free_vram_mb',return_value=2600):
    s=live.LiveSession(Path(tmp),'https://kick.com/canal');s._whisper()
-  self.assertEqual(created,[('large-v3-turbo','cuda','int8_float16')])
+  self.assertEqual(created,[('large-v3-turbo','cuda','int8')])
 
  def test_defaults(self):
   self.assertEqual(live.DEFAULT_HEIGHT,1080);self.assertLessEqual(live.DETECT_EVERY_S,30);self.assertLessEqual(live.SEGMENT_S,6)
