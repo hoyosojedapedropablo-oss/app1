@@ -106,6 +106,20 @@ class Streamers:
             item['clips'] = max(item.get('clips', 0), clips)
         self.save(); return key
 
+    # --- preferences per streamer: the last «Configura tus clips» used for that channel ---------------------------------
+    PREF_KEYS = ('clip_settings', 'language', 'minimum', 'maximum', 'height', 'buffer_minutes')
+
+    def set_prefs(self, url, prefs):
+        key = self.follow(url)
+        with _lock: self.items[key]['prefs'] = {k: prefs[k] for k in self.PREF_KEYS if k in prefs}
+        self.save(); return key
+
+    def get_prefs(self, url):
+        platform, slug = slug_from_url(url)
+        if not platform: return None
+        item = self.items.get(f'{platform}:{slug}') or {}
+        return dict(name=item.get('name') or slug, **item['prefs']) if item.get('prefs') else None
+
     def sync_from(self, sessions, clip_counts):
         """Every streamer the user has clipped live becomes a followed streamer (counts from the library)."""
         for s in sessions:

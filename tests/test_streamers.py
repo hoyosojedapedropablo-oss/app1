@@ -75,5 +75,35 @@ class StreamerTests(unittest.TestCase):
         self.assertIn('kick:spreen', again.items)
 
 
+class PrefsAndStorageTests(unittest.TestCase):
+    def test_last_setup_per_streamer_is_remembered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s = streamers.Streamers(tmp, ydl_factory=FakeYDL)
+            self.assertIsNone(s.get_prefs('https://kick.com/spreen'))
+            s.set_prefs('https://kick.com/Spreen', dict(clip_settings=dict(framing='stack', subtitles=True), language='es', minimum=25, maximum=50, secret='x'))
+            p = streamers.Streamers(tmp, ydl_factory=FakeYDL).get_prefs('https://kick.com/spreen')
+            self.assertEqual((p['clip_settings']['framing'], p['language'], p['minimum']), ('stack', 'es', 25)); self.assertNotIn('secret', p)
+
+    def test_storage_cleanup_needs_confirmation_and_never_touches_a_recording(self):
+        import app as backend, live
+        from fastapi.testclient import TestClient
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(backend.LIVE, {}, clear=True):
+            sessions = {}
+            for name, status in (('parado', 'stopped'), ('grabando', 'live')):
+                se = live.LiveSession(Path(tmp) / 'live', f'https://kick.com/{name}'); se.status = status; se.channel = name
+                se.segments.mkdir(parents=True); se.clips.mkdir(parents=True)
+                (se.segments / 'seg000001.ts').write_bytes(b'x' * 300_000); (se.clips / 'm1.mp4').write_bytes(b'clip')
+                backend.LIVE[se.id] = se; sessions[name] = se
+            client = TestClient(backend.app)
+            listing = client.get('/api/storage').json()
+            self.assertEqual([b['channel'] for b in listing['buffers']], ['parado'])            # a recording session is not offered
+            ids = [s.id for s in sessions.values()]
+            self.assertEqual(client.post('/api/storage/clean', json=dict(sessions=ids)).status_code, 400)   # no confirmation
+            r = client.post('/api/storage/clean', json=dict(sessions=ids, confirm=True)).json()
+            self.assertEqual(r['sessions'], [sessions['parado'].id])
+            self.assertFalse(sessions['parado'].segments.exists()); self.assertTrue(sessions['grabando'].segments.exists())
+            self.assertTrue((sessions['parado'].clips / 'm1.mp4').exists())                     # moments are never removed
+
+
 if __name__ == '__main__':
     unittest.main()

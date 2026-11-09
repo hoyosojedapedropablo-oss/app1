@@ -220,6 +220,15 @@ input,select,textarea{font-family:var(--ui)!important}
 .player-box{width:min(1100px,100%)!important;border-color:var(--line)!important}
 .player-box iframe{width:100%;aspect-ratio:16/9;border:0;border-radius:12px;background:#000}
 
+/* --- Espacio en disco y preferencias ------------------------------------------------------------------------------- */
+.storage-totals{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:10px}
+.storage-totals div{background:var(--panel2);border:1px solid var(--line2);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:2px}
+.storage-totals b{font:700 22px var(--head)}.storage-totals span{font-size:12px;color:var(--dim)}
+.storage-row{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:10px;background:var(--panel2);margin-bottom:6px;cursor:pointer}
+.storage-row input{width:18px;height:18px;accent-color:var(--green);margin:0}
+.prefs-note{background:var(--green-tint);border:1px solid var(--green-line);color:#e2ffad;border-radius:10px;padding:10px 12px;font-size:13px}
+@container (max-width:700px){.storage-totals{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
 /* --- Configuración: the performance panel lives inside the page, not as a dropdown --------------------------------- */
 #settingsHost .perf-panel{position:static;width:auto;max-width:none;box-shadow:none;border:0;background:none;padding:0;margin:0;display:block}
 #settingsHost .perf-panel h3{font-size:20px;margin:0 0 8px}
