@@ -100,9 +100,52 @@ function previewBox(img, videoUrl, start, length, ratio) {
 const clipVideoUrl = (c) => `/api/library/${encodeURIComponent(c.id)}/video`;
 const clipStart = (c) => c.origin === 'live' ? 3 : c.start;
 
+// The clip-like thumbnail is made in the background: until it is ready the server answers with a plain 16:9 frame,
+// so a landscape image means «ask again in a few seconds».
+function retryThumb(img, url) {
+  let tries = 0;
+  img.addEventListener('load', () => { if (img.naturalWidth > img.naturalHeight && tries < 8) { tries++; setTimeout(() => { img.src = `${url}${url.includes('?') ? '&' : '?'}r=${Date.now()}`; }, 2500 + tries * 1000); } });
+}
+// Big preview on hover: the whole clip as it will be published (format and title), muted, without opening the editor.
+let hoverTimer = null, hoverFor = null;
+function showBigPreview(c, card) {
+  hideBigPreview(); hoverFor = c.id;
+  const video = h('video', { muted: true, playsinline: true, loop: true, autoplay: true, preload: 'auto' }); video.muted = true;
+  const wait = h('div', { class: 'bp-wait' }, h('span', { class: 'bars', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'), h('i')), h('span', { text: 'Preparando la vista previa…' }));
+  const panel = h('div', { id: 'bigPreview', class: 'big-preview', role: 'dialog', 'aria-label': `Vista previa de ${c.title}` },
+    h('div', { class: 'bp-frame' }, h('img', { src: c.thumb_url, alt: '' }), video, wait),
+    h('div', { class: 'bp-info' }, h('b', { text: c.title }), h('span', { class: 'muted', text: `${c.channel} · ${fmtDur(c.duration || 0)}` }),
+      h('button', { class: 'btn ghost', type: 'button', text: '🔊 Con sonido', onclick: (e) => { e.stopPropagation(); video.muted = !video.muted; e.target.textContent = video.muted ? '🔊 Con sonido' : '🔇 Silenciar'; } })));
+  panel.addEventListener('mouseleave', () => hideBigPreview());
+  document.body.append(panel);
+  const r = card.getBoundingClientRect(), w = panel.offsetWidth, hgt = panel.offsetHeight;
+  const left = r.right + 16 + w < innerWidth ? r.right + 16 : Math.max(16, r.left - 16 - w);
+  panel.style.left = left + 'px'; panel.style.top = Math.max(16, Math.min(innerHeight - hgt - 16, r.top + r.height / 2 - hgt / 2)) + 'px';
+  video.addEventListener('canplay', () => { wait.remove(); panel.classList.add('ready'); video.play().catch(() => {}); });
+  video.addEventListener('error', () => { wait.querySelector('span:last-child').textContent = 'No se pudo preparar la vista previa'; });
+  video.src = `/api/library/${encodeURIComponent(c.id)}/preview.mp4`;
+}
+function hideBigPreview() { clearTimeout(hoverTimer); hoverFor = null; const p = $('bigPreview'); if (p) { p.querySelector('video')?.pause(); p.remove(); } }
+async function downloadClip(c, button) {
+  button.disabled = true; const label = button.textContent; button.textContent = '…';
+  toast('Preparando la descarga', `«${c.title}» en alta calidad (1080 × 1920). Puede tardar unos segundos.`);
+  try {
+    const r = await request(`/api/library/${encodeURIComponent(c.id)}/export`, jsonOptions({ resolution: 1080 }));
+    const blob = await r.blob(), url = URL.createObjectURL(blob), a = document.createElement('a');
+    const name = decodeURIComponent((r.headers.get('content-disposition') || '').match(/filename\*?=(?:utf-8'')?"?([^";]+)/i)?.[1] || 'clip.mp4');
+    a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 10000);
+    toast('Clip descargado', name);
+  } catch (e) { toast('No se pudo descargar', e.message); }
+  finally { button.disabled = false; button.textContent = label; }
+}
 function clipCard(c, onChange) {
-  const box = previewBox(c.thumb_url, c.missing ? null : clipVideoUrl(c), clipStart(c), c.duration);
-  box.addEventListener('click', () => openLibraryClip(c));
+  const box = previewBox(c.thumb_url, null, clipStart(c), c.duration);
+  const thumbImg = box.querySelector('img'); if (thumbImg) retryThumb(thumbImg, c.thumb_url);
+  box.addEventListener('click', () => { hideBigPreview(); openLibraryClip(c); });
+  if (!c.missing) {
+    box.addEventListener('mouseenter', () => { clearTimeout(hoverTimer); hoverTimer = setTimeout(() => showBigPreview(c, box), 350); });
+    box.addEventListener('mouseleave', (e) => { clearTimeout(hoverTimer); if (!e.relatedTarget?.closest?.('#bigPreview')) hideBigPreview(); });
+  }
   const star = h('button', { class: 'star', type: 'button', 'aria-label': c.favorite ? 'Quitar de favoritos' : 'Añadir a favoritos', 'aria-pressed': String(c.favorite),
     onclick: async (e) => { e.stopPropagation(); await api(`/api/library/${encodeURIComponent(c.id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ favorite: !c.favorite }) }); c.favorite = !c.favorite; onChange?.(); } });
   const s = svg(STAR, 18); s.setAttribute('stroke', '#ffd27a'); s.setAttribute('fill', c.favorite ? '#ffd27a' : 'none'); star.append(s); box.append(star);
@@ -112,7 +155,8 @@ function clipCard(c, onChange) {
       await api(`/api/library/${encodeURIComponent(c.id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tags: [...(c.tags || []), t] }) }); c.tags = [...(c.tags || []), t.trim()]; onChange?.(); } }));
   const del = h('button', { class: 'btn ghost', type: 'button', 'aria-label': 'Eliminar clip', onclick: () => askRemove(c, onChange) }, svg(TRASH, 16));
   return h('article', { class: 'clipcard' }, box, h('span', { class: 't', text: c.title }), h('span', { class: 'm', text: [fmtDate(c.created), c.score ? `relevancia ${Math.round(c.score)}` : ''].filter(Boolean).join(' · ') }), tags,
-    h('div', { class: 'acts' }, h('button', { class: 'btn ghost', type: 'button', style: 'flex:1', text: 'Editar', onclick: () => openLibraryClip(c) }), del));
+    h('div', { class: 'acts' }, h('button', { class: 'btn ghost', type: 'button', style: 'flex:1', text: 'Editar', onclick: () => openLibraryClip(c) }),
+      c.missing ? null : h('button', { class: 'btn primary', type: 'button', title: 'Descargar en alta calidad (1080 × 1920)', 'aria-label': 'Descargar en alta calidad', text: '↓', onclick: (e) => downloadClip(c, e.currentTarget) }), del));
 }
 
 // --- delete with a clear choice -----------------------------------------------------------------------------------
@@ -213,6 +257,7 @@ async function renderLibrary() {
   }));
   const groups = {};
   for (const c of lib.items) (groups[c.channel] ||= []).push(c);
+  if (!libState.removed) warmPreviews(Object.values(groups).flatMap((items) => items.slice(0, 6)));
   put(root, 
     h('div', { class: 'page-title' }, h('h1', { text: libState.removed ? 'Papelera' : 'Biblioteca de clips' }), h('span', { class: 'sub', text: libState.removed ? 'Clips quitados de la biblioteca. Puedes recuperarlos.' : `${lib.total} clips de directos y videos · guardados en tu PC, también después de cerrar la app` }), h('label', { class: 'search' }, search)),
     libState.removed ? null : people,
@@ -232,6 +277,10 @@ async function renderLibrary() {
         items.length > libLimit(name, items) ? h('div', { class: 'more-row' }, h('button', { class: 'btn ghost', type: 'button', text: `Ver más · ${items.length - libLimit(name, items)} clips más`, onclick: () => { libState.expanded[name] = libLimit(name, items) + 18; renderLibrary(); } }))
           : libState.expanded[name] ? h('div', { class: 'more-row' }, h('button', { class: 'btn ghost', type: 'button', text: 'Ver menos', onclick: () => { delete libState.expanded[name]; renderLibrary(); } })) : null))
   );
+}
+function warmPreviews(items) {
+  const ids = items.filter((c) => !c.missing).map((c) => c.id).slice(0, 24);
+  if (ids.length) api('/api/library/previews/warm', jsonOptions({ ids })).catch(() => {});
 }
 function restoreCard(c) {
   return h('article', { class: 'clipcard' }, h('div', { class: 'hv', style: 'aspect-ratio:9/16;border-radius:12px' }, h('img', { src: c.thumb_url, alt: '' })), h('span', { class: 't', text: c.title }),
@@ -506,8 +555,26 @@ function paintEditorHeader() {
   $('exportWhere').textContent = `Destino: exportados › ${channel}`;
 }
 const baseChoose = choose;
-window.choose = (c) => { buildEditorLayout(); baseChoose(c); if (overlayInfo && !overlayInfo.found) dropStack(); cueSignature = ''; paintEditorHeader(); paintTimeline(); };
+window.choose = (c) => { buildEditorLayout(); baseChoose(c); if (overlayInfo && !overlayInfo.found) dropStack(); placeTitle(); cueSignature = ''; paintEditorHeader(); paintTimeline(); };
 choose = window.choose;
+// Title position by format: on the camera/game line (Cámara + juego), on the line between the top black band and the
+// video (zoom), near the top (full screen). Only a position that is still a default moves; one set by hand stays.
+function titleDefault(framing, zoom) {
+  if (framing === 'stack') return seamY();
+  if (framing === 'zoom') { const band = Math.round(1920 * (ZOOM[zoom] || ZOOM.balanced) / 2) * 2; return Math.round((1920 - band) / 2 / 19.2 * 10) / 10; }
+  return 12;
+}
+function isAutoTitle(v, framing) {
+  v = Number(v);
+  return v === 12 || (framing !== 'stack' && v >= 40 && v <= 50.3) || Object.keys(ZOOM).some((z) => Math.abs(v - titleDefault('zoom', z)) < .6) || (framing === 'stack' && Math.abs(v - seamY()) < 1.5);
+}
+function placeTitle() {
+  const f = $('framing').value;
+  if (!selected || !isAutoTitle($('title_y').value, f)) return;
+  const t = titleDefault(f, $('zoom').value);
+  if (Math.abs(Number($('title_y').value) - t) >= .5) { $('title_y').value = t; saveCurrent(); paint(); }
+}
+for (const id of ['framing', 'zoom']) $(id).addEventListener('change', () => setTimeout(placeTitle, 0));
 const basePaintTime = paintTime;
 window.paintTime = () => { basePaintTime(); try { paintTimeline(); } catch {} };
 paintTime = window.paintTime;

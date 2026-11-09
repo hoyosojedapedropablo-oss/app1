@@ -638,4 +638,5 @@ function dropStack(){
  const fallback=projectConfig.framing==='stack'?'zoom':projectConfig.framing;
  for(const [id,e] of edits)if(e.framing==='stack')edits.set(id,{...e,framing:fallback});
  if($('framing').value==='stack'){$('framing').value=fallback;saveCurrent();paint();}
+ try{placeTitle();}catch{}
 }
