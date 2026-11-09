@@ -146,6 +146,60 @@ class Streamers:
             out = [dict(v, key=k, avatar=f'/api/streamers/{k}/avatar' if self.avatar_path(k) else '') for k, v in self.items.items()]
         return sorted(out, key=lambda v: (not v.get('live'), -v.get('clips', 0), v.get('name', '').lower()))
 
+    def _json(self, url):
+        import yt_dlp
+        with self._ydl() as ydl:
+            return json.loads(ydl.urlopen(yt_dlp.networking.Request(url, headers={'Accept': 'application/json'})).read())
+
+    def search_scope(self, q, scope):
+        """Search one source, so the page can show results as each one answers:
+        'link' (a pasted URL), 'local' (your streamers), 'kick' (Kick's public search), 'youtube' (channel search)."""
+        import urllib.parse
+        q = (q or '').strip()
+        if not q: return self.listing() if scope == 'local' else []
+        known = {v['key'] for v in self.listing()}
+        if scope == 'link':
+            platform, slug = slug_from_url(q)
+            if not platform: return []
+            info = self.lookup(platform, slug); key = f'{platform}:{slug}'
+            return [dict(info, key=key, avatar=info.get('photo') or '', clips=self.items.get(key, {}).get('clips', 0), new=key not in known)]
+        if scope == 'local':
+            low = q.lower().lstrip('@')
+            return [v for v in self.listing() if low in v.get('name', '').lower() or low in v.get('slug', '').lower()]
+        if scope == 'kick':
+            data = self._json('https://kick.com/api/search?searched_word=' + urllib.parse.quote(q[:40]))
+            out = []
+            for c in (data.get('channels') or [])[:8]:
+                user = c.get('user') or {}; slug = (c.get('slug') or '').lower()
+                if not slug: continue
+                key = f'kick:{slug}'
+                out.append(dict(key=key, platform='kick', slug=slug, url=url_for('kick', slug), name=user.get('username') or slug,
+                                avatar=user.get('profilePic') or user.get('profile_pic') or '', live=bool(c.get('isLive') or c.get('is_live')),
+                                followers=c.get('followersCount') or c.get('followers_count'), clips=self.items.get(key, {}).get('clips', 0), new=key not in known,
+                                verified=bool(c.get('verified'))))
+            # Details (title, image, viewers) for the first live results only: one request each.
+            for r in [r for r in out if r['live']][:3]:
+                try:
+                    info = self.lookup('kick', r['slug']); r.update(title=info.get('title'), thumb=info.get('thumb'), viewers=info.get('viewers'))
+                except Exception: pass
+            return sorted(out, key=lambda r: (not r['live'], -(int(r.get('followers') or 0))))
+        if scope == 'youtube':
+            url = 'https://www.youtube.com/results?search_query=' + urllib.parse.quote(q[:60]) + '&sp=EgIQAg%253D%253D'   # channels only
+            with self._ydl() as ydl:
+                ydl.params['playlistend'] = 6                      # measured: 1.4 s for six channels
+                info = ydl.extract_info(url, download=False) or {}
+            out = []
+            for e in list(info.get('entries') or [])[:6]:
+                handle = e.get('uploader_id') or ''
+                if not handle.startswith('@'): continue
+                slug = handle.lower(); key = f'youtube:{slug}'
+                thumbs = e.get('thumbnails') or []
+                out.append(dict(key=key, platform='youtube', slug=slug, url=url_for('youtube', slug), name=e.get('channel') or e.get('title') or slug,
+                                avatar=('https:' + thumbs[-1]['url']) if thumbs and thumbs[-1].get('url', '').startswith('//') else (thumbs[-1].get('url') if thumbs else ''),
+                                live=False, followers=e.get('channel_follower_count'), clips=self.items.get(key, {}).get('clips', 0), new=key not in known))
+            return out
+        return []
+
     def search(self, q):
         """Known streamers matching the name, plus an exact public lookup of the name on Kick (and @name on YouTube)."""
         q = (q or '').strip()

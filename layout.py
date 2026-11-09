@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 
 VERSION = 1
-DETECTOR_VERSION = 2          # 2: steady/busy seam search (wide cameras with a static room, Spreen)
+DETECTOR_VERSION = 3          # 2: steady/busy seam search (Spreen) · 3: needs real fixed edges (one-camera IRL streams)
 CANVAS_W, CANVAS_H = 1080, 1920
 TOP_MIN, TOP_MAX = 768, 960        # camera panel: 40-50 % of the height
 SEAM = 6                           # dark line between camera and game (px)
@@ -161,6 +161,14 @@ def detect_overlay(source, duration=None, samples=40, progress=lambda v: None, s
     w, h = right - left + 1, bottom - top + 1
     if w * h > .45 * sw * sh or not .5 <= w / max(1, h) <= 2.6:
         return dict(none, presence=round(presence, 2))
+    # A real camera inset has fixed edges: borders, or the seam with the game. A one-camera stream (IRL, a webcam
+    # filling the screen) has none, because the camera moves. Measured: NaimDarrechi walking in a mall gave a 648x1080
+    # "box" from the top to the bottom of the frame with no line at all; TheDonato, Spreen and the tests have 2-4.
+    line = lambda profile, i, size: 2 < i < size - 3 and profile[i] >= .3
+    lines = sum((line(col, left, sw), line(col, right, sw), line(row, top, sh), line(row, bottom, sh)))
+    full_height = top <= 2 and bottom >= sh - 3
+    if lines < 2 or (full_height and lines < 3):
+        return dict(none, kind='single', presence=round(presence, 2))
     even = lambda v: int(round(v * ratio / 2)) * 2
     box = dict(x=even(left), y=even(top), w=even(w), h=even(h))
     box['w'] = min(box['w'], W - box['x']); box['h'] = min(box['h'], H - box['y'])

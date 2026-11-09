@@ -146,6 +146,8 @@ input,select,textarea{font-family:var(--ui)!important}
 .live-frame{position:relative;border-radius:12px;overflow:hidden;aspect-ratio:16/9;background:var(--panel2)}
 .live-frame img{width:100%;height:100%;object-fit:cover;display:block}
 .live-frame img:not([src]){visibility:hidden}
+.live-frame .live-vid{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .2s}
+.live-frame .live-vid.on{opacity:1}
 .live-frame .scan{position:absolute;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,var(--green),transparent);opacity:.6;animation:scan 2.6s linear infinite}
 @keyframes scan{from{top:0}to{top:100%}}
 .live-chips{position:absolute;left:14px;top:14px;display:flex;gap:8px;flex-wrap:wrap}
