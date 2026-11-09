@@ -190,7 +190,9 @@ function projectRow(j) {
 }
 
 // --- Biblioteca -----------------------------------------------------------------------------------------------------
-const libState = { q: '', origin: '', status: '', platform: '', channel: '', favorite: false, removed: false, sort: 'recent', dur: '', score: '' };
+const libState = { q: '', origin: '', status: '', platform: '', channel: '', favorite: false, removed: false, sort: 'recent', dur: '', score: '', expanded: {} };
+// One row per streamer at first (more when a single streamer is chosen); «Ver más» opens 18 more each time.
+const libLimit = (name, items) => libState.expanded[name] || (libState.channel ? 12 : 6);
 let libTimer = null;
 async function renderLibrary() {
   const root = $('libraryView');
@@ -226,7 +228,9 @@ async function renderLibrary() {
     lib.error ? h('div', { class: 'empty', text: lib.error }) : !lib.items.length ? h('div', { class: 'empty', text: libState.removed ? 'La papelera está vacía.' : 'No hay clips con estos filtros.' }) :
       Object.entries(groups).map(([name, items]) => h('section', { class: 'card lib-group' },
         h('div', { class: 'head' }, h('img', { src: streamerFor(name)?.avatar || items[0].thumb_url, alt: '', style: 'width:46px;height:46px;border-radius:50%;object-fit:cover;box-shadow:0 0 0 2px var(--green-line)' }), h('span', { style: 'display:flex;flex-direction:column' }, h('b', { text: name }), h('span', { class: 'muted', text: `${items.length} clips` })), platformLogo(items[0].platform)),
-        h('div', { class: 'grid lib-grid' }, items.map((c) => libState.removed ? restoreCard(c) : clipCard(c, renderLibrary)))))
+        h('div', { class: 'grid lib-grid' }, items.slice(0, libLimit(name, items)).map((c) => libState.removed ? restoreCard(c) : clipCard(c, renderLibrary))),
+        items.length > libLimit(name, items) ? h('div', { class: 'more-row' }, h('button', { class: 'btn ghost', type: 'button', text: `Ver más · ${items.length - libLimit(name, items)} clips más`, onclick: () => { libState.expanded[name] = libLimit(name, items) + 18; renderLibrary(); } }))
+          : libState.expanded[name] ? h('div', { class: 'more-row' }, h('button', { class: 'btn ghost', type: 'button', text: 'Ver menos', onclick: () => { delete libState.expanded[name]; renderLibrary(); } })) : null))
   );
 }
 function restoreCard(c) {
@@ -585,7 +589,7 @@ function setupStreamerSearch() {
             h('span', { style: 'display:flex;align-items:center;gap:10px;flex-wrap:wrap' }, h('b', { text: s.name, style: 'font:600 17px var(--head)' }),
               h('span', { class: 'chip ' + (s.live ? 'live' : 'glass'), text: s.live ? '● EN VIVO' : 'Desconectado' }), platformLogo(s.platform)),
             h('span', { class: 'muted', style: 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis', text: s.live ? s.title || 'En directo' : s.clips ? `${s.clips} clips tuyos` : (s.followers ? `${Number(s.followers).toLocaleString('es')} seguidores` : '') })),
-          s.thumb ? h('img', { src: s.thumb, alt: '', referrerpolicy: 'no-referrer', style: 'width:120px;height:68px;object-fit:cover;border-radius:8px;flex:none' }) : null,
+          s.thumb ? h('img', { src: s.thumb, alt: '', referrerpolicy: 'no-referrer', style: 'width:120px;height:68px;object-fit:cover;border-radius:8px;flex:none', onerror: (e) => e.target.remove() }) : null,
           h('button', { class: 'btn ' + (s.live ? 'primary' : 'ghost'), type: 'button', text: s.live ? 'Elegir directo' : 'Seguir',
             onclick: async () => { input.value = s.url; box.hidden = true; if (s.new) await api('/api/streamers/follow', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: s.url }) }).catch(() => {});
               toast(s.live ? `${s.name} elegido` : `Sigues a ${s.name}`, s.live ? 'Pulsa «Iniciar clipping en vivo» para empezar.' : 'Te avisaremos en Inicio cuando esté en directo.'); } }))));

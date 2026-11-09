@@ -56,7 +56,8 @@ class Streamers:
                 user = data.get('user') or {}; ls = data.get('livestream') or {}
                 return dict(platform='kick', slug=slug, url=url_for('kick', slug), name=user.get('username') or slug,
                             photo=user.get('profile_pic') or '', live=bool(ls), title=(ls.get('session_title') or '').strip(),
-                            viewers=ls.get('viewer_count'), thumb=(ls.get('thumbnail') or {}).get('url') or '', followers=data.get('followers_count'))
+                            viewers=ls.get('viewer_count'), thumb=(ls.get('thumbnail') or {}).get('url') or '', followers=data.get('followers_count'),
+                            playback=data.get('playback_url') or '' if ls else '')
             info = {}
             try: info = ydl.extract_info(f'https://www.youtube.com/{slug}', download=False, process=False) or {}
             except Exception: info = {}
@@ -77,6 +78,7 @@ class Streamers:
             info = self.lookup(item['platform'], item['slug'])
             item.update(info, checked=time.time(), error='')
             self._avatar(key, info.get('photo'))
+            self._live_still(key, item)
         except Exception as e:
             item.update(checked=time.time(), error=type(e).__name__, live=False)
         self.save()
@@ -91,6 +93,22 @@ class Streamers:
                 body = ydl.urlopen(url).read(2_000_000)
             if body[:3] in (b'\xff\xd8\xff', b'\x89PN', b'RIF', b'GIF') or body[:4] == b'\x89PNG': target.write_bytes(body)
         except Exception: pass
+
+    def _live_still(self, key, item):
+        """Kick refuses its thumbnail URLs outside its site (403), so take one frame of the public stream itself (the
+        same stream ClipStudio records when clipping) and serve it locally. One frame every few minutes at most."""
+        target = self.avatars / f'{key.replace(":", "_")}-live.jpg'
+        if not item.get('live') or not item.get('playback'):
+            target.unlink(missing_ok=True); return
+        import subprocess
+        try:
+            subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', item['playback'], '-frames:v', '1', '-vf', 'scale=640:-2', '-q:v', '5', str(target)],
+                           capture_output=True, timeout=25)
+        except Exception: pass
+
+    def live_still(self, key):
+        p = self.avatars / f'{key.replace(":", "_")}-live.jpg'
+        return p if p.exists() else None
 
     def avatar_path(self, key):
         p = self.avatars / f'{key.replace(":", "_")}.jpg'
@@ -143,7 +161,13 @@ class Streamers:
 
     def listing(self):
         with _lock:
-            out = [dict(v, key=k, avatar=f'/api/streamers/{k}/avatar' if self.avatar_path(k) else '') for k, v in self.items.items()]
+            out = []
+            for k, v in self.items.items():
+                row = {x: y for x, y in v.items() if x != 'playback'}          # the stream address stays on the server
+                row.update(key=k, avatar=f'/api/streamers/{k}/avatar' if self.avatar_path(k) else '')
+                still = self.live_still(k)
+                if v.get('platform') == 'kick': row['thumb'] = f'/api/streamers/{k}/live.jpg?t={int(still.stat().st_mtime)}' if still and v.get('live') else ''
+                out.append(row)
         return sorted(out, key=lambda v: (not v.get('live'), -v.get('clips', 0), v.get('name', '').lower()))
 
     def _json(self, url):
@@ -162,7 +186,9 @@ class Streamers:
             platform, slug = slug_from_url(q)
             if not platform: return []
             info = self.lookup(platform, slug); key = f'{platform}:{slug}'
-            return [dict(info, key=key, avatar=info.get('photo') or '', clips=self.items.get(key, {}).get('clips', 0), new=key not in known)]
+            row = {k: v for k, v in info.items() if k != 'playback'}
+            if platform == 'kick' and row.get('live'): row['thumb'] = f'/api/streamers/{key}/live.jpg'
+            return [dict(row, key=key, avatar=info.get('photo') or '', clips=self.items.get(key, {}).get('clips', 0), new=key not in known)]
         if scope == 'local':
             low = q.lower().lstrip('@')
             return [v for v in self.listing() if low in v.get('name', '').lower() or low in v.get('slug', '').lower()]
@@ -180,7 +206,7 @@ class Streamers:
             # Details (title, image, viewers) for the first live results only: one request each.
             for r in [r for r in out if r['live']][:3]:
                 try:
-                    info = self.lookup('kick', r['slug']); r.update(title=info.get('title'), thumb=info.get('thumb'), viewers=info.get('viewers'))
+                    info = self.lookup('kick', r['slug']); r.update(title=info.get('title'), thumb=f"/api/streamers/{r['key']}/live.jpg", viewers=info.get('viewers'))
                 except Exception: pass
             return sorted(out, key=lambda r: (not r['live'], -(int(r.get('followers') or 0))))
         if scope == 'youtube':

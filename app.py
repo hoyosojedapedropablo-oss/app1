@@ -1098,7 +1098,7 @@ def library_sync():
 def library_startup():
  library_sync();LIBRARY.empty_trash()
  for item in LIBRARY.list(limit=60):           # warm the latest thumbnails, one at a time
-  try:LIBRARY.make_thumb(item['id'])
+  try:clip_thumb(item['id'])
   except Exception:continue
 
 threading.Thread(target=library_startup,daemon=True).start()
@@ -1142,11 +1142,13 @@ def library_restore(cid:str):
 
 @app.get('/api/library/{cid}/thumb')
 def library_thumb(cid:str):
- path=LIBRARY.thumb_path(cid)
- if not path.exists() and LIBRARY.get(cid) is None:library_sync()
- if not path.exists():
+ if LIBRARY.get(cid) is None:library_sync()
+ try:path=clip_thumb(cid)
+ except Exception as e:
+  logging.getLogger('uvicorn.error').warning('Clip thumbnail failed (%s): %s',cid,e);path=None
+ if not path:
   with _thumb_gate:
-   try:path=LIBRARY.make_thumb(cid)
+   try:path=LIBRARY.make_thumb(cid)          # plain frame as a fallback
    except Exception:path=None
  if not path or not Path(path).exists():raise HTTPException(404,'Sin miniatura.')
  return FileResponse(path,media_type='image/jpeg',headers={'Cache-Control':'max-age=86400'})
@@ -1306,3 +1308,79 @@ def live_segment(sid:str,index:int):
   cached=r.stdout;_segments_mp4[(sid,index)]=cached
   for key in sorted(k for k in _segments_mp4 if k[0]==sid)[:-6]:_segments_mp4.pop(key,None)   # keep the last 6
  return Response(cached,media_type='video/mp4',headers={'Cache-Control':'no-store'})
+
+
+@app.get('/api/streamers/{key}/live.jpg')
+def streamer_live_still(key:str):
+ """Current image of a Kick stream, taken from its public stream (Kick refuses its own thumbnails outside its site)."""
+ platform,_,slug=key.partition(':')
+ if platform!='kick' or not re.fullmatch(r'[\w-]{1,40}',slug):raise HTTPException(404)
+ path=STREAMERS.live_still(key)
+ if not path or time.time()-path.stat().st_mtime>180:
+  try:
+   info=STREAMERS.lookup('kick',slug.lower())
+   if info.get('live'):STREAMERS._live_still(key,info)
+  except Exception:pass
+  path=STREAMERS.live_still(key)
+ if not path:raise HTTPException(404,'Sin imagen del directo.')
+ return FileResponse(path,media_type='image/jpeg',headers={'Cache-Control':'no-store'})
+
+
+# --- Library thumbnails that look like the finished clip: its format (Cámara + juego, zoom…) and its title -------
+def thumb_spec(r):
+ """Source, time, format, overlay and title of a library clip, from its saved edits or the project's settings."""
+ import layout
+ cid=r['id'];edits={};overlay=None
+ if r['project_id'] and r['project_id'] in JOBS:
+  job=JOBS[r['project_id']];settings=clip_settings(job)
+  ref=job['clips'][0]['id'] if job.get('live') and job.get('clips') else r['clip_ref']
+  edits=(job.get('clip_edits') or {}).get(ref) or {}
+  overlay=read_overlay(job['id']);source=DATA/job['id']/'source'
+  clip=next((c for c in job.get('clips',[]) if c['id']==ref),None)
+  start=float(edits.get('start',clip['start'] if clip else r['start'] or 0));end=float(edits.get('end',clip['end'] if clip else r['end'] or start+10))
+ else:
+  if r['origin']!='live' or not r['file']:return None
+  session=LIVE.get(r['session_id']);settings={**CLIP_DEFAULTS,**((session.clip_settings if session else None) or {})}
+  prepared=Path(r['file']).with_suffix('.layout.json')
+  if prepared.exists():
+   try:overlay=json.loads(prepared.read_text(encoding='utf-8')).get('overlay')
+   except (OSError,ValueError):overlay=None
+  source=Path(r['file']);start=3.0;end=3.0+float(r['duration'] or 10)
+ if not Path(source).exists():return None
+ found=bool(overlay and overlay.get('found'))
+ framing=edits.get('framing') or ('stack' if found and (settings.get('framing')=='stack' or settings.get('auto_stack')) else ('zoom' if settings.get('framing')=='stack' else settings.get('framing','zoom')))
+ if framing=='stack' and not found:framing='zoom'
+ return dict(source=source,t=start+max(.5,(end-start)*.35),framing=framing,zoom=edits.get('zoom',settings.get('zoom','balanced')),overlay=overlay if framing=='stack' else None,
+             title=edits.get('title') or r['user_title'] or r['title'] or '',edits=edits,corners=edits.get('title_corners',settings.get('title_corners','rounded')))
+
+def clip_thumb(cid):
+ """Render (once) a 9:16 still of the clip as it will be exported, with its title; cached by what it shows."""
+ import layout,tracking
+ r=LIBRARY.get(cid)
+ if r is None:return None
+ spec=thumb_spec(r)
+ if spec is None:return None
+ ov=spec['overlay'];panels=layout.panels(ov) if ov else None
+ title_y=spec['edits'].get('title_y') or (round((panels['top']+layout.SEAM/2)/19.2,1) if panels else 12)
+ sig=hashlib.sha256(json.dumps([3,spec['title'],spec['framing'],spec['zoom'],title_y,spec['corners'],ov and [ov[k] for k in 'xywh'],round(spec['t'],1)]).encode()).hexdigest()[:10]
+ target=DATA/'thumbs'/f"{cid.replace(':','_')}-{sig}.jpg"
+ if target.exists():return target
+ target.parent.mkdir(exist_ok=True)
+ with _thumb_gate, tempfile.TemporaryDirectory() as tmp:
+  if ov:geometry=layout.filter_graph(dict(overlay=ov,panels=panels,motion=dict(xs=[ov['width']/2])),Path(tmp)/'t.cmd',.04,25,follow=False)
+  else:geometry=tracking.static_filter(spec['framing'],spec['zoom'],50,50)
+  args=['ffmpeg','-v','error','-y','-ss',f"{spec['t']:.2f}",'-i',str(spec['source'])]
+  graph=f'[0:v]{geometry},setsar=1[b]';last='b'
+  try:
+   style={k:v for k,v in spec['edits'].items() if k in Export.model_fields and k not in ('start','end','title','subtitles','captions','clip_id')}
+   image=render_title(Export(**{**style,'start':0,'end':1,'title':spec['title'][:96],'subtitles':'','title_corners':spec['corners']}))
+  except Exception:image=None
+  if image is not None:
+   image.save(Path(tmp)/'title.png');args+=['-i',str(Path(tmp)/'title.png')]
+   graph+=f";[b][1:v]overlay=x=W*{float(spec['edits'].get('title_x',50))/100}-w/2:y=H*{float(title_y)/100}-h/2[t]";last='t'
+  graph+=f';[{last}]scale=360:640:flags=lanczos[o]'
+  flags=0x00004000 if os.name=='nt' else 0      # below normal priority: never slows an analysis down
+  subprocess.run(args+['-frames:v','1','-filter_complex',graph,'-map','[o]','-q:v','4',str(target)],capture_output=True,timeout=60,cwd=tmp,creationflags=flags)
+ for old in target.parent.glob(f"{cid.replace(':','_')}-*.jpg"):
+  if old!=target:old.unlink(missing_ok=True)      # only previous versions of this same thumbnail
+ return target if target.exists() else None
