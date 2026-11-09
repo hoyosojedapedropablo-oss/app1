@@ -75,6 +75,26 @@ class StreamerTests(unittest.TestCase):
         self.assertIn('kick:spreen', again.items)
 
 
+class FeaturedTests(unittest.TestCase):
+    def test_featured_kick_streamers_appear_only_while_live_and_not_twice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s = streamers.Streamers(tmp, ydl_factory=FakeYDL); FakeIE.calls = []
+            s.check_featured([('spreen', 'es'), ('westcol', 'es')])          # westcol does not answer in the fake API
+            rows = s.featured_listing()
+            self.assertEqual([r['name'] for r in rows], ['Spreen'])
+            self.assertEqual(rows[0]['lang'], 'es'); self.assertNotIn('playback', rows[0])
+            self.assertTrue(rows[0]['avatar'])
+            s.check_featured([('spreen', 'es')]); self.assertEqual(FakeIE.calls, ['spreen', 'westcol'])   # cached 5 minutes
+            self.assertEqual(len(streamers.Streamers(tmp, ydl_factory=FakeYDL).featured_listing()), 1)      # survives a restart
+            s.follow('https://kick.com/spreen')                                # already one of the user's: shown once, above
+            self.assertEqual(s.featured_listing(), [])
+
+    def test_the_featured_list_is_real_kick_channels_spanish_first(self):
+        slugs = [x for x, _ in streamers.FEATURED_KICK]
+        self.assertEqual(len(slugs), len(set(slugs)))
+        self.assertEqual(streamers.FEATURED_KICK[0], ('westcol', 'es'))
+
+
 class SearchScopeTests(unittest.TestCase):
     def test_kick_suggestions_link_and_local_scopes(self):
         with tempfile.TemporaryDirectory() as tmp:

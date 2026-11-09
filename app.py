@@ -1208,6 +1208,8 @@ def streamers_loop():
  while True:
   try:streamers_sync();STREAMERS.check_all()
   except Exception as e:logging.getLogger('uvicorn.error').warning('Streamer check failed: %s',e)
+  try:STREAMERS.check_featured()
+  except Exception as e:logging.getLogger('uvicorn.error').warning('Featured streamer check failed: %s',e)
   time.sleep(60)
 
 @app.on_event('startup')
@@ -1218,6 +1220,10 @@ def start_streamer_checks():
 @app.get('/api/streamers')
 def streamers_list():
  return STREAMERS.listing()
+
+@app.get('/api/streamers/featured')
+def streamers_featured():
+ return STREAMERS.featured_listing()
 
 @app.get('/api/streamers/search')
 def streamers_search(q:str='',scope:Literal['all','link','local','kick','youtube']='all'):

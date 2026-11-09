@@ -188,7 +188,7 @@ $('removeModal').addEventListener('keydown', (e) => { if (e.key === 'Escape') $(
 // --- Inicio -------------------------------------------------------------------------------------------------------
 async function renderHome() {
   const root = $('homeView'); put(root, h('p', { class: 'muted', text: 'Cargando…' }));
-  const [lib, jobs, sessions, people] = await Promise.all([api('/api/library?sort=recent').catch(() => ({ items: [], channels: [], activity: [], total: 0 })), api('/api/jobs').catch(() => []), api('/api/live').catch(() => []), loadStreamers()]);
+  const [lib, jobs, sessions, people, featured] = await Promise.all([api('/api/library?sort=recent').catch(() => ({ items: [], channels: [], activity: [], total: 0 })), api('/api/jobs').catch(() => []), api('/api/live').catch(() => []), loadStreamers(), api('/api/streamers/featured').catch(() => [])]);
   const hour = new Date().getHours();
   const hello = hour < 12 ? 'Buenos días' : hour < 19 ? 'Buenas tardes' : 'Buenas noches';
   const search = h('input', { 'aria-label': 'Buscar clips, streamers o proyectos', placeholder: 'Buscar clips, streamers o proyectos' });
@@ -200,6 +200,7 @@ async function renderHome() {
   put(root, 
     h('div', { class: 'home-hello' }, h('h1', {}, h('span', { class: 'hi', text: hello }), '¿Qué vamos a crear hoy?'), h('label', { class: 'search' }, svg('<circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path>', 16), search)),
     liveNowSection(people || []),
+    featuredSection(featured),
     running.length ? h('div', {}, h('div', { class: 'section-head' }, h('span', { style: 'width:9px;height:9px;border-radius:50%;background:var(--live);animation:pulse 1.8s infinite' }), h('h2', { text: 'Directos en curso' }), h('span', { class: 'muted', text: 'ClipStudio los está siguiendo ahora mismo.' }), h('button', { class: 'btn ghost', type: 'button', text: 'Abrir clipping en vivo', onclick: () => navigate('live') })),
       h('div', { class: 'rail' }, running.map((s) => liveCard(s)))) : null,
     h('div', { class: 'grid quick' },
@@ -387,7 +388,9 @@ function paintLiveView(s) {
   // Still image as a fallback (and for stopped sessions); while recording, the video player below takes over.
   const refresh = () => { const img = $('liveFrame'); const next = new Image(); next.onload = () => { img.src = next.src; }; next.src = `/api/live/${s.id}/frame?t=${Date.now()}`; if (running && current === 'live' && !livePlayer.playing) liveUI.frameTimer = setTimeout(refresh, 5000); };
   refresh();
-  runLivePlayer(s, running);
+  // Only on the live screen: the session keeps being followed from other screens, and the player restarting there
+  // (hidden, with its sound on) was the stream heard in the background with no button to silence it.
+  runLivePlayer(s, running && current === 'live' && !document.hidden);
   paintLiveMoments();
 }
 
@@ -616,22 +619,31 @@ function watchStream(s) {
 function liveNowSection(list) {
   const live = list.filter((s) => s.live), off = list.filter((s) => !s.live && s.checked);
   if (!list.length) return null;
-  const card = (s, i) => h('article', { class: 'card livecard' },
+  return h('div', {}, h('div', { class: 'section-head' }, h('span', { style: 'width:9px;height:9px;border-radius:50%;background:var(--live);animation:pulse 1.8s infinite' }), h('h2', { text: 'En vivo ahora' }),
+      h('span', { class: 'muted', text: live.length ? 'Primero los streamers que más clipeas. Desliza para ver más.' : 'Ninguno de tus streamers está en directo ahora. Se comprueba cada pocos minutos.' }), h('button', { class: 'btn ghost', type: 'button', text: 'Buscar otro streamer', onclick: () => { navigate('live'); $('liveUrl').focus(); } })),
+    h('div', { class: 'rail' }, live.map((s, i) => streamCard(s, i === 0 && s.clips ? '★ El que más clipeas' : '')),
+      off.length ? h('article', { class: 'card livecard', style: 'display:grid;place-items:center;text-align:center;padding:20px;border-style:dashed' },
+        h('span', { style: 'display:flex;flex-direction:column;align-items:center;gap:10px' }, h('span', { style: 'display:flex' }, off.slice(0, 4).map((s) => h('span', { style: 'margin-left:-8px;filter:grayscale(1);opacity:.75' }, avatarImg(s, 44)))),
+          h('b', { text: off.slice(0, 3).map((s) => s.name).join(', ') + (off.length > 3 ? ` y ${off.length - 3} más` : '') + (off.length === 1 ? ' no está en directo' : ' no están en directo') }), h('span', { class: 'muted', text: 'Aparecerán aquí cuando empiecen.' }))) : null));
+}
+// Recommended: the most relevant Kick streamers (Spanish-speaking first), shown as soon as they go live.
+function featuredSection(list) {
+  if (!list?.length) return null;
+  return h('div', {}, h('div', { class: 'section-head' }, platformLogo('kick'), h('h2', { text: 'Recomendados en Kick' }),
+      h('span', { class: 'muted', text: 'Los streamers más vistos de Kick que están en directo ahora. Desliza para ver más.' })),
+    h('div', { class: 'rail' }, list.map((s) => streamCard(s, s.lang === 'es' ? 'Recomendado · Español' : 'Recomendado'))));
+}
+function streamCard(s, badge) {
+  return h('article', { class: 'card livecard' },
     h('div', { style: 'position:relative;aspect-ratio:16/9;background:var(--panel2);overflow:hidden;cursor:pointer', onclick: () => watchStream(s) },
       s.thumb ? h('img', { src: s.thumb, alt: `Directo de ${s.name}`, style: 'width:100%;height:100%;object-fit:cover;display:block', referrerpolicy: 'no-referrer', onerror: (e) => e.target.remove() }) : null,
       h('span', { class: 'chip live', style: 'position:absolute;left:10px;top:10px', text: '● EN VIVO' }), h('span', { class: 'chip logo', style: 'position:absolute;right:10px;top:12px' }, platformLogo(s.platform)),
-      i === 0 && s.clips ? h('span', { class: 'chip', style: 'position:absolute;left:10px;bottom:10px;background:var(--green);color:var(--green-ink)', text: '★ El que más clipeas' }) : null,
+      badge ? h('span', { class: 'chip', style: 'position:absolute;left:10px;bottom:10px;background:var(--green);color:var(--green-ink)', text: badge }) : null,
       s.viewers ? h('span', { class: 'chip glass', style: 'position:absolute;right:10px;bottom:10px', text: `${Number(s.viewers).toLocaleString('es')} espectadores` }) : null),
     h('div', { style: 'display:flex;align-items:center;gap:12px;padding:14px' }, avatarImg(s, 44),
       h('span', { style: 'display:flex;flex-direction:column;gap:3px;min-width:0;flex:1' }, h('b', { text: s.name, style: 'font:600 16px var(--head)' }), h('span', { class: 'muted', style: 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis', text: s.title || '' }),
         s.clips ? h('span', { style: 'font-size:12px;color:var(--green);font-weight:600', text: `${s.clips} clips tuyos de este streamer` }) : null)),
     h('div', { style: 'display:flex;gap:8px;padding:0 14px 14px' }, h('button', { class: 'btn primary', type: 'button', style: 'flex:1', text: 'Clipear este directo', onclick: () => clipThisStream(s) }), h('button', { class: 'btn ghost', type: 'button', text: 'Ver en directo', onclick: () => watchStream(s) })));
-  return h('div', {}, h('div', { class: 'section-head' }, h('span', { style: 'width:9px;height:9px;border-radius:50%;background:var(--live);animation:pulse 1.8s infinite' }), h('h2', { text: 'En vivo ahora' }),
-      h('span', { class: 'muted', text: live.length ? 'Primero los streamers que más clipeas. Desliza para ver más.' : 'Ninguno de tus streamers está en directo ahora. Se comprueba cada pocos minutos.' }), h('button', { class: 'btn ghost', type: 'button', text: 'Buscar otro streamer', onclick: () => { navigate('live'); $('liveUrl').focus(); } })),
-    h('div', { class: 'rail' }, live.map(card),
-      off.length ? h('article', { class: 'card livecard', style: 'display:grid;place-items:center;text-align:center;padding:20px;border-style:dashed' },
-        h('span', { style: 'display:flex;flex-direction:column;align-items:center;gap:10px' }, h('span', { style: 'display:flex' }, off.slice(0, 4).map((s) => h('span', { style: 'margin-left:-8px;filter:grayscale(1);opacity:.75' }, avatarImg(s, 44)))),
-          h('b', { text: off.slice(0, 3).map((s) => s.name).join(', ') + (off.length > 3 ? ` y ${off.length - 3} más` : '') + (off.length === 1 ? ' no está en directo' : ' no están en directo') }), h('span', { class: 'muted', text: 'Aparecerán aquí cuando empiecen.' }))) : null));
 }
 // Search by name in the link field of «Clips en vivo» (a link still works as before).
 let searchTimer = null, searchToken = 0;

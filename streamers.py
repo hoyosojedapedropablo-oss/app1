@@ -12,6 +12,14 @@ LIVE_TTL = 300          # seconds between live checks of one streamer
 AVATAR_TTL = 7 * 86400
 _lock = threading.RLock()
 
+# The most relevant Kick channels (Streams Charts / Infobae rankings, 2026), checked to exist on Kick's public API.
+# Spanish-speaking ones first: they are shown first on Inicio when they are live.
+FEATURED_KICK = (
+    [(s, 'es') for s in ('westcol', 'davooxeneize', 'lacobraaa', 'spreen', 'elzeein', 'mrstiventc', 'rdjavi', 'robleis',
+                         'mernuel', 'coscu', 'zeko', 'juansguarnizo', 'benjaz', 'elded', 'shadoune666')]
+    + [(s, 'other') for s in ('absi', 'maherco', 'korekore_ch', 'deenthegreat', 'jonvlogs', 'adinross', 'xqc', 'clavicular',
+                              '3mr', 'trainwreckstv', 'nickmercs')])
+
 
 def slug_from_url(url):
     m = re.search(r'kick\.com/([\w-]+)', url or '', re.I)
@@ -32,6 +40,9 @@ class Streamers:
         self.ydl_factory = ydl_factory
         try: self.items = json.loads(self.file.read_text(encoding='utf-8'))
         except (OSError, ValueError): self.items = {}
+        self.featured_file = self.data / 'featured.json'
+        try: self.featured = json.loads(self.featured_file.read_text(encoding='utf-8'))
+        except (OSError, ValueError): self.featured = {}
         self._checking = False
 
     def save(self):
@@ -169,6 +180,37 @@ class Streamers:
                 if v.get('platform') == 'kick': row['thumb'] = f'/api/streamers/{k}/live.jpg?t={int(still.stat().st_mtime)}' if still and v.get('live') else ''
                 out.append(row)
         return sorted(out, key=lambda v: (not v.get('live'), -v.get('clips', 0), v.get('name', '').lower()))
+
+    # --- featured Kick streamers: recommended on Inicio as soon as they go live (kept apart from the user's own) -------
+    def check_featured(self, channels=FEATURED_KICK):
+        """Background pass: one public request per channel, at most every 5 minutes; a frame of the ones live."""
+        for slug, lang in channels:
+            key = f'kick:{slug}'; item = self.featured.get(key) or {}
+            if time.time() - item.get('checked', 0) < LIVE_TTL: continue
+            try:
+                info = self.lookup('kick', slug)
+                item.update(info, lang=lang, checked=time.time(), error='')
+                self._avatar(key, info.get('photo'))
+                self._live_still(key, item)
+            except Exception as e:
+                item.update(platform='kick', slug=slug, url=url_for('kick', slug), name=item.get('name') or slug, lang=lang, checked=time.time(), error=type(e).__name__, live=False)
+            with _lock: self.featured[key] = item
+            with _lock:
+                tmp = self.featured_file.with_suffix('.tmp'); tmp.write_text(json.dumps(self.featured, ensure_ascii=False), encoding='utf-8'); tmp.replace(self.featured_file)
+
+    def featured_listing(self):
+        """Featured channels live right now that the user does not already follow; Spanish first, then by viewers."""
+        known = {slug for slug, _ in FEATURED_KICK}
+        with _lock:
+            out = []
+            for k, v in self.featured.items():
+                if not v.get('live') or k in self.items or v.get('slug') not in known: continue
+                row = {x: y for x, y in v.items() if x != 'playback'}
+                still = self.live_still(k)
+                row.update(key=k, avatar=f'/api/streamers/{k}/avatar' if self.avatar_path(k) else '',
+                           thumb=f'/api/streamers/{k}/live.jpg?t={int(still.stat().st_mtime)}' if still else '')
+                out.append(row)
+        return sorted(out, key=lambda v: (v.get('lang') != 'es', -(v.get('viewers') or 0)))
 
     def _json(self, url):
         import yt_dlp
