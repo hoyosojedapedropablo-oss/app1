@@ -86,6 +86,7 @@ class Library:
                 self.db.execute("UPDATE clips SET project_id=?, status=CASE WHEN status='detected' THEN 'draft' ELSE status END WHERE id=?",
                                 (job['id'], f"live:{live['session']}:{live['moment']}"))
             return 0
+        if not (self.data / job['id'] / 'source').exists(): return 0      # a project without its video (or one from tests)
         youtube = job.get('youtube') or {}
         channel = youtube.get('channel') or 'Mis videos'
         platform = 'youtube' if youtube else 'local'
