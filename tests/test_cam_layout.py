@@ -59,6 +59,25 @@ class DetectionTests(unittest.TestCase):
         self.assertFalse(o['found']); self.assertEqual(o['kind'], 'fullcam')
 
 
+class WideCameraTests(unittest.TestCase):
+    def test_static_room_edges_inside_a_wide_camera_are_not_its_border(self):
+        """Spreen (Minecraft, Nov 2026): the shelf behind the streamer never moves either; the old search took it
+        for the camera border and cut the camera to 248 px of its 560."""
+        box = dict(x=30, y=250, w=560, h=310)
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'wide.mp4'
+            room = (f"drawbox=x={box['x']}:y={box['y']}:w={box['w']}:h={box['h']}:color=0x3a2a1a:t=fill,"
+                    f"drawbox=x={box['x'] + 150}:y={box['y']}:w=6:h={box['h']}:color=0xe0c080:t=fill,"     # the shelf edge
+                    f"drawbox=x={box['x']}:y={box['y']}:w={box['w']}:h={box['h']}:color=0x202020:t=4")
+            backend.command(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'gradients=s=1920x1080:c0=0x1a3d5c:c1=0x5c8a3d:nb_colors=2:seed=3:speed=0.2:rate=30',
+                             '-vf', "drawbox=x='mod(t*300\,1800)':y=700:w=120:h=120:color=0x10C010:t=fill," + room, '-t', '8', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(source)])
+            face = ((box['x'] + 430) / 3 - 15, (box['y'] + 140) / 3 - 18, 30, 36, .9)      # on the right, 4.8 face widths from the left border (Spreen: 4.7)
+            with patch('tracking.make_detector', fake_detector(face)):
+                o = layout.detect_overlay(source, 8, samples=16)
+        self.assertTrue(o['found'])
+        for k in ('x', 'y', 'w', 'h'): self.assertAlmostEqual(o[k], box[k], delta=16, msg=(k, o))
+
+
 class GeometryTests(unittest.TestCase):
     def overlay(self, x, y, w, h, W=1920, H=1080):
         return dict(found=True, width=W, height=H, x=x, y=y, w=w, h=h, face=dict(x=x + w / 2, y=y + h * .45, w=w / 4, h=h / 3))

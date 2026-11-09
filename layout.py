@@ -61,11 +61,28 @@ def _clusters(faces, frames):
 
 def _border(profile, lo, hi, fallback, edge, strength=.32):
     """Strongest persistent line in profile[lo:hi]; the frame edge when the camera touches it."""
-    lo, hi = max(0, int(lo)), min(len(profile), int(hi))
+    lo, hi = max(0, int(lo)), min(len(profile), int(hi)); fallback = int(round(fallback))   # used as a slice index
     if hi - lo < 3: return fallback
     i = lo + int(np.argmax(profile[lo:hi]))
     if profile[i] >= strength: return i
     return edge if min(abs(edge - lo), abs(edge - hi)) < 2 or lo <= edge <= hi else fallback
+
+
+def _seam(edge, var, lo, hi, outside, strength=.2, contrast=.45):
+    # contrast measured: ~.9 at Spreen's real border; TheDonato's animated sidebar art gave a false .26.
+    """Border where the picture changes from steady (the camera's room) to busy (the game), on the camera's side.
+
+    Measured on Spreen (Minecraft): the room behind the streamer barely changes, so the edge of a shelf is as
+    persistent as the overlay border and won the old strongest-line search. Requiring the game's motion right
+    outside the line and calm right inside picks the real border. `outside` is -1 (left/top) or +1 (right/bottom)."""
+    lo, hi = max(11, int(lo)), min(len(edge) - 11, int(hi)); best = None
+    for i in range(lo, hi):
+        if edge[i] < strength: continue
+        out = var[i + 2:i + 10].mean() if outside > 0 else var[i - 9:i - 1].mean()
+        ins = var[i - 9:i - 1].mean() if outside > 0 else var[i + 2:i + 10].mean()
+        c = (out - ins) / (out + ins + 1)
+        if c >= contrast and (best is None or edge[i] * c > best[0]): best = (edge[i] * c, i)
+    return None if best is None else best[1]
 
 
 def _lines(profile, strength=.5, limit=8):
@@ -101,7 +118,7 @@ def detect_overlay(source, duration=None, samples=40, progress=lambda v: None, s
     detect = make_detector(sw, sh)
     # The whole video by default; a clip's own range when the camera moved there (start > 0 or a short duration).
     times = (np.linspace(start + duration * .03, start + duration * .97, samples) if duration > 4 else [start + duration / 2])
-    faces = []; edges_x = np.zeros((sh, sw), np.float32); edges_y = np.zeros((sh, sw), np.float32); used = 0
+    faces = []; edges_x = np.zeros((sh, sw), np.float32); edges_y = np.zeros((sh, sw), np.float32); used = 0; grays = []
     for i, t in enumerate(times):
         frame = _frame(source, float(t), sw, sh)
         progress(round(80 * (i + 1) / len(times)))
@@ -110,6 +127,7 @@ def detect_overlay(source, duration=None, samples=40, progress=lambda v: None, s
         for x, y, w, h, score in detect(frame):
             if h >= MIN_FACE * sh and .55 <= w / max(1, h) <= 1.6: faces.append((x + w / 2, y + h / 2, w, h, i))
         gray = cv2.GaussianBlur(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (3, 3), 0).astype(np.float32)
+        grays.append(gray.astype(np.uint8))
         edges_x += np.abs(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)) > 40
         edges_y += np.abs(cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)) > 40
     none = dict(found=False, kind='none', width=W, height=H, presence=0)
@@ -125,10 +143,15 @@ def detect_overlay(source, duration=None, samples=40, progress=lambda v: None, s
     span_y = slice(max(0, int(fy - .6 * fh)), min(sh, int(fy + 1.4 * fh)))
     span_x = slice(max(0, int(fx - 1.2 * fw)), min(sw, int(fx + 1.2 * fw)))
     col = ex[span_y].mean(axis=0); row = ey[:, span_x].mean(axis=1)
-    left = _border(col, fx - 3.2 * fw, fx - .9 * fw, fx - 1.7 * fw, 0)
-    right = _border(col, fx + .9 * fw, fx + 3.2 * fw, fx + 1.7 * fw, sw - 1)
-    top = _border(row, fy - 2.6 * fh, fy - .8 * fh, fy - 1.3 * fh, 0)
-    bottom = _border(row, fy + 1.0 * fh, fy + 3.4 * fh, fy + 2.0 * fh, sh - 1)
+    # How much each pixel changes across the samples: high in the game, low in the streamer's room.
+    var = np.stack(grays).astype(np.float32).std(axis=0); vcol = var[span_y].mean(axis=0); vrow = var[:, span_x].mean(axis=1)
+    # 1) the steady/busy seam, searched far (a wide camera can be 9 face widths across); 2) else the strongest line nearby.
+    seams = (_seam(col, vcol, fx - 7 * fw, fx - .9 * fw, -1), _seam(col, vcol, fx + .9 * fw, fx + 7 * fw, 1),
+             _seam(row, vrow, fy - 4 * fh, fy - .8 * fh, -1), _seam(row, vrow, fy + 1.0 * fh, fy + 4.5 * fh, 1))
+    left = seams[0] if seams[0] is not None else _border(col, fx - 3.2 * fw, fx - .9 * fw, fx - 1.7 * fw, 0)
+    right = seams[1] if seams[1] is not None else _border(col, fx + .9 * fw, fx + 3.2 * fw, fx + 1.7 * fw, sw - 1)
+    top = seams[2] if seams[2] is not None else _border(row, fy - 2.6 * fh, fy - .8 * fh, fy - 1.3 * fh, 0)
+    bottom = seams[3] if seams[3] is not None else _border(row, fy + 1.0 * fh, fy + 3.4 * fh, fy + 2.0 * fh, sh - 1)
     # Refine with the found extent (a border is a line across the camera's full height / width).
     col = ex[max(0, top + 2):max(top + 3, bottom - 1)].mean(axis=0); row = ey[:, max(0, left + 2):max(left + 3, right - 1)].mean(axis=1)
     left = _border(col, left - 6, min(left + 7, fx - .9 * fw), left, 0); right = _border(col, max(right - 6, fx + .9 * fw), right + 7, right, sw - 1)

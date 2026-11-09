@@ -537,9 +537,10 @@ async function watchOverlay(j,t){
  overlayInfo=state;paintOverlayInfo(j,t);
  if(state.found&&job?.id===j.id){
   // Clips not adjusted by hand follow the project choice now that we know the video has a camera.
-  const framing=effectiveFraming(projectConfig);
-  for(const [id,e] of edits)if(e.framing===projectConfig.framing&&framing==='stack')edits.set(id,{...e,framing,caption_y:Number(e.caption_y)===81?stackCaptionY():e.caption_y});
-  if(selected&&$('framing').value!==framing&&$('framing').value===projectConfig.framing){$('framing').value=framing;if(Number($('caption_y').value)===81)$('caption_y').value=stackCaptionY();saveCurrent();}
+  // Before the camera was known, clips opened with the fallback format (zoom when the project asks for «Cámara + juego»).
+  const framing=effectiveFraming(projectConfig),before=projectConfig.framing==='stack'?'zoom':projectConfig.framing;
+  for(const [id,e] of edits)if(e.framing===before&&framing==='stack')edits.set(id,{...e,framing,caption_y:Number(e.caption_y)===81?stackCaptionY():e.caption_y});
+  if(selected&&framing==='stack'&&$('framing').value===before){$('framing').value=framing;$('auto_follow').checked=false;++trackingRequest;$('trackingState').textContent='';if(Number($('caption_y').value)===81)$('caption_y').value=stackCaptionY();saveCurrent();}
   if($('framing').value==='stack')loadStackPath().catch(e=>say(e.message));
  }
  paint();
