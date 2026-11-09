@@ -17,7 +17,10 @@ function say(text){$('status').textContent=text;}
 const CHECKS=['auto_follow','show_subtitles','game_follow'];
 function styles(){return Object.fromEntries(styleKeys.map(k=>[k,CHECKS.includes(k)?$(k).checked:k==='logo_end'&&!$(k).value?null:numeric.includes(k)?Number($(k).value):$(k).value]));}
 function settings(){return {...styles(),title:$('title').value,subtitles:$('subtitles').value,start:Number($('start').value),end:Number($('end').value),clip_id:selected&&selected.id!=='manual'?selected.id:null,captions:cues.map(c=>({...c}))};}
-function saveCurrent(){if(selected)edits.set(selected.id,settings());}
+let persistTimer=null;
+function saveCurrent(){if(!selected)return;edits.set(selected.id,settings());if(!job||selected.id==='manual')return;
+ const jobId=job.id,clipId=selected.id,value=edits.get(clipId);clearTimeout(persistTimer);
+ persistTimer=setTimeout(()=>{if(job?.clip_edits)job.clip_edits[clipId]=value;else if(job)job.clip_edits={[clipId]:value};request(`/api/jobs/${jobId}/clips/${encodeURIComponent(clipId)}/edits`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({settings:value})}).catch(()=>{});},800);}
 function validRange(opts){const duration=opts.end-opts.start;if(!Number.isFinite(duration)||duration<=0||opts.start<0||opts.end>job.duration)throw Error('El inicio y final deben estar dentro del video.');if(opts.clip_id&&job.analysis_range&&(duration<job.analysis_range.minimum-.001||duration>job.analysis_range.maximum+.001))throw Error(`El clip debe durar ${job.analysis_range.minimum}–${job.analysis_range.maximum} segundos.`);return duration;}
 function paint(){
  $('focus_x').disabled=$('auto_follow').checked;$('focus_y').disabled=$('auto_follow').checked;
@@ -105,6 +108,7 @@ function choose(c){
  showView('editor');saveCurrent();
  ++trackingRequest;trackingPoints=[];trackingRange=null;$('auto_follow').checked=false;$('trackingState').textContent='';
 ++cueVersion;clearTimeout(captionTimer);captionPending=false;selected=c;
+ const saved=job?.clip_edits?.[c.id];if(saved&&!edits.has(c.id))edits.set(c.id,saved);
  const fresh=!edits.has(c.id);if(fresh)applyProjectToEditor();$('tracking_person').value='auto';
  const e=edits.get(c.id)||{title:c.title,subtitles:c.text,start:c.start,end:c.end};for(const [k,v]of Object.entries(e))if($(k)){if(CHECKS.includes(k))$(k).checked=!!v;else $(k).value=v;}
  if($('framing').value==='stack')loadStackPath().catch(e=>say(e.message));else if($('auto_follow').checked)prepareTracking().catch(e=>say(e.message));
@@ -346,7 +350,7 @@ $('renderCheck').onclick=async()=>{
  try{
   clearTimeout(captionTimer);if(captionPending)await refreshCaptions();saveCurrent();
   const opts=settings();validRange(opts);if(opts.auto_follow&&opts.framing!=='stack')await ensureExportTracking(opts);
-  const blob=await(await request(`/api/jobs/${job.id}/export`,jsonOptions(opts))).blob();
+  const blob=await(await request(`/api/jobs/${job.id}/export`,jsonOptions({...opts,preview:true}))).blob();
   $('video').pause();$('play').textContent='▶ Reproducir clip';
   renderURL=URL.createObjectURL(blob);const r=$('renderVideo');r.src=renderURL;r.hidden=false;$('renderBadge').hidden=false;r.volume=Number($('volume').value);
   r.play().catch(()=>{});button.textContent='Volver a la vista en vivo';
