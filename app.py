@@ -1187,3 +1187,49 @@ def live_frame(sid:str):
  if result.returncode or not result.stdout:raise HTTPException(500,'No se pudo leer la imagen del directo.')
  _frames[sid]=(time.time(),result.stdout)
  return Response(result.stdout,media_type='image/jpeg',headers={'Cache-Control':'no-store'})
+
+
+# --- Streamers: «En vivo ahora», search by name and profile photos (Rediseño parte 3) ------------------------------
+import streamers as streamers_mod
+STREAMERS=streamers_mod.Streamers(DATA)
+
+def streamers_sync():
+ counts={c['channel'].lower():c['n'] for c in LIBRARY.summary()['channels']}
+ STREAMERS.sync_from([s.public(full=False) for s in LIVE.values()],counts)
+
+def streamers_loop():
+ # Every streamer the user clips is checked at most every 5 minutes, one request at a time.
+ while True:
+  try:streamers_sync();STREAMERS.check_all()
+  except Exception as e:logging.getLogger('uvicorn.error').warning('Streamer check failed: %s',e)
+  time.sleep(60)
+
+@app.on_event('startup')
+def start_streamer_checks():
+ # Runs when the app really starts (uvicorn), not when tests import the module.
+ if os.environ.get('CLIPSTUDIO_NO_STREAMER_CHECKS')!='1':threading.Thread(target=streamers_loop,daemon=True).start()
+
+@app.get('/api/streamers')
+def streamers_list():
+ return STREAMERS.listing()
+
+@app.get('/api/streamers/search')
+def streamers_search(q:str=''):
+ if len(q)>60:raise HTTPException(400,'Escribe un nombre más corto.')
+ return STREAMERS.search(q)
+
+class FollowInput(BaseModel):
+ url:str=Field(min_length=8,max_length=300)
+
+@app.post('/api/streamers/follow')
+def streamers_follow(item:FollowInput):
+ try:key=STREAMERS.follow(item.url)
+ except ValueError as e:raise HTTPException(400,str(e))
+ threading.Thread(target=STREAMERS.refresh,args=(key,True),daemon=True).start()
+ return dict(key=key)
+
+@app.get('/api/streamers/{key}/avatar')
+def streamer_avatar(key:str):
+ path=STREAMERS.avatar_path(key)
+ if not path:raise HTTPException(404)
+ return FileResponse(path,media_type='image/jpeg',headers={'Cache-Control':'max-age=86400'})

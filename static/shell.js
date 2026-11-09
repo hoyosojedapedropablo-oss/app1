@@ -139,17 +139,18 @@ $('removeModal').addEventListener('keydown', (e) => { if (e.key === 'Escape') $(
 // --- Inicio -------------------------------------------------------------------------------------------------------
 async function renderHome() {
   const root = $('homeView'); put(root, h('p', { class: 'muted', text: 'Cargando…' }));
-  const [lib, jobs, sessions] = await Promise.all([api('/api/library?sort=recent').catch(() => ({ items: [], channels: [], activity: [], total: 0 })), api('/api/jobs').catch(() => []), api('/api/live').catch(() => [])]);
+  const [lib, jobs, sessions, people] = await Promise.all([api('/api/library?sort=recent').catch(() => ({ items: [], channels: [], activity: [], total: 0 })), api('/api/jobs').catch(() => []), api('/api/live').catch(() => []), loadStreamers()]);
   const hour = new Date().getHours();
   const hello = hour < 12 ? 'Buenos días' : hour < 19 ? 'Buenas tardes' : 'Buenas noches';
   const search = h('input', { 'aria-label': 'Buscar clips, streamers o proyectos', placeholder: 'Buscar clips, streamers o proyectos' });
   search.addEventListener('keydown', (e) => { if (e.key === 'Enter') { libState.q = search.value; navigate('library'); } });
   const running = sessions.filter((s) => ['starting', 'live', 'reconnecting'].includes(s.status));
   $('navLiveDot').hidden = !running.length;
-  const thumbs = lib.items.slice(0, 4).map((c) => c.thumb_url);
-  const pic = (urls) => h('div', { class: 'pic' }, urls.length ? urls.map((u) => h('img', { src: u, alt: '' })) : h('span', { class: 'noimg', text: '' }));
+  const thumbs = lib.items.filter((c) => !c.missing).slice(0, 4).map((c) => c.thumb_url);
+  const pic = (urls) => h('div', { class: 'pic' }, urls.length ? urls.map((u) => h('img', { src: u, alt: '', onerror: (e) => e.target.remove() })) : h('span', { class: 'noimg', text: '' }));
   put(root, 
     h('div', { class: 'home-hello' }, h('h1', {}, h('span', { class: 'hi', text: hello }), '¿Qué vamos a crear hoy?'), h('label', { class: 'search' }, svg('<circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path>', 16), search)),
+    liveNowSection(people || []),
     running.length ? h('div', {}, h('div', { class: 'section-head' }, h('span', { style: 'width:9px;height:9px;border-radius:50%;background:var(--live);animation:pulse 1.8s infinite' }), h('h2', { text: 'Directos en curso' }), h('span', { class: 'muted', text: 'ClipStudio los está siguiendo ahora mismo.' }), h('button', { class: 'btn ghost', type: 'button', text: 'Abrir clipping en vivo', onclick: () => navigate('live') })),
       h('div', { class: 'rail' }, running.map((s) => liveCard(s)))) : null,
     h('div', { class: 'grid quick' },
@@ -195,7 +196,7 @@ async function renderLibrary() {
   const p = new URLSearchParams({ q: libState.q, origin: libState.origin, status: libState.status, platform: libState.platform, channel: libState.channel, favorite: libState.favorite, removed: libState.removed, sort: libState.sort });
   if (libState.dur === 'short') p.set('max_dur', 30); if (libState.dur === 'mid') { p.set('min_dur', 30); p.set('max_dur', 60); } if (libState.dur === 'long') p.set('min_dur', 60);
   if (libState.score) p.set('min_score', libState.score);
-  const lib = await api('/api/library?' + p).catch((e) => ({ items: [], channels: [], total: 0, live: 0, video: 0, removed: 0, error: e.message }));
+  const [lib] = await Promise.all([api('/api/library?' + p).catch((e) => ({ items: [], channels: [], total: 0, live: 0, video: 0, removed: 0, error: e.message })), loadStreamers()]);
   const search = h('input', { value: libState.q, 'aria-label': 'Buscar en la biblioteca', placeholder: 'Buscar por título, lo que se dice o etiqueta' });
   search.addEventListener('input', () => { clearTimeout(libTimer); libTimer = setTimeout(() => { libState.q = search.value; renderLibrary().then(() => { const s = document.querySelector('#libraryView .search input'); s?.focus(); s?.setSelectionRange(s.value.length, s.value.length); }); }, 300); });
   const set = (k, v) => () => { libState[k] = v; renderLibrary(); };
@@ -204,7 +205,8 @@ async function renderLibrary() {
   const people = h('div', { class: 'people' }, lib.channels.map((c) => {
     const sample = lib.items.find((i) => i.channel === c.channel);
     return h('button', { class: 'person' + (libState.channel === c.channel ? ' on' : ''), type: 'button', onclick: set('channel', libState.channel === c.channel ? '' : c.channel) },
-      sample ? h('img', { class: 'av', src: sample.thumb_url, alt: '' }) : h('span', { class: 'av', text: (c.channel || '?').slice(0, 2).toUpperCase() }), h('span', { text: c.channel }), h('small', { text: `${c.n} clips` }));
+      streamerFor(c.channel)?.avatar ? h('img', { class: 'av', src: streamerFor(c.channel).avatar, alt: '' }) : sample ? h('img', { class: 'av', src: sample.thumb_url, alt: '' }) : h('span', { class: 'av', text: (c.channel || '?').slice(0, 2).toUpperCase() }),
+      h('span', { text: c.channel }), h('small', { text: streamerFor(c.channel)?.live ? '● en vivo' : `${c.n} clips`, style: streamerFor(c.channel)?.live ? 'color:var(--live);font-weight:600' : '' }));
   }));
   const groups = {};
   for (const c of lib.items) (groups[c.channel] ||= []).push(c);
@@ -222,7 +224,7 @@ async function renderLibrary() {
       h('span', { style: 'flex:1' }), h('button', { class: 'pill' + (libState.removed ? ' on' : ''), type: 'button', text: libState.removed ? '← Volver a la biblioteca' : `Papelera · ${lib.removed}`, onclick: set('removed', !libState.removed) })),
     lib.error ? h('div', { class: 'empty', text: lib.error }) : !lib.items.length ? h('div', { class: 'empty', text: libState.removed ? 'La papelera está vacía.' : 'No hay clips con estos filtros.' }) :
       Object.entries(groups).map(([name, items]) => h('section', { class: 'card lib-group' },
-        h('div', { class: 'head' }, h('img', { src: items[0].thumb_url, alt: '', style: 'width:46px;height:46px;border-radius:50%;object-fit:cover;box-shadow:0 0 0 2px var(--green-line)' }), h('span', { style: 'display:flex;flex-direction:column' }, h('b', { text: name }), h('span', { class: 'muted', text: `${items.length} clips` })), platformLogo(items[0].platform)),
+        h('div', { class: 'head' }, h('img', { src: streamerFor(name)?.avatar || items[0].thumb_url, alt: '', style: 'width:46px;height:46px;border-radius:50%;object-fit:cover;box-shadow:0 0 0 2px var(--green-line)' }), h('span', { style: 'display:flex;flex-direction:column' }, h('b', { text: name }), h('span', { class: 'muted', text: `${items.length} clips` })), platformLogo(items[0].platform)),
         h('div', { class: 'grid lib-grid' }, items.map((c) => libState.removed ? restoreCard(c) : clipCard(c, renderLibrary)))))
   );
 }
@@ -303,6 +305,7 @@ function buildLiveLayout() {
       h('button', { class: 'btn danger', type: 'button', text: 'Descartar', onclick: () => batchLive('discard') }), h('button', { class: 'btn ghost', type: 'button', text: 'Cancelar', onclick: () => { liveUI.picked.clear(); paintLiveMoments(); } })),
     h('div', { id: 'liveMomentGrid' }));
   host.prepend(connect, now, moments);
+  setupStreamerSearch();
 }
 const momentId = (sid, mid) => `live:${sid}:${mid}`;
 function paintLiveView(s) {
@@ -453,6 +456,74 @@ window.paintTime = () => { basePaintTime(); try { paintTimeline(); } catch {} };
 paintTime = window.paintTime;
 $('title').addEventListener('input', () => paintEditorHeader());
 buildEditorLayout();
+
+// --- Streamers: «En vivo ahora», search and profile photos -----------------------------------------------------------
+let streamersCache = [];
+async function loadStreamers() { streamersCache = await api('/api/streamers').catch(() => streamersCache); return streamersCache; }
+function streamerFor(name) { const n = (name || '').toLowerCase(); return streamersCache.find((s) => s.name?.toLowerCase() === n || s.slug === n); }
+function avatarImg(s, size, ring) {
+  const style = `width:${size}px;height:${size}px;border-radius:50%;object-fit:cover;flex:none;box-shadow:0 0 0 2px ${ring || (s?.live ? 'var(--live)' : '#2f2f36')}`;
+  return s?.avatar ? h('img', { src: s.avatar, alt: '', style }) : h('span', { style: style + ';display:grid;place-items:center;background:var(--raise);color:var(--green);font:700 14px var(--head)', text: (s?.name || '?').slice(0, 2).toUpperCase() });
+}
+function clipThisStream(s) { $('liveUrl').value = s.url; navigate('live'); $('liveStart').click(); }
+function watchStream(s) {
+  // The platform's own player (the authorized way to watch), only when the user asks for it.
+  const src = s.platform === 'kick' ? `https://player.kick.com/${encodeURIComponent(s.slug)}` : s.video_id ? `https://www.youtube.com/embed/${encodeURIComponent(s.video_id)}?autoplay=1` : '';
+  if (!src) { window.open(s.url, '_blank', 'noopener'); return; }
+  const modal = h('div', { class: 'cs-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': `Directo de ${s.name}`, onclick: (e) => { if (e.target === modal) modal.remove(); } },
+    h('div', { class: 'box player-box' }, h('div', { style: 'display:flex;align-items:center;gap:12px' }, avatarImg(s, 36), h('b', { text: s.name, style: 'font:600 18px var(--head);flex:1' }), h('button', { class: 'btn ghost', type: 'button', text: 'Cerrar', onclick: () => modal.remove() })),
+      h('iframe', { src, title: `Reproductor oficial de ${s.platform === 'kick' ? 'Kick' : 'YouTube'}`, allow: 'autoplay; fullscreen; picture-in-picture', allowfullscreen: true, referrerpolicy: 'strict-origin-when-cross-origin' }),
+      h('div', { style: 'display:flex;gap:10px;justify-content:flex-end' }, h('button', { class: 'btn primary', type: 'button', text: 'Clipear este directo', onclick: () => { modal.remove(); clipThisStream(s); } }))));
+  modal.addEventListener('keydown', (e) => { if (e.key === 'Escape') modal.remove(); });
+  document.body.append(modal);
+}
+function liveNowSection(list) {
+  const live = list.filter((s) => s.live), off = list.filter((s) => !s.live && s.checked);
+  if (!list.length) return null;
+  const card = (s, i) => h('article', { class: 'card livecard' },
+    h('div', { style: 'position:relative;aspect-ratio:16/9;background:var(--panel2);overflow:hidden;cursor:pointer', onclick: () => watchStream(s) },
+      s.thumb ? h('img', { src: s.thumb, alt: `Directo de ${s.name}`, style: 'width:100%;height:100%;object-fit:cover;display:block', referrerpolicy: 'no-referrer', onerror: (e) => e.target.remove() }) : null,
+      h('span', { class: 'chip live', style: 'position:absolute;left:10px;top:10px', text: '● EN VIVO' }), h('span', { class: 'chip logo', style: 'position:absolute;right:10px;top:12px' }, platformLogo(s.platform)),
+      i === 0 && s.clips ? h('span', { class: 'chip', style: 'position:absolute;left:10px;bottom:10px;background:var(--green);color:var(--green-ink)', text: '★ El que más clipeas' }) : null,
+      s.viewers ? h('span', { class: 'chip glass', style: 'position:absolute;right:10px;bottom:10px', text: `${Number(s.viewers).toLocaleString('es')} espectadores` }) : null),
+    h('div', { style: 'display:flex;align-items:center;gap:12px;padding:14px' }, avatarImg(s, 44),
+      h('span', { style: 'display:flex;flex-direction:column;gap:3px;min-width:0;flex:1' }, h('b', { text: s.name, style: 'font:600 16px var(--head)' }), h('span', { class: 'muted', style: 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis', text: s.title || '' }),
+        s.clips ? h('span', { style: 'font-size:12px;color:var(--green);font-weight:600', text: `${s.clips} clips tuyos de este streamer` }) : null)),
+    h('div', { style: 'display:flex;gap:8px;padding:0 14px 14px' }, h('button', { class: 'btn primary', type: 'button', style: 'flex:1', text: 'Clipear este directo', onclick: () => clipThisStream(s) }), h('button', { class: 'btn ghost', type: 'button', text: 'Ver en directo', onclick: () => watchStream(s) })));
+  return h('div', {}, h('div', { class: 'section-head' }, h('span', { style: 'width:9px;height:9px;border-radius:50%;background:var(--live);animation:pulse 1.8s infinite' }), h('h2', { text: 'En vivo ahora' }),
+      h('span', { class: 'muted', text: live.length ? 'Primero los streamers que más clipeas. Desliza para ver más.' : 'Ninguno de tus streamers está en directo ahora. Se comprueba cada pocos minutos.' }), h('button', { class: 'btn ghost', type: 'button', text: 'Buscar otro streamer', onclick: () => { navigate('live'); $('liveUrl').focus(); } })),
+    h('div', { class: 'rail' }, live.map(card),
+      off.length ? h('article', { class: 'card livecard', style: 'display:grid;place-items:center;text-align:center;padding:20px;border-style:dashed' },
+        h('span', { style: 'display:flex;flex-direction:column;align-items:center;gap:10px' }, h('span', { style: 'display:flex' }, off.slice(0, 4).map((s) => h('span', { style: 'margin-left:-8px;filter:grayscale(1);opacity:.75' }, avatarImg(s, 44)))),
+          h('b', { text: off.slice(0, 3).map((s) => s.name).join(', ') + (off.length > 3 ? ` y ${off.length - 3} más` : '') + (off.length === 1 ? ' no está en directo' : ' no están en directo') }), h('span', { class: 'muted', text: 'Aparecerán aquí cuando empiecen.' }))) : null));
+}
+// Search by name in the link field of «Clips en vivo» (a link still works as before).
+let searchTimer = null, searchToken = 0;
+function setupStreamerSearch() {
+  const input = $('liveUrl'); if (input.dataset.search) return; input.dataset.search = '1';
+  input.placeholder = 'Busca a tu streamer por su nombre o pega el enlace del directo';
+  const box = h('div', { id: 'streamerResults', class: 'card streamer-results', hidden: true });
+  $('liveConnect').insertBefore(box, $('liveConnect').children[1]);
+  input.addEventListener('input', () => {
+    clearTimeout(searchTimer); const q = input.value.trim();
+    if (!q || /^https?:|\.com\//i.test(q)) { box.hidden = true; return; }
+    searchTimer = setTimeout(async () => {
+      const token = ++searchToken; put(box, h('p', { class: 'muted', style: 'margin:6px 10px', text: `Buscando «${q}» en Kick y YouTube…` })); box.hidden = false;
+      const found = await api('/api/streamers/search?q=' + encodeURIComponent(q)).catch(() => []);
+      if (token !== searchToken) return;
+      put(box, h('span', { class: 'lbl', style: 'padding:6px 10px', text: found.length ? `Resultados para «${q}»` : 'Sin resultados: prueba con el nombre exacto del canal o pega el enlace' }),
+        found.map((s) => h('div', { class: 'streamer-row' + (input.value === s.url ? ' on' : '') }, avatarImg(s, 52),
+          h('span', { style: 'display:flex;flex-direction:column;gap:4px;min-width:0;flex:1' },
+            h('span', { style: 'display:flex;align-items:center;gap:10px;flex-wrap:wrap' }, h('b', { text: s.name, style: 'font:600 17px var(--head)' }),
+              h('span', { class: 'chip ' + (s.live ? 'live' : 'glass'), text: s.live ? '● EN VIVO' : 'Desconectado' }), platformLogo(s.platform)),
+            h('span', { class: 'muted', style: 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis', text: s.live ? s.title || 'En directo' : s.clips ? `${s.clips} clips tuyos` : (s.followers ? `${Number(s.followers).toLocaleString('es')} seguidores` : '') })),
+          s.thumb ? h('img', { src: s.thumb, alt: '', referrerpolicy: 'no-referrer', style: 'width:120px;height:68px;object-fit:cover;border-radius:8px;flex:none' }) : null,
+          h('button', { class: 'btn ' + (s.live ? 'primary' : 'ghost'), type: 'button', text: s.live ? 'Elegir directo' : 'Seguir',
+            onclick: async () => { input.value = s.url; box.hidden = true; if (s.new) await api('/api/streamers/follow', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: s.url }) }).catch(() => {});
+              toast(s.live ? `${s.name} elegido` : `Sigues a ${s.name}`, s.live ? 'Pulsa «Iniciar clipping en vivo» para empezar.' : 'Te avisaremos en Inicio cuando esté en directo.'); } }))));
+    }, 450);
+  });
+}
 
 // --- Configuración --------------------------------------------------------------------------------------------------
 function renderSettings() {
