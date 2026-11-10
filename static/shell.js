@@ -593,10 +593,15 @@ async function renderLiveHistory() {
     })) : h('div', { class: 'empty', text: 'Todavía no has hecho clipping en vivo.' }));
 }
 
-// --- Clips en vivo (prototype layout) ---------------------------------------------------------------------------
+// --- Clips en vivo: the control room -----------------------------------------------------------------------------
 // The existing controls (link field, start/stop/resume, the config modal) move into the new layout; their handlers in
 // app.js keep working. paintLive(s) from app.js still runs and also feeds this view.
-const liveUI = { view: 'grid', sort: 'recent', picked: new Set(), session: null, frameTimer: null };
+// On air bar (who, title, live clock, signal) · stage with the «momentómetro» (every moment on the session timeline,
+// coloured by its note) · the stream's temperature · the AI pipeline as it works · the best moment so far.
+const liveUI = { view: 'grid', sort: 'recent', tier: 'all', picked: new Set(), session: null, frameTimer: null, feed: [], feedFor: null };
+const LIVE_RUNNING = ['starting', 'live', 'reconnecting'];
+const emo = (n, cls = 'em') => h('img', { class: cls, src: EMOJI(n), alt: '', 'aria-hidden': 'true' });
+const HEAT_RING = '<svg viewBox="0 0 120 120" aria-hidden="true"><circle class="heat-bg" cx="60" cy="60" r="52"></circle><circle class="heat-val" cx="60" cy="60" r="52"></circle></svg>';
 function buildLiveLayout() {
   if ($('liveConnect')) return;
   const host = $('liveHost'); $('livePanel').style.display = 'none';
@@ -605,19 +610,42 @@ function buildLiveLayout() {
     h('label', { class: 'search big' }, svg('<circle cx="12" cy="12" r="2.5"></circle><path d="M7.5 7.5a6.4 6.4 0 0 0 0 9M16.5 7.5a6.4 6.4 0 0 1 0 9"></path>', 20), url),
     h('div', { class: 'live-buttons' }, $('liveStart'), $('liveStop'), $('liveResume')),
     h('p', { class: 'muted', style: 'margin:0', text: 'Usa directos públicos y respeta los derechos del creador y las normas de Kick y YouTube. ClipStudio no evita restricciones de acceso, inicios de sesión ni DRM.' }));
+  const ring = h('div', { id: 'liveHeat', class: 'heat-ring' }); ring.innerHTML = HEAT_RING;
+  ring.append(h('div', { class: 'heat-core' }, h('img', { id: 'liveHeatEmoji', class: 'em', alt: '' }), h('b', { id: 'liveHeatNum', text: '—' })));
+  const tile = (icon, id, label) => h('div', { class: 'ltile' }, emo(icon), h('b', { id, text: '0' }), h('span', { text: label }));
   const now = h('div', { id: 'liveNow', class: 'live-now', hidden: true },
+    h('div', { class: 'onair' },
+      h('span', { id: 'liveAvatar', class: 'onair-av' }),
+      h('div', { class: 'onair-who' }, h('div', { class: 'onair-name' }, h('b', { id: 'liveWho' }), h('span', { id: 'livePlatform' })), h('span', { id: 'liveTitle' })),
+      h('div', { class: 'onair-meta' },
+        h('span', { class: 'onair-clock' }, h('small', { id: 'liveClockLabel', text: 'En directo' }), h('b', { id: 'liveClock', text: '0:00' })),
+        h('span', { id: 'liveBadge', class: 'onair-pill' }),
+        h('span', { id: 'liveConn', class: 'live-conn' }))),
     h('div', { class: 'card live-stage' },
-      h('div', { class: 'live-frame' }, h('img', { id: 'liveFrame', alt: 'Imagen actual del directo' }), h('span', { class: 'scan', 'aria-hidden': 'true' }),
-        h('div', { class: 'live-chips' }, h('span', { id: 'liveBadge', class: 'chip live', text: 'EN VIVO' }), h('span', { id: 'livePlatform' }), h('span', { id: 'liveClock', class: 'chip glass' })),
-        h('span', { class: 'chip glass live-note', text: 'Imagen de la grabación local · se actualiza cada pocos segundos' })),
-      h('div', { class: 'live-who' }, h('b', { id: 'liveWho' }), h('span', { id: 'liveTitle', class: 'muted' }), h('span', { id: 'liveConn', class: 'live-conn' }))),
+      h('div', { class: 'live-frame' }, h('img', { id: 'liveFrame', alt: 'Imagen actual del directo' }), h('span', { class: 'scan', 'aria-hidden': 'true' }), h('span', { class: 'vignette', 'aria-hidden': 'true' }),
+        h('div', { class: 'live-chips' }, h('span', { id: 'liveRec', class: 'chip glass rec' }, h('i'), 'REC'), h('span', { id: 'liveDelay', class: 'chip glass', text: 'Unos segundos de retraso' })),
+        h('div', { id: 'liveFrameCtrl', class: 'frame-ctrl' })),
+      h('div', { class: 'meter' },
+        h('div', { class: 'meter-head' }, h('span', { class: 'lbl-s' }, emo('satellite'), 'Momentómetro'), h('span', { id: 'meterHint', class: 'muted' })),
+        h('div', { id: 'liveMeter', class: 'meter-track' }),
+        h('div', { class: 'meter-scale' }, h('span', { id: 'meterStart', text: '0:00' }), h('span', { id: 'meterBuffer' }), h('span', { id: 'meterEnd' })))),
     h('div', { class: 'live-side' },
-      h('div', { class: 'card live-stats' }, ['liveStatMoments:momentos detectados', 'liveStatReady:clips listos', 'liveStatBuffer:búfer guardado', 'liveStatLang:subtítulos'].map((x) => { const [id, label] = x.split(':'); return h('div', {}, h('b', { id }), h('span', { text: label })); })),
-      h('div', { class: 'card live-ai' }, h('span', { class: 'lbl', text: 'Actividad de la IA' }), h('div', { class: 'live-ai-row' }, h('span', { class: 'bars', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'), h('i')), h('span', { id: 'liveAiDevice' })),
-        h('span', { id: 'liveAiMessage', class: 'muted' }), h('span', { id: 'liveAiText', class: 'live-quote' }))));
+      h('div', { class: 'card heat' }, ring,
+        h('div', { class: 'heat-text' }, h('span', { class: 'lbl-s', text: 'Temperatura del directo' }), h('b', { id: 'liveHeatLabel' }), h('span', { id: 'liveHeatHint', class: 'muted' }))),
+      h('div', { class: 'live-tiles' }, tile('clapper', 'liveStatMoments', 'momentos'), tile('check', 'liveStatReady', 'listos'), tile('fire', 'liveStatFire', 'en llamas'), tile('stopwatch', 'liveStatBuffer', 'de búfer')),
+      h('div', { class: 'card live-ai' },
+        h('div', { class: 'ai-head' }, h('span', { class: 'lbl-s', text: 'Así trabaja la IA ahora' }), h('span', { class: 'bars', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'), h('i'))),
+        h('div', { id: 'livePipe', class: 'pipe' }, [['mic', 'Escucha'], ['brain', 'Transcribe'], ['scale', 'Juzga'], ['clapper', 'Corta']].map(([e, t], i) => h('div', { class: 'pipe-step', 'data-step': String(i) }, h('span', { class: 'pipe-ic' }, emo(e)), h('span', { text: t })))),
+        h('span', { id: 'liveAiDevice', class: 'ai-device' }),
+        h('div', { class: 'ai-quote' }, emo('speech', 'em q'), h('span', { id: 'liveAiText', class: 'live-quote' })),
+        h('ul', { id: 'liveFeed', class: 'ai-feed' }),
+        h('span', { id: 'liveAiMessage', hidden: true }),
+        h('span', { class: 'muted ai-lang' }, 'Subtítulos en ', h('b', { id: 'liveStatLang' })))));
   const moments = h('section', { id: 'liveMomentsBox', hidden: true },
-    h('div', { class: 'section-head', style: 'margin-top:26px' }, h('h2', { text: 'Momentos de esta sesión' }), h('span', { id: 'liveMomentsCount', class: 'muted' }),
-      h('div', { class: 'seg', role: 'group', 'aria-label': 'Ordenar' }, [['recent', 'Recientes'], ['score', 'Relevancia'], ['duration', 'Duración']].map(([v, t]) => h('button', { type: 'button', 'data-sort': v, text: t, onclick: () => { liveUI.sort = v; paintLiveMoments(); } }))),
+    h('div', { id: 'liveSpot' }),
+    h('div', { class: 'section-head moments-head' }, h('h2', { text: 'Momentos de esta sesión' }), h('span', { id: 'liveMomentsCount', class: 'muted' })),
+    h('div', { class: 'moments-tools' }, h('div', { id: 'liveTiers', class: 'tiers', role: 'group', 'aria-label': 'Filtrar por nota' }), h('span', { style: 'flex:1' }),
+      h('div', { class: 'seg', role: 'group', 'aria-label': 'Ordenar' }, [['recent', 'Recientes'], ['score', 'Mejor nota'], ['duration', 'Duración']].map(([v, t]) => h('button', { type: 'button', 'data-sort': v, text: t, onclick: () => { liveUI.sort = v; paintLiveMoments(); } }))),
       h('div', { class: 'seg', role: 'group', 'aria-label': 'Vista' }, [['grid', 'Cuadrícula'], ['list', 'Lista']].map(([v, t]) => h('button', { type: 'button', 'data-lview': v, text: t, onclick: () => { liveUI.view = v; paintLiveMoments(); } })))),
     h('div', { id: 'liveBatch', class: 'card live-batch', hidden: true }, h('b', { id: 'liveBatchLabel' }), h('span', { style: 'flex:1' }),
       h('button', { class: 'btn ghost', type: 'button', text: 'Añadir etiqueta', onclick: () => batchLive('tag') }), h('button', { class: 'btn ghost', type: 'button', text: 'Favoritos', onclick: () => batchLive('fav') }),
@@ -627,23 +655,26 @@ function buildLiveLayout() {
   setupStreamerSearch();
 }
 const momentId = (sid, mid) => `live:${sid}:${mid}`;
+const liveShown = (s) => s.moments.filter((m) => m.status !== 'discarded');
+const HEAT_TEXT = { fire: 'En llamas: hay clips para subir ya', great: 'Caliente: buenos momentos', good: 'Templado', weak: 'Tranquilo por ahora' };
 function paintLiveView(s) {
   buildLiveLayout(); liveUI.session = s;
-  const running = ['starting', 'live', 'reconnecting'].includes(s.status);
-  $('liveNow').hidden = false; $('liveMomentsBox').hidden = !s.moments.length;
-  $('liveBadge').textContent = running ? 'EN VIVO' : ({ stopped: 'DETENIDA', ended: 'TERMINADO', interrupted: 'INTERRUMPIDA', error: 'ERROR', stopping: 'DETENIENDO' })[s.status] || s.status.toUpperCase();
-  $('liveBadge').className = 'chip ' + (running ? 'live' : 'glass');
-  $('livePlatform').replaceChildren(platformLogo(s.platform) || ''); $('livePlatform').className = 'chip glass logo';
-  $('liveClock').textContent = mmss(s.media_s);
+  const running = LIVE_RUNNING.includes(s.status);
+  $('liveNow').hidden = false; $('liveNow').classList.toggle('is-live', running); $('liveMomentsBox').hidden = !s.moments.length;
+  $('liveBadge').textContent = running ? (s.status === 'reconnecting' ? 'RECONECTANDO' : 'EN EL AIRE') : ({ stopped: 'DETENIDA', ended: 'TERMINADO', interrupted: 'INTERRUMPIDA', error: 'ERROR', stopping: 'DETENIENDO' })[s.status] || s.status.toUpperCase();
+  $('liveBadge').className = 'onair-pill' + (running ? ' on' : '');
+  $('liveRec').hidden = !running; $('liveDelay').hidden = !running;
+  $('livePlatform').replaceChildren(platformLogo(s.platform) || ''); $('livePlatform').className = 'chip logo';
+  put($('liveAvatar'), avatarImg(streamerFor(s.channel) || { name: s.channel }, 58));
+  $('liveClock').textContent = mmss(s.media_s); $('liveClockLabel').textContent = running ? 'En directo' : 'Grabado';
   $('liveWho').textContent = s.channel || 'Directo'; $('liveTitle').textContent = s.title || '';
-  $('liveConn').textContent = running ? (s.status === 'reconnecting' ? 'Reconectando…' : `Conexión estable · ${s.reconnects} reconexiones`) : 'Sesión guardada · sus momentos siguen en la biblioteca';
+  $('liveConn').textContent = running ? (s.status === 'reconnecting' ? 'Reconectando…' : `Señal estable${s.reconnects ? ` · ${s.reconnects} reconexiones` : ''}`) : 'Sesión guardada';
   $('liveConn').classList.toggle('ok', running && s.status !== 'reconnecting');
-  const ready = s.moments.filter((m) => ['draft', 'opened'].includes(m.status)).length;
+  const shown = liveShown(s), ready = s.moments.filter((m) => ['draft', 'opened'].includes(m.status)).length;
   $('liveStatMoments').textContent = s.moments.length; $('liveStatReady').textContent = ready;
-  $('liveStatBuffer').textContent = `${s.buffer_minutes} min`; $('liveStatLang').textContent = ({ es: 'Español', en: 'Inglés', pt: 'Portugués', fr: 'Francés', it: 'Italiano', de: 'Alemán' })[s.language] || s.language;
-  $('liveAiDevice').textContent = !running ? 'Sin actividad: la sesión no está en curso' : s.transcription_device ? `Transcribiendo · ${s.transcription_device}` : 'Preparando la transcripción…';
-  document.querySelector('.live-ai .bars').classList.toggle('paused', !running);
-  $('liveAiMessage').textContent = s.message || ''; $('liveAiText').textContent = s.recent_text ? `«…${s.recent_text}»` : '';
+  $('liveStatFire').textContent = shown.filter((m) => m.score >= 85).length;
+  $('liveStatBuffer').textContent = `${s.buffer_minutes} min`; $('liveStatLang').textContent = ({ es: 'español', en: 'inglés', pt: 'portugués', fr: 'francés', it: 'italiano', de: 'alemán' })[s.language] || s.language;
+  paintHeat(s, shown); paintPipe(s, running); paintMeter(s, shown, running);
   clearTimeout(liveUI.frameTimer);
   // Still image as a fallback (and for stopped sessions); while recording, the video player below takes over.
   const refresh = () => { const img = $('liveFrame'); const next = new Image(); next.onload = () => { img.src = next.src; }; next.src = `/api/live/${s.id}/frame?t=${Date.now()}`; if (running && current === 'live' && !livePlayer.playing) liveUI.frameTimer = setTimeout(refresh, 5000); };
@@ -653,6 +684,44 @@ function paintLiveView(s) {
   runLivePlayer(s, running && current === 'live');
   paintLiveMoments();
 }
+// The stream's temperature: the best note of the last 10 minutes, as a ring that fills and changes colour.
+function paintHeat(s, shown) {
+  const recent = shown.filter((m) => m.score != null && m.start >= s.media_s - 600);
+  const best = recent.length ? Math.round(Math.max(...recent.map((m) => m.score))) : null, t = best == null ? null : scoreTier(best);
+  const ring = $('liveHeat'); ring.className = 'heat-ring ' + (t ? t.cls : 'idle');
+  ring.style.setProperty('--p', String(best == null ? 0 : best / 100));
+  $('liveHeatNum').textContent = best == null ? '—' : String(best);
+  $('liveHeatEmoji').src = EMOJI(t ? t.icon : 'zzz');
+  $('liveHeatLabel').textContent = t ? HEAT_TEXT[t.cls] : 'Esperando el primer momento';
+  $('liveHeatHint').textContent = recent.length ? `Mejor nota de los últimos 10 min · ${recent.length} ${recent.length === 1 ? 'momento' : 'momentos'}` : 'La IA escucha y avisa cuando encuentra algo';
+}
+// What the AI is doing, as four steps; the messages it leaves become a short feed with the time.
+function paintPipe(s, running) {
+  const msg = s.message || '';
+  const step = !running ? -1 : s.moments.some((m) => m.status === 'rendering') ? 3 : /ronda|analiz|propuso|descart|juez/i.test(msg) ? 2 : s.transcription_device ? 1 : 0;
+  for (const el of document.querySelectorAll('#livePipe .pipe-step')) { const i = +el.dataset.step; el.classList.toggle('done', i < step); el.classList.toggle('on', i === step); }
+  document.querySelector('.live-ai .bars').classList.toggle('paused', !running);
+  $('liveAiDevice').textContent = !running ? 'Sin actividad: la sesión no está en curso' : s.transcription_device ? `Transcribiendo con ${s.transcription_device} · IA local, sin pagar API` : 'Preparando la transcripción…';
+  $('liveAiMessage').textContent = msg; $('liveAiText').textContent = s.recent_text ? `«…${s.recent_text}»` : 'Aquí verás lo último que se dijo en el directo.';
+  if (liveUI.feedFor !== s.id) { liveUI.feed = []; liveUI.feedFor = s.id; }
+  if (msg && liveUI.feed[0]?.text !== msg) { liveUI.feed.unshift({ text: msg, at: new Date().toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' }) }); liveUI.feed.length = Math.min(liveUI.feed.length, 4); }
+  put($('liveFeed'), liveUI.feed.map((f, i) => h('li', { class: i ? '' : 'now' }, h('time', { text: f.at }), h('span', { text: f.text }))));
+}
+// The «momentómetro»: the whole session as a bar, the part still in the buffer lit, every moment a mark of its note.
+function paintMeter(s, shown, running) {
+  const total = Math.max(60, s.media_s || 0), from = Math.max(0, total - s.buffer_minutes * 60);
+  const pct = (x) => `${Math.max(0, Math.min(100, 100 * x / total))}%`;
+  const marks = shown.filter((m) => m.start != null).map((m) => {
+    const t = m.score == null ? 'none' : scoreTier(m.score).cls;
+    return h('button', { type: 'button', class: `mmark ${t}${m.status === 'rendering' ? ' wait' : ''}`, style: `left:${pct(m.start)};width:max(8px,${pct(m.end - m.start)})`,
+      title: `${mmss(m.start)} · ${m.title}${m.score != null ? ` · nota ${Math.round(m.score)}` : ''}`, 'aria-label': `Abrir momento: ${m.title}`,
+      onclick: () => { if (m.status !== 'rendering') openMoment(s, m); } }, t === 'fire' ? emo('fire', 'em flare') : '');
+  });
+  put($('liveMeter'), h('span', { class: 'mbuffer', style: `left:${pct(from)};right:0` }), marks, running ? h('span', { class: 'mnow', 'aria-hidden': 'true' }) : '');
+  $('meterEnd').textContent = running ? `ahora · ${mmss(total)}` : mmss(total);
+  $('meterBuffer').textContent = from > 0 ? `búfer desde ${mmss(from)}` : '';
+  $('meterHint').textContent = shown.length ? 'Cada marca es un momento: tócala para editarlo' : 'Aquí aparecerán los momentos que encuentre la IA';
+}
 
 // Continuous preview: the recorded 6 s segments play one after another (two video elements: while one plays, the
 // next one is already loaded, so there is no pause between them). About one segment behind the stream.
@@ -660,7 +729,7 @@ const livePlayer = { sid: null, playing: false, index: -1, muted: true, token: 0
 function liveVideos() {
   const frame = document.querySelector('.live-frame');
   if (!frame.querySelector('.live-vid')) for (const id of ['liveVidA', 'liveVidB']) { const v = h('video', { id, class: 'live-vid', playsinline: true, preload: 'auto' }); v.muted = true; frame.insertBefore(v, frame.querySelector('.scan')); }
-  if (!$('liveSound')) document.querySelector('.live-who').append(h('button', { id: 'liveSound', class: 'btn ghost', type: 'button', text: '🔇 Activar sonido', hidden: true,
+  if (!$('liveSound')) $('liveFrameCtrl').append(h('button', { id: 'liveSound', class: 'btn glass-btn', type: 'button', text: '🔇 Activar sonido', hidden: true,
     onclick: () => { livePlayer.muted = !livePlayer.muted; paintLiveSound(); } }));
   paintLiveSound();
   return [$('liveVidA'), $('liveVidB')];
@@ -716,15 +785,40 @@ function paintLiveMoments() {
   const s = liveUI.session; if (!s) return;
   for (const b of document.querySelectorAll('[data-sort]')) b.classList.toggle('on', b.dataset.sort === liveUI.sort);
   for (const b of document.querySelectorAll('[data-lview]')) b.classList.toggle('on', b.dataset.lview === liveUI.view);
-  const list = s.moments.slice();
+  paintTiers(s); paintSpotlight(s);
+  const tierOf = (m) => m.score == null ? 'none' : scoreTier(m.score).cls;
+  const list = s.moments.filter((m) => liveUI.tier === 'all' || tierOf(m) === liveUI.tier);
   if (liveUI.sort === 'recent') list.reverse(); else if (liveUI.sort === 'score') list.sort((a, b) => (b.score || 0) - (a.score || 0)); else list.sort((a, b) => b.duration - a.duration);
-  $('liveMomentsCount').textContent = `${s.moments.length} momentos · pasa el cursor para verlos, toca uno para seleccionarlo`;
+  $('liveMomentsCount').textContent = `${list.length === s.moments.length ? s.moments.length : `${list.length} de ${s.moments.length}`} momentos · pasa el cursor para verlos, toca uno para seleccionarlo`;
   for (const id of [...liveUI.picked]) if (!s.moments.some((m) => m.id === id)) liveUI.picked.delete(id);
   $('liveBatch').hidden = !liveUI.picked.size; $('liveBatchLabel').textContent = liveUI.picked.size === 1 ? '1 clip seleccionado' : `${liveUI.picked.size} clips seleccionados`;
   const grid = $('liveMomentGrid'); grid.className = liveUI.view === 'grid' ? 'grid live-grid' : 'live-list';
   put(grid, list.map((m) => liveUI.view === 'grid' ? momentCard(s, m) : momentRow(s, m)));
   const ids = list.filter((m) => m.status !== 'rendering').slice(0, 12).map((m) => momentId(s.id, m.id)).join(',');
   if (ids && ids !== liveUI.warmed) { liveUI.warmed = ids; api('/api/library?origin=live').then(() => api('/api/library/previews/warm', jsonOptions({ ids: ids.split(',') }))).catch(() => {}); }
+}
+const TIERS = [['all', 'Todos', ''], ['fire', 'En llamas', 'fire'], ['great', 'Muy buenos', 'rocket'], ['good', 'Buenos', 'thumbs'], ['weak', 'Flojos', 'zzz']];
+function paintTiers(s) {
+  const count = (k) => k === 'all' ? s.moments.length : s.moments.filter((m) => m.score != null && scoreTier(m.score).cls === k).length;
+  if (liveUI.tier !== 'all' && !count(liveUI.tier)) liveUI.tier = 'all';
+  put($('liveTiers'), TIERS.filter(([k]) => k === 'all' || count(k)).map(([k, t, e]) => h('button', { type: 'button', class: `tier ${k}${liveUI.tier === k ? ' on' : ''}`, 'aria-pressed': String(liveUI.tier === k),
+    onclick: () => { liveUI.tier = k; paintLiveMoments(); } }, e ? emo(e) : '', h('span', { text: t }), h('b', { text: String(count(k)) }))));
+}
+function paintSpotlight(s) {
+  const best = liveShown(s).filter((m) => m.status !== 'rendering' && m.score >= 75).sort((a, b) => b.score - a.score)[0];
+  const host = $('liveSpot'); if (!best) { put(host); return; }
+  if (host.dataset.mid === best.id + ':' + best.score + ':' + best.status) return;     // same moment: keep its preview alive
+  host.dataset.mid = best.id + ':' + best.score + ':' + best.status;
+  const id = momentId(s.id, best.id), thumb = `/api/library/${encodeURIComponent(id)}/thumb`;
+  const box = previewBox(thumb, null, 3, best.duration); box.classList.add('spot-thumb');
+  const img = box.querySelector('img'); if (img) retryThumb(img, thumb);
+  hoverPreview(box, { id, title: best.title, channel: s.channel || 'Directo', duration: best.duration, thumb_url: thumb }, () => openMoment(s, best));
+  put(host, h('div', { class: 'card spot' + (best.score >= 85 ? ' on-fire' : '') }, box,
+    h('div', { class: 'spot-body' }, h('span', { class: 'lbl-s' }, emo('trophy'), 'El mejor momento hasta ahora'),
+      h('b', { class: 'spot-title', text: best.title }), scoreBadge(best.score, best.viral_kind),
+      best.analysis?.motivo ? h('span', { class: 'why', text: best.analysis.motivo }) : '',
+      h('span', { class: 'muted', text: `Minuto ${Math.floor((best.start || 0) / 60)} · ${fmtDur(best.duration)} · detectado ${best.detected_at || ''}` }),
+      h('div', { class: 'acts' }, h('button', { class: 'btn primary', type: 'button', text: 'Editar y publicar', onclick: () => openMoment(s, best) })))));
 }
 // Score badge: the note at a glance. 85+ is on fire (post it now), then rocket, thumbs up and «flojo».
 const EMOJI = (n) => `/static/img/emoji/${n}.png`;
@@ -755,7 +849,6 @@ function momentCard(s, m) {
   // Same big preview with sound as in the library: the moment as it will look, without opening the editor.
   const look = { id, title: m.title, channel: s.channel || 'Directo', duration: m.duration, thumb_url: thumb };
   hoverPreview(box, look, () => openMoment(s, m));
-  if (m.score != null) box.append(scoreBadge(m.score, m.viral_kind, true));
   box.append(h('span', { class: 'chip glass dur', text: fmtDur(m.duration) }));
   const card = h('div', { class: 'card mcard' + (picked ? ' sel' : '') + (m.score >= 85 ? ' on-fire' : ''), role: 'button', tabindex: '0', 'aria-pressed': String(picked),
     onclick: () => { picked ? liveUI.picked.delete(m.id) : liveUI.picked.add(m.id); paintLiveMoments(); },
