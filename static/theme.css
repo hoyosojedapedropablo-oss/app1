@@ -872,3 +872,44 @@ input,select,textarea{font-family:var(--ui)!important}
 @container (max-width:900px){.live-now{grid-template-columns:1fr;grid-template-areas:"air" "stage" "side"}.onair{flex-wrap:wrap}.onair-meta{width:100%;justify-content:space-between}}
 @media (max-width:640px){.spot{flex-direction:column}.spot-thumb{width:100%;max-width:220px}.heat-ring{width:92px;height:92px}}
 @media (prefers-reduced-motion:reduce){.onair-av::after,.mmark .flare,.heat-ring,.heat-core .em,.pipe-step.on .pipe-ic,.mnow::after,.chip.rec i,.onair-pill.on::before{animation:none!important}}
+
+/* --- Videos populares para clipear (long videos screen) ------------------------------------------------------------ */
+.discover-box{max-width:1180px;margin:22px auto 22px;display:flex;flex-direction:column;gap:14px}
+.disc-head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:14px}
+.disc-head h2{display:flex;align-items:center;gap:10px;margin:0 0 4px;font:700 22px var(--head)}
+.disc-head h2 .em{width:26px;height:26px}
+.disc-tabs{display:flex;gap:6px;padding:4px;border-radius:999px;background:var(--panel);border:1px solid var(--line)}
+.disc-tabs button{display:inline-flex;align-items:center;gap:7px;min-height:38px;padding:0 16px;border-radius:999px;background:none;color:var(--muted);font:600 13px var(--ui)}
+.disc-tabs button:hover{color:var(--text);box-shadow:none!important}
+.disc-tabs button.on{background:var(--green);color:var(--green-ink)}
+.disc-row{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(250px,1fr);gap:14px;overflow-x:auto;padding:2px 2px 12px;scroll-snap-type:x mandatory;scrollbar-width:thin;scrollbar-color:#3a3a42 transparent}
+.disc-card{scroll-snap-align:start;display:flex;flex-direction:column;border-radius:16px;overflow:hidden;background:var(--panel);border:1px solid var(--line);transition:transform .2s ease,border-color .2s ease,box-shadow .2s ease}
+.disc-card:hover{transform:translateY(-3px);border-color:#3a3a42;box-shadow:0 18px 40px -22px rgba(0,0,0,.9)}
+.disc-card.hot{border-color:rgba(255,120,0,.35)}
+.disc-card.hot:hover{box-shadow:0 18px 44px -20px rgba(255,90,0,.45)}
+.disc-thumb{position:relative;display:block;aspect-ratio:16/9;background:var(--panel2);overflow:hidden}
+.disc-thumb img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .35s ease}
+.disc-card:hover .disc-thumb img{transform:scale(1.05)}
+.disc-views{position:absolute;left:10px;top:10px;gap:5px}
+.disc-views .em{width:16px!important;height:16px!important}
+.disc-card.hot .disc-views{background:linear-gradient(135deg,#ff3d00,#ff8a00);color:#fff}
+.disc-dur{position:absolute;right:10px;bottom:10px}
+.disc-body{display:flex;flex-direction:column;gap:10px;padding:12px 14px 14px;flex:1}
+.disc-who{display:flex;align-items:center;gap:8px;font:600 12px var(--ui);color:var(--soft);min-width:0}
+.disc-who span:last-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.disc-title{font:600 14px/1.35 var(--ui);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:2.7em}
+.disc-body .btn{margin-top:auto;min-height:40px}
+.disc-card.skeleton{min-height:280px}
+.disc-card.skeleton i{display:block;height:12px;margin:12px 14px 0;border-radius:6px;background:linear-gradient(90deg,#1a1a1f,#24242a,#1a1a1f);background-size:200% 100%;animation:sk 1.2s linear infinite}
+.disc-card.skeleton i+i{width:60%}
+@keyframes sk{to{background-position:-200% 0}}
+/* «Detener sesión»: clearly the button that ends the live session */
+.onair-actions{display:flex;gap:8px;position:relative;z-index:1}
+#liveStop{display:inline-flex;align-items:center;gap:10px;min-height:44px;padding:0 18px 0 8px;border-radius:999px;background:rgba(239,31,85,.12);color:#ff8fa9;border:1px solid rgba(239,31,85,.55);font:700 14px var(--ui);box-shadow:0 0 0 0 rgba(239,31,85,.4)}
+#liveStop .stop-ic{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:var(--live);box-shadow:0 0 14px rgba(239,31,85,.6)}
+#liveStop .stop-ic i{width:10px;height:10px;border-radius:2px;background:#fff}
+#liveStop:hover{background:var(--live);color:#fff;border-color:#ff6b8f;box-shadow:0 10px 30px -8px rgba(239,31,85,.7)!important}
+#liveStop:hover .stop-ic{background:rgba(255,255,255,.2);box-shadow:none}
+#liveStop:disabled{opacity:.6}
+#liveResume{display:inline-flex;align-items:center;gap:8px;min-height:44px;padding:0 18px;border-radius:999px;background:var(--green);color:var(--green-ink);border:0;font:700 14px var(--ui)}
+@container (max-width:900px){.onair-actions{width:100%}.onair-actions button{flex:1;justify-content:center}}

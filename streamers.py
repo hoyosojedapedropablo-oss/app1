@@ -38,6 +38,28 @@ def youtube_live_page(ydl, slug):
     return page
 
 
+def channel_photo(info):
+    """The profile photo among a channel page's images (the square one; the others are banners)."""
+    square = [t for t in info.get('thumbnails') or [] if t.get('url') and ('avatar' in (t.get('id') or '') or (t.get('width') or 0) == (t.get('height') or -1))]
+    # A normal size (about 176-900 px): the largest one is a 2000+ px, 1 MB image that made the cards load slowly.
+    sized = sorted((t for t in square if (t.get('width') or 0) >= 160), key=lambda t: t.get('width') or 0)
+    return (sized[0] if sized else square[-1])['url'] if square else ''
+
+
+# Long videos worth clipping: recent uploads of big Spanish-speaking channels (checked to exist, Nov 2026), ordered by
+# views. Read from each channel's public «Videos» tab, like the rest of ClipStudio: no login, cached 6 hours.
+DISCOVER = {
+    'juegos': ('Juegos', [('TheDonato', 'channel/UCaHEdZtk6k7SVP-umnzifmQ'), ('elrubiusOMG', '@elrubiusOMG'), ('TheGrefg', '@TheGrefg'),
+                          ('Mikecrack', '@Mikecrack'), ('Vegetta777', '@Vegetta777'), ('Fernanfloo', '@Fernanfloo'), ('Willyrex', '@Willyrex')]),
+    'podcasts': ('Podcasts', [('Hablando Huevadas', 'channel/UCba1vMvOHWlMddLARS382Zw'), ('Leyendas Legendarias', 'channel/UCugC9R-gE-6mgUgIqNy387Q'),
+                              ('Escuela de Nada', 'channel/UCZbq1qvbQzxDGUyuoPnF4LQ'), ('Club 113', 'channel/UCL23kQyh0o-jF17t_etwD4w'),
+                              ('The Wild Project', '@TheWildProject'), ('Se Regalan Dudas', '@SeRegalanDudas')]),
+    'entretenimiento': ('Entretenimiento', [('Ibai', '@IbaiLlanos'), ('AuronPlay', '@auronplay'), ('Luisito Comunica', '@LuisitoComunica')]),
+}
+DISCOVER_TTL = 6 * 3600
+DISCOVER_MIN_S, DISCOVER_MAX_S = 8 * 60, 200 * 60      # long enough to clip, within the YouTube import limit (200 min)
+
+
 def featured_all():
     return [('kick', s, l) for s, l in FEATURED_KICK] + [('youtube', s, l) for s, l in FEATURED_YOUTUBE]
 
@@ -93,7 +115,7 @@ class Streamers:
             info = {}
             try: info = ydl.extract_info(f'https://www.youtube.com/{slug}', download=False, process=False) or {}
             except Exception: info = {}
-            photo = next((t.get('url') for t in reversed(info.get('thumbnails') or []) if 'avatar' in (t.get('id') or '') or (t.get('width') or 0) == (t.get('height') or -1)), '')
+            photo = channel_photo(info)
             live = {}
             live = youtube_live_page(ydl, slug)
             on = bool(live.get('is_live') or live.get('live_status') == 'is_live')
@@ -118,7 +140,7 @@ class Streamers:
     def _avatar(self, key, url):
         if not url: return
         target = self.avatars / f'{key.replace(":", "_")}.jpg'
-        if target.exists() and time.time() - target.stat().st_mtime < AVATAR_TTL: return
+        if target.exists() and time.time() - target.stat().st_mtime < AVATAR_TTL and target.stat().st_size < 400_000: return
         try:
             with self._ydl() as ydl:
                 body = ydl.urlopen(url).read(2_000_000)
@@ -304,7 +326,53 @@ class Streamers:
                                       title=title, viewers=viewers, live=True, video_id=vid, lang='es',
                                       thumb=f'https://i.ytimg.com/vi/{vid}/hqdefault_live.jpg', avatar=self.featured.get(key, {}).get('photo', ''))
         rows = sorted(found.values(), key=lambda r: -r['viewers'])[:12]
+        self._channel_photos(rows)
         self._yt_live = (time.time(), rows)
+        return rows
+
+    def _channel_photos(self, rows, path=lambda r: r['slug']):
+        """Each row's channel photo, served by ClipStudio (YouTube search results do not include it)."""
+        from concurrent.futures import ThreadPoolExecutor
+        def one(r):
+            if not self.avatar_path(r['key']):
+                try:
+                    with self._ydl() as ydl:
+                        info = ydl.extract_info(f'https://www.youtube.com/{path(r)}', download=False, process=False) or {}
+                    self._avatar(r['key'], channel_photo(info))
+                except Exception: pass
+            if self.avatar_path(r['key']): r['avatar'] = f'/api/streamers/{r["key"]}/avatar'
+        with ThreadPoolExecutor(6) as pool: list(pool.map(one, rows))
+
+    def discover_videos(self, category, force=False):
+        """Popular long videos of one category (juegos, podcasts, entretenimiento), most viewed first."""
+        label, channels = DISCOVER[category]
+        cache = self.__dict__.setdefault('_discover', {})
+        if not force and category in cache and time.time() - cache[category][0] < DISCOVER_TTL: return cache[category][1]
+        from concurrent.futures import ThreadPoolExecutor
+        def channel(entry):
+            name, path = entry
+            try:
+                with self._ydl() as ydl:
+                    ydl.params.update(playlistend=10, extractor_args={'youtube': {'lang': ['es']}})
+                    info = ydl.extract_info(f'https://www.youtube.com/{path}/videos', download=False) or {}
+            except Exception: return []
+            key = 'youtube:' + (path if path.startswith('@') else path.split('/')[-1]).lower()
+            self._avatar(key, channel_photo(info))
+            avatar = f'/api/streamers/{key}/avatar' if self.avatar_path(key) else ''
+            out = []
+            for e in info.get('entries') or []:
+                vid, dur, views = e.get('id'), e.get('duration') or 0, e.get('view_count') or 0
+                if not vid or not DISCOVER_MIN_S <= dur <= DISCOVER_MAX_S or e.get('live_status') in ('is_live', 'is_upcoming'): continue
+                out.append(dict(id=vid, url=f'https://www.youtube.com/watch?v={vid}', title=(e.get('title') or '').strip(), channel=info.get('channel') or name,
+                                channel_url=f'https://www.youtube.com/{path}', avatar=avatar, views=views, duration=dur, category=category,
+                                thumb=f'https://i.ytimg.com/vi/{vid}/hqdefault.jpg'))
+            return sorted(out, key=lambda v: -v['views'])[:3]          # at most 3 per channel: a mix of creators
+        with ThreadPoolExecutor(6) as pool: per = [vs for vs in pool.map(channel, channels) if vs]
+        # Every creator keeps its best video (a smaller channel like TheDonato is not pushed out), then the most viewed.
+        best = [vs[0] for vs in per]
+        rest = sorted((v for vs in per for v in vs[1:]), key=lambda v: -v['views'])[:max(0, 12 - len(best))]
+        rows = sorted(best + rest, key=lambda v: -v['views'])
+        if rows: cache[category] = (time.time(), rows)
         return rows
 
     def _json(self, url):

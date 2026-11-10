@@ -1279,6 +1279,13 @@ def streamers_youtube_live():
  if time.time()-cached[0]>streamers_mod.YOUTUBE_TTL:threading.Thread(target=lambda:STREAMERS.youtube_live_now(force=True),daemon=True).start()
  return cached[1]
 
+@app.get('/api/discover/videos')
+def discover_videos(category:str='juegos'):
+ """Popular long videos to clip, by category (cached 6 h)."""
+ if category not in streamers_mod.DISCOVER:raise HTTPException(404,'Categoría desconocida.')
+ try:return {'category':category,'label':streamers_mod.DISCOVER[category][0],'videos':STREAMERS.discover_videos(category)}
+ except Exception as e:logging.getLogger('uvicorn.error').warning('Discover failed: %s',e);return {'category':category,'label':streamers_mod.DISCOVER[category][0],'videos':[]}
+
 @app.get('/api/streamers/featured')
 def streamers_featured(all:bool=False):
  return STREAMERS.featured_listing(include_offline=all)
