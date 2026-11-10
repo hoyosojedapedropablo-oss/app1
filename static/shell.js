@@ -83,10 +83,29 @@ async function openLibraryClip(item) {
 // --- Sound: one thing plays with sound at a time ------------------------------------------------------------------
 // Videos with sound (editor, big previews, the live preview, the official Kick/YouTube player) used to keep playing
 // when another started or when you changed screen, with nothing to stop them. Now the newest one wins.
-function muteLivePlayer() {
-  livePlayer.muted = true;
-  for (const v of document.querySelectorAll('.live-vid')) v.muted = true;
-  if ($('liveSound')) $('liveSound').textContent = '🔇 Activar sonido';
+// A video that is no longer on the page can never play: it would be heard with nothing on screen to stop it (that was
+// the sound left playing «por toda la app» after a preview). Stopping one also cancels its download.
+function stopMedia(m) { try { m.pause(); m.removeAttribute('src'); m.load(); } catch {} }
+{
+  const realPlay = HTMLMediaElement.prototype.play;
+  HTMLMediaElement.prototype.play = function (...args) {
+    if (!this.isConnected) { try { this.pause(); } catch {} return Promise.resolve(); }
+    return realPlay.apply(this, args);
+  };
+  // Removed while playing (a panel closed, a list repainted): stop it at once.
+  new MutationObserver((changes) => {
+    for (const c of changes) for (const n of c.removedNodes) {
+      if (n.nodeType !== 1) continue;
+      const media = n.matches?.('video,audio') ? [n] : [...(n.querySelectorAll?.('video,audio') || [])];
+      for (const m of media) if (!m.isConnected && !m.paused) m.pause();
+    }
+  }).observe(document.body, { childList: true, subtree: true });
+}
+function muteLivePlayer() { livePlayer.muted = true; paintLiveSound(); }
+// The button and the videos always agree: what the button says is what you hear.
+function paintLiveSound() {
+  for (const v of document.querySelectorAll('.live-vid')) v.muted = livePlayer.muted;
+  if ($('liveSound')) $('liveSound').textContent = livePlayer.muted ? '🔇 Activar sonido' : '🔊 Silenciar';
 }
 function silenceOthers(keep) {
   for (const m of document.querySelectorAll('video,audio')) {
@@ -106,6 +125,16 @@ for (const ev of ['play', 'volumechange']) document.addEventListener(ev, (e) => 
   const m = e.target;
   if (m instanceof HTMLMediaElement && !m.paused && !m.muted && m.volume > 0) silenceOthers(m);
 }, true);
+// Watchdog, every second: a preview whose card is gone closes; a video that sounds where you cannot see it (another
+// screen, a closed panel, a hidden element) stops; the live preview keeps the button's choice.
+setInterval(() => {
+  const panel = $('bigPreview');
+  if (panel && panel._card && !panel._card.isConnected) hideBigPreview();
+  for (const m of document.querySelectorAll('video,audio')) {
+    if (m.classList.contains('live-vid')) { if (m.muted !== livePlayer.muted) m.muted = livePlayer.muted; if (current !== 'live' && !m.paused) m.pause(); continue; }
+    if (!m.paused && !m.muted && !m.getClientRects().length) m.pause();
+  }
+}, 1000);
 // A hidden browser tab stops its sound too (the live preview restarts by itself when you come back).
 document.addEventListener('visibilitychange', () => { if (document.hidden) { hideBigPreview(); for (const m of document.querySelectorAll('video,audio')) if (!m.paused && !m.muted) m.pause(); } });
 
@@ -148,18 +177,20 @@ function showBigPreview(c, card) {
     h('div', { class: 'bp-info' }, h('b', { text: c.title }), h('span', { class: 'muted', text: `${c.channel} · ${fmtDur(c.duration || 0)}` }),
       h('button', { class: 'btn ghost bp-sound', type: 'button', text: '🔇 Silenciar', onclick: (e) => { e.stopPropagation(); video.muted = !video.muted; e.target.textContent = video.muted ? '🔊 Con sonido' : '🔇 Silenciar'; } })));
   panel.addEventListener('mouseleave', () => hideBigPreview());
+  panel._card = card;
   document.body.append(panel);
   const r = card.getBoundingClientRect(), w = panel.offsetWidth, hgt = panel.offsetHeight;
   const left = r.right + 16 + w < innerWidth ? r.right + 16 : Math.max(16, r.left - 16 - w);
   panel.style.left = left + 'px'; panel.style.top = Math.max(16, Math.min(innerHeight - hgt - 16, r.top + r.height / 2 - hgt / 2)) + 'px';
   video.addEventListener('canplay', () => {
+    if (!panel.isConnected) { stopMedia(video); return; }      // the cursor left before it was ready: never play it
     wait.remove(); panel.classList.add('ready');
     video.play().catch(() => { video.muted = true; panel.querySelector('.bp-sound').textContent = '🔊 Con sonido'; video.play().catch(() => {}); });
   }, { once: true });
   video.addEventListener('error', () => { wait.querySelector('span:last-child').textContent = 'No se pudo preparar la vista previa'; });
   video.src = `/api/library/${encodeURIComponent(c.id)}/preview.mp4`;
 }
-function hideBigPreview() { clearTimeout(hoverTimer); hoverFor = null; const p = $('bigPreview'); if (p) { p.querySelector('video')?.pause(); p.remove(); } }
+function hideBigPreview() { clearTimeout(hoverTimer); hoverFor = null; document.querySelectorAll('#bigPreview').forEach((p) => { p.querySelectorAll('video').forEach(stopMedia); p.remove(); }); }
 async function downloadClip(c, button) {
   button.disabled = true; const label = button.textContent; button.textContent = '…';
   toast('Preparando la descarga', `«${c.title}» en alta calidad (1080 × 1920). Puede tardar unos segundos.`);
@@ -177,7 +208,7 @@ function clipCard(c, onChange) {
   const thumbImg = box.querySelector('img'); if (thumbImg) retryThumb(thumbImg, c.thumb_url);
   box.addEventListener('click', () => { hideBigPreview(); openLibraryClip(c); });
   if (!c.missing) {
-    box.addEventListener('mouseenter', () => { clearTimeout(hoverTimer); hoverTimer = setTimeout(() => showBigPreview(c, box), 350); });
+    box.addEventListener('mouseenter', () => { clearTimeout(hoverTimer); hoverTimer = setTimeout(() => { if (box.isConnected) showBigPreview(c, box); }, 350); });
     box.addEventListener('mouseleave', (e) => { clearTimeout(hoverTimer); if (!e.relatedTarget?.closest?.('#bigPreview')) hideBigPreview(); });
   }
   const star = h('button', { class: 'star', type: 'button', 'aria-label': c.favorite ? 'Quitar de favoritos' : 'Añadir a favoritos', 'aria-pressed': String(c.favorite),
@@ -534,7 +565,8 @@ function liveVideos() {
   const frame = document.querySelector('.live-frame');
   if (!frame.querySelector('.live-vid')) for (const id of ['liveVidA', 'liveVidB']) { const v = h('video', { id, class: 'live-vid', playsinline: true, preload: 'auto' }); v.muted = true; frame.insertBefore(v, frame.querySelector('.scan')); }
   if (!$('liveSound')) document.querySelector('.live-who').append(h('button', { id: 'liveSound', class: 'btn ghost', type: 'button', text: '🔇 Activar sonido', hidden: true,
-    onclick: () => { livePlayer.muted = !livePlayer.muted; for (const v of document.querySelectorAll('.live-vid')) v.muted = livePlayer.muted; $('liveSound').textContent = livePlayer.muted ? '🔇 Activar sonido' : '🔊 Silenciar'; } }));
+    onclick: () => { livePlayer.muted = !livePlayer.muted; paintLiveSound(); } }));
+  paintLiveSound();
   return [$('liveVidA'), $('liveVidB')];
 }
 function stopLivePlayer() {
@@ -599,7 +631,7 @@ function momentCard(s, m) {
   const img = box.querySelector('img'); if (img) retryThumb(img, thumb);
   // Same big preview with sound as in the library: the moment as it will look, without opening the editor.
   const look = { id, title: m.title, channel: s.channel || 'Directo', duration: m.duration, thumb_url: thumb };
-  box.addEventListener('mouseenter', () => { clearTimeout(hoverTimer); hoverTimer = setTimeout(() => showBigPreview(look, box), 350); });
+  box.addEventListener('mouseenter', () => { clearTimeout(hoverTimer); hoverTimer = setTimeout(() => { if (box.isConnected) showBigPreview(look, box); }, 350); });
   box.addEventListener('mouseleave', (e) => { clearTimeout(hoverTimer); if (!e.relatedTarget?.closest?.('#bigPreview')) hideBigPreview(); });
   if (m.score != null) box.append(h('span', { class: 'chip score', text: String(Math.round(m.score)) }));
   box.append(h('span', { class: 'chip glass dur', text: fmtDur(m.duration) }));
