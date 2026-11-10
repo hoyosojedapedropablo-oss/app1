@@ -418,7 +418,7 @@ async function followLive(){
 }
 async function startLive(){
  const button=$('liveStart');button.disabled=true;
- try{paintLive(await(await request('/api/live',jsonOptions({url:$('liveUrl').value,minimum:Number($('liveMin').value),maximum:Number($('liveMax').value),buffer_minutes:Number($('liveBuffer').value),height:Number($('liveHeight').value),language:$('liveLanguage').value,clip_settings:readConfig()}))).json());followLive();}
+ try{paintLive(await(await request('/api/live',jsonOptions({url:$('liveUrl').value,minimum:Number($('liveMin').value),maximum:Number($('liveMax').value),buffer_minutes:Number($('liveBuffer').value),height:Number($('liveHeight').value),language:$('liveLanguage').value,vocabulary:$('liveVocab')?.value||'',clip_settings:readConfig()}))).json());followLive();}
  catch(e){$('liveStatus').hidden=false;$('liveState').textContent='No se pudo iniciar';$('liveMessage').textContent=e.message;}finally{button.disabled=false;}
 };
 $('liveStop').onclick=async()=>{try{paintLive(await(await request(`/api/live/${liveId}/stop`,{method:'POST'})).json());followLive();}catch(e){say(e.message);}};
@@ -535,7 +535,7 @@ $('cfgStart').onclick=async()=>{
 
 // --- «Cámara + juego»: streamer camera on top, game below ------------------------------------------------------------------
 // The server finds the camera once per video; the preview draws the same two crops the export uses on a canvas.
-function effectiveFraming(c){const cam=!!overlayInfo?.found;if(c.framing==='stack')return cam?'stack':'zoom';return cam&&c.auto_stack?'stack':c.framing;}
+function effectiveFraming(c){const cam=!!overlayInfo?.found;if(c.framing==='stack')return cam?'stack':'zoom';return c.framing;}   // the chosen format wins
 // Centre of the line between camera and game, in % of the height (title_y centres the title there).
 function seamY(){const top=stackPath?.top||Math.min(960,Math.max(768,overlayInfo?.found?Math.round(1080*overlayInfo.h/overlayInfo.w):864));return Math.round((top+3)/19.2*10)/10;}
 // «Cámara + juego» defaults: the title sits on the line; subtitles go low in the game, clear of the centre where the action is.
@@ -589,7 +589,7 @@ async function loadStackPath(){
 // While «Cámara + juego» is still being prepared, show that instead of another format that would jump later.
 function stackPending(){
  if(!job||!selected)return false;
- const wants=projectConfig.framing==='stack'||projectConfig.auto_stack!==false,before=projectConfig.framing==='stack'?'zoom':projectConfig.framing;
+ const wants=projectConfig.framing==='stack',before=projectConfig.framing==='stack'?'zoom':projectConfig.framing;
  if(overlayInfo===null)return wants&&$('framing').value===before;
  return $('framing').value==='stack'&&!!overlayInfo.found;
 }

@@ -100,6 +100,42 @@ def validate_url(value):
     raise LiveError('Por ahora el clipping en vivo admite YouTube Live y Kick.')
 
 
+NAME_STOP = set("""la el los las un una de del en con por para que y o vivo directo live dia día temporada capitulo capítulo episodio
+parte hoy nuevo nueva gran mejor todos todas aqui aquí este esta esto suscribete suscríbete canal video vídeo stream sigueme sígueme
+participantes invitados síguenos siguenos únete unete apoya dona donaciones
+redes instagram tiktok twitter facebook kick youtube twitch link links horario semana mes año
+whatsapp spotify telegram discord gmail hotmail correo email promos promo publicidad negocios contacto entretenimiento
+musical musica música broma bromas trendy vlog vlogs merch tienda descuento codigo código patrocinador sponsor""".split())
+
+
+def is_name_like(word):
+    """Not a link, an e-mail, a video or channel id, nor a shouted word: «DCpUFnHblRM», «gmail.com», «NUEVO VIDEO»."""
+    import re
+    if '.' in word or '/' in word or len(word) > 26: return False
+    if re.search(r'\d', word) and not re.fullmatch(r'[A-Za-zÁÉÍÓÚÑáéíóúñ]+\d{1,2}', word): return False   # ids; «Team2» is fine
+    if re.fullmatch(r'[A-Za-z]{10,}', word) and sum(c.isupper() for c in word) >= 4 and not re.search(r'[a-z]{3}[A-Z]', word[1:]): return False
+    parts = word.split()
+    if all(p.isupper() and len(p) > 3 for p in parts) and len(parts) > 1 and not any(p in {'VIP'} for p in parts): return False
+    return not all(p.lower() in NAME_STOP for p in parts)
+
+
+def stream_names(*texts, tags=(), limit=30):
+    """Names worth teaching the transcriber: @handles, #tags and capitalised words of the stream's title and description
+    (the people in a reality, a game, a team). Measured: «team JLexis» was heard as «Tortón J. Lessie» without them."""
+    import re
+    found = []
+    for text in texts:
+        for m in re.finditer(r'[@#]([\w.]{3,30})|\b([A-ZÁÉÍÓÚÑ][\wáéíóúñÁÉÍÓÚÑ]{2,24}(?:\s+[A-ZÁÉÍÓÚÑ][\wáéíóúñ]{2,24})?)', text or ''):
+            word = (m.group(1) or m.group(2)).strip('._')
+            if word.lower() in NAME_STOP or word.isupper() and len(word) > 12 or word.isdigit() or not is_name_like(word): continue
+            found.append(word)
+    found += [t for t in tags if 2 < len(t) <= 30 and is_name_like(t)]
+    out, seen = [], set()
+    for w in found:
+        if w.lower() not in seen: seen.add(w.lower()); out.append(w)
+    return out[:limit]
+
+
 def resolve(url, height=DEFAULT_HEIGHT, ydl_factory=None):
     """Return stream info for a live broadcast, or raise LiveError with a clear reason."""
     import yt_dlp
@@ -122,6 +158,7 @@ def resolve(url, height=DEFAULT_HEIGHT, ydl_factory=None):
     if any(not part.get('url') for part in parts):
         raise LiveError('La plataforma no entregó una señal de video accesible.')
     return {'title': info.get('title') or 'Directo', 'channel': info.get('uploader') or info.get('channel') or '',
+            'description': (info.get('description') or '')[:3000], 'tags': [str(t) for t in (info.get('tags') or [])][:40],
             'platform': info.get('extractor_key') or '', 'parts': [{'url': p['url'], 'headers': p.get('http_headers') or info.get('http_headers') or {}} for p in parts]}
 
 
@@ -205,7 +242,7 @@ def topic_still_open(clip, topics, window_end):
 
 
 class LiveSession:
-    def __init__(self, root, url, minimum=20, maximum=60, buffer_minutes=60, height=DEFAULT_HEIGHT, sid=None, engine='gpu', language='auto', clip_settings=None):
+    def __init__(self, root, url, minimum=20, maximum=60, buffer_minutes=60, height=DEFAULT_HEIGHT, sid=None, engine='gpu', language='auto', clip_settings=None, vocabulary=None):
         self.id = sid or uuid.uuid4().hex
         self.root = Path(root) / self.id
         self.segments = self.root / 'segments'
@@ -238,8 +275,17 @@ class LiveSession:
         self._votes = []
         self.clip_settings = clip_settings or {}
         self.segment_wall = {}        # index -> wall clock when the segment was processed (for real latency)
+        self.vocabulary = [w for w in (vocabulary or []) if w][:40]      # names written by the user
+        self.stream_words = []        # names found in the stream's title, description and tags
 
     # --- state -------------------------------------------------------------------------------------------------
+    def names(self):
+        """Names for the transcriber and the titles: the user's first, then the stream's, then the channel."""
+        out, seen = [], set()
+        for w in self.vocabulary + self.stream_words + ([self.channel] if self.channel else []):
+            if w and w.lower() not in seen: seen.add(w.lower()); out.append(w)
+        return out[:40]
+
     def public(self, full=True):
         with self.lock:
             data = {'id': self.id, 'url': self.url, 'platform': self.platform, 'title': self.title, 'channel': self.channel,
@@ -247,6 +293,7 @@ class LiveSession:
                     'reconnects': self.reconnects, 'gaps': len(self.gaps), 'minimum': self.minimum, 'maximum': self.maximum,
                     'buffer_minutes': self.buffer_s // 60, 'transcription_device': self.transcription_device,
                     'language': self.language or 'detectando…', 'language_choice': self.language_choice, 'clip_settings': self.clip_settings,
+                    'vocabulary': self.vocabulary, 'names': self.names()[:20],
                     'moments': [{k: v for k, v in m.items() if k not in ('captions', 'titles_all')} for m in self.moments if m['status'] != 'discarded']}
             if full:
                 data['recent_text'] = ' '.join(w['text'] for s in self.transcript[-6:] for w in s.get('words', []))[-280:]
@@ -267,7 +314,8 @@ class LiveSession:
                      'channel': self.channel, 'created': self.created, 'media_s': self.media_s, 'next_index': self.next_index,
                      'processed_index': self.processed_index, 'segment_times': self.segment_times, 'transcript': self.transcript,
                      'levels': self.levels[-3 * 3600:], 'moments': self.moments, 'gaps': self.gaps, 'reconnects': self.reconnects,
-                     'last_detection': self.last_detection, 'events': self.events, 'language': self.language, 'language_choice': self.language_choice, 'clip_settings': self.clip_settings}
+                     'last_detection': self.last_detection, 'events': self.events, 'language': self.language, 'language_choice': self.language_choice, 'clip_settings': self.clip_settings,
+                     'vocabulary': self.vocabulary, 'stream_words': self.stream_words}
         self.root.mkdir(parents=True, exist_ok=True)
         temp = self.root / 'state.tmp'
         temp.write_text(json.dumps(state, ensure_ascii=False), encoding='utf-8'); temp.replace(self.root / 'state.json')
@@ -279,7 +327,8 @@ class LiveSession:
         session = cls(Path(folder).parent, state['url'], state['minimum'], state['maximum'], state['buffer_s'] // 60,
                       state.get('height', DEFAULT_HEIGHT), sid=state['id'], engine=state.get('engine', 'gpu'))
         for key in ('status', 'message', 'title', 'channel', 'created', 'media_s', 'next_index', 'processed_index', 'transcript',
-                    'levels', 'moments', 'gaps', 'reconnects', 'last_detection', 'events', 'language', 'language_choice', 'clip_settings'):
+                    'levels', 'moments', 'gaps', 'reconnects', 'last_detection', 'events', 'language', 'language_choice', 'clip_settings',
+                    'vocabulary', 'stream_words'):
             if key in state: setattr(session, key, state[key])
         session.segment_times = {int(k): v for k, v in state.get('segment_times', {}).items()}
         session.levels = [tuple(x) for x in session.levels]
@@ -331,6 +380,7 @@ class LiveSession:
                 self._wait_retry(backoff, str(error)); backoff = min(60, backoff * 2); continue
             with self.lock:
                 self.title, self.channel = stream['title'], stream['channel']
+                self.stream_words = stream_names(stream['title'], stream.get('description', ''), tags=stream.get('tags') or [])
                 if self.next_index > 0: self.gaps.append(round(self.media_s, 1))
                 self.status = 'live'
             self.note('Capturando el directo y buscando momentos.' if self.reconnects == 0 else f'Reconectado (intento {self.reconnects}).')
@@ -428,8 +478,13 @@ class LiveSession:
             # fixed once detected (short chunks misdetect it) and give the model the recent text as context.
             clip = np.concatenate([tail, audio]); offset = start - len(tail) / 16000
             with self.lock: prompt = ''.join(w['text'] for s in self.transcript[-12:] for w in s.get('words', []))[-200:]
+            names = self.names()
+            # The stream's names are given as words to listen for (hotwords) and as context, so a name like «JLexis»
+            # is written as such instead of «Lessie».
+            hint = (('Nombres: ' + ', '.join(names[:15]) + '. ') if names else '') + prompt
             segments, info = self._whisper().transcribe(clip, vad_filter=True, word_timestamps=True, language=self.language or None,
-                                                        initial_prompt=prompt or None, condition_on_previous_text=False)
+                                                        initial_prompt=hint[-400:] or None, condition_on_previous_text=False,
+                                                        hotwords=', '.join(names[:20]) or None)
             segments = list(segments)
             if not self.language and info is not None and segments:
                 # One noisy chunk (music, a clip in another language) used to lock English on a Spanish stream.
@@ -493,6 +548,14 @@ class LiveSession:
             # Wait while the conversation is still on the clip's topic: proposing it now would cut it mid-thought.
             if (not final and topic_still_open(clip, topics, end) and clip['end'] - clip['start'] < self.maximum - 1
                     and end - clip['end'] < MAX_TOPIC_WAIT_S): continue
+            # Speech, not silence: cut at long pauses and keep the part with the most said; drop the clip if too little.
+            # (Only the AI's proposals: a volume peak is a shout or a reaction, not silence.)
+            if source:
+                from quality import speech_span
+                span = speech_span([w for s in window for w in s.get('words', [])], clip['start'], clip['end'], self.minimum)
+                if span is None:
+                    self.note('Se descartó un momento con demasiado silencio o poca conversación.'); continue
+                clip = {**clip, 'start': span[0], 'end': span[1]}
             text = ' '.join(w['text'].strip() for s in window for w in s.get('words', []) if clip['start'] <= w['start'] < clip['end'])
             with self.lock:
                 if any(m['status'] != 'discarded' and (overlaps(m, clip) or similar_text(m.get('text', ''), text)) for m in self.moments): continue
@@ -504,7 +567,7 @@ class LiveSession:
         """Hook-first titles from what is actually said; the analyst's own title stays as an alternative."""
         try:
             import viral
-            result = viral.generate(text, speaker=self.channel, context=self.title, cancel=self.stop_event)
+            result = viral.generate(text, speaker=self.channel, context=self.title, names=self.names(), cancel=self.stop_event)
         except Exception:
             return {}
         if not result: return {}
@@ -578,7 +641,7 @@ class LiveSession:
     def _prepare_layout(self, moment):
         """«Cámara + juego»: find the camera and the game motion now, so the moment opens ready in the editor."""
         settings = self.clip_settings or {}
-        if not (settings.get('framing') == 'stack' or settings.get('auto_stack', True)): return
+        if settings.get('framing') != 'stack': return     # only when «Cámara + juego» was chosen
         try:
             import layout
             target = self.clips / f'{moment["id"]}.mp4'

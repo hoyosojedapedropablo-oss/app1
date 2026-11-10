@@ -279,7 +279,8 @@ class ReadyOnOpenTests(unittest.TestCase):
         from test_live import FakeWhisper, make_segment
         calls = []
         with tempfile.TemporaryDirectory() as tmp, patch.object(backend, 'DATA', Path(tmp)), patch.dict(backend.JOBS, {}, clear=True), patch.dict(backend.LIVE, {}, clear=True):
-            s = live.LiveSession(Path(tmp) / 'live', 'https://kick.com/canal', minimum=10, maximum=30, clip_settings=dict(backend.CLIP_DEFAULTS))
+            # «Cámara + juego» chosen: only then is the layout prepared (another format chosen is used as it is)
+            s = live.LiveSession(Path(tmp) / 'live', 'https://kick.com/canal', minimum=10, maximum=30, clip_settings=dict(backend.CLIP_DEFAULTS, framing='stack'))
             s.segments.mkdir(parents=True); s.clips.mkdir(parents=True); s._model = FakeWhisper()
             for i in range(3): make_segment(s.segments / f'seg{i:06d}.ts')
             for p in s._closed_segments(): s._ingest(p)

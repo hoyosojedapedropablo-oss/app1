@@ -857,7 +857,7 @@ def set_overlay(ident:str,box:OverlayBox):
 
 def wants_stack(job):
  settings=clip_settings(job)
- return settings.get('framing')=='stack' or bool(settings.get('auto_stack'))
+ return settings.get('framing')=='stack'      # the chosen format wins: «auto» never turns another format into camera + game
 
 def layout_cache(ident,start,end,overlay):
  import layout
@@ -965,6 +965,7 @@ class LiveInput(BaseModel):
  height:Literal[720,1080,1440]=1080
  language:str=Field(default='auto',pattern=r'^(auto|[a-z]{2})$')
  clip_settings:dict|None=None
+ vocabulary:str=Field(default='',max_length=600)     # «Nombres y palabras del directo», comma separated
  @model_validator(mode='after')
  def validate_range(self):
   if self.minimum>self.maximum:raise ValueError('El mínimo no puede superar el máximo.')
@@ -978,12 +979,13 @@ def live_session(sid):
 def start_live(options:LiveInput):
  try:settings=ClipSettings(**(options.clip_settings or {})).model_dump()
  except ValueError:raise HTTPException(400,'Configuración de clips inválida.')
- try:session=live.LiveSession(LIVE_DIR,options.url,options.minimum,options.maximum,options.buffer_minutes,height=options.height,language=options.language,clip_settings=settings)
+ words=[w.strip() for w in re.split(r'[,;\n]',options.vocabulary) if w.strip()][:40]
+ try:session=live.LiveSession(LIVE_DIR,options.url,options.minimum,options.maximum,options.buffer_minutes,height=options.height,language=options.language,clip_settings=settings,vocabulary=words)
  except live.LiveError as e:raise HTTPException(400,str(e))
  if any(s.status in live.RUNNING for s in LIVE.values()):raise HTTPException(409,'Ya hay una sesión en vivo activa. Detenla antes de iniciar otra.')
  LIVE[session.id]=session;session.start()
  # Remember this streamer's setup so the next session starts with the same choices.
- try:STREAMERS.set_prefs(options.url,dict(clip_settings=settings,language=options.language,minimum=options.minimum,maximum=options.maximum,height=options.height,buffer_minutes=options.buffer_minutes))
+ try:STREAMERS.set_prefs(options.url,dict(clip_settings=settings,language=options.language,minimum=options.minimum,maximum=options.maximum,height=options.height,buffer_minutes=options.buffer_minutes,vocabulary=options.vocabulary))
  except Exception as e:logging.getLogger('uvicorn.error').warning('Streamer preferences not saved: %s',e)
  return session.public()
 
@@ -1244,7 +1246,7 @@ def refresh_live_layouts():
  time.sleep(20)   # let the app finish starting first
  for session in sorted(LIVE.values(),key=lambda s:s.created,reverse=True)[:15]:
   settings=session.clip_settings or {}
-  if not (settings.get('framing')=='stack' or settings.get('auto_stack',True)):continue
+  if settings.get('framing')!='stack':continue
   try:session.refresh_layouts()
   except Exception as e:logging.getLogger('uvicorn.error').warning('Layout refresh failed: %s',e)
 
@@ -1413,7 +1415,7 @@ def thumb_spec(r):
   source=Path(r['file']);start=3.0;end=3.0+float(r['duration'] or 10)
  if not Path(source).exists():return None
  found=bool(overlay and overlay.get('found'))
- framing=edits.get('framing') or ('stack' if found and (settings.get('framing')=='stack' or settings.get('auto_stack')) else ('zoom' if settings.get('framing')=='stack' else settings.get('framing','zoom')))
+ framing=edits.get('framing') or ('stack' if found and settings.get('framing')=='stack' else ('zoom' if settings.get('framing')=='stack' else settings.get('framing','zoom')))
  if framing=='stack' and not found:framing='zoom'
  return dict(source=source,t=start+max(.5,(end-start)*.35),framing=framing,zoom=edits.get('zoom',settings.get('zoom','balanced')),overlay=overlay if framing=='stack' else None,
              title=edits.get('title') or r['user_title'] or r['title'] or '',edits=edits,corners=edits.get('title_corners',settings.get('title_corners','rounded')))

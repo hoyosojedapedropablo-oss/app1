@@ -165,7 +165,7 @@ class Streamers:
         self.save(); return True
 
     # --- preferences per streamer: the last «Configura tus clips» used for that channel ---------------------------------
-    PREF_KEYS = ('clip_settings', 'language', 'minimum', 'maximum', 'height', 'buffer_minutes')
+    PREF_KEYS = ('clip_settings', 'language', 'minimum', 'maximum', 'height', 'buffer_minutes', 'vocabulary')
 
     def set_prefs(self, url, prefs):
         key = self.follow(url)

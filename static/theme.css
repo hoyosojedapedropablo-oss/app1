@@ -698,3 +698,13 @@ input,select,textarea{font-family:var(--ui)!important}
 .adv-body{padding:0 16px 10px;border-top:1px solid var(--line2)}
 .cfg-advanced[open] .adv-body{animation:panelIn .3s ease both}
 .adv-body .cfg-group:first-child{border-top:0!important}
+/* the chosen format is the one used: the old «automático» switch no longer exists */
+#configModal label.cfg-switch:has(#cfgAutoStack){display:none!important}
+
+/* «¿Quiénes salen en el directo?» */
+.cfg-names{display:flex;flex-direction:column;gap:10px}
+.names-q{font:700 17px var(--head)}
+.names-input{flex:none!important;max-width:none!important;min-height:48px!important;border-radius:12px!important;background:#0d0d10!important}
+.names-input input{background:transparent;border:0;min-height:44px;font:500 14px var(--ui)!important}
+.names-input:focus-within{border-color:var(--green-line)!important;box-shadow:0 0 0 3px rgba(198,255,94,.12)}
+.cfg-names small{line-height:1.45}
