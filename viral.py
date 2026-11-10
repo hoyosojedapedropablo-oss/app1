@@ -114,11 +114,12 @@ def clean(title):
     return title
 
 
-def generate(text, speaker='', context='', complete=None, cancel=None, names=()):
+def generate(text, speaker='', context='', complete=None, cancel=None, names=(), analysis=None):
     """Return {'title', 'titles', 'claim', 'kind'} or None when no grounded title survives."""
     if not text.strip(): return None
     payload = {'canal': speaker or 'desconocido', 'contexto': context, 'nombres_del_directo': list(names)[:30],
                'transcripcion_del_clip': text[:4000]}
+    if analysis: payload['analisis_del_editor'] = {k: v for k, v in analysis.items() if v}      # who, to whom, what, why, after
     data = (complete or _ollama)(payload, cancel)
     raw_titles = data.get('titulos') if isinstance(data.get('titulos'), list) else []
     titles = []

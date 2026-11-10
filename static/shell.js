@@ -299,7 +299,8 @@ function clipCard(c, onChange) {
     h('button', { class: 'tagadd', type: 'button', text: '+ etiqueta', onclick: async () => { const t = prompt('Etiqueta para este clip (por ejemplo: humor, top, polémica):'); if (!t) return;
       await api(`/api/library/${encodeURIComponent(c.id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tags: [...(c.tags || []), t] }) }); c.tags = [...(c.tags || []), t.trim()]; onChange?.(); } }));
   const del = h('button', { class: 'btn ghost', type: 'button', 'aria-label': 'Eliminar clip', onclick: () => askRemove(c, onChange) }, svg(TRASH, 16));
-  return h('article', { class: 'clipcard' }, box, h('span', { class: 't', text: c.title }), h('span', { class: 'm', text: [fmtDate(c.created), c.score ? `relevancia ${Math.round(c.score)}` : ''].filter(Boolean).join(' · ') }), tags,
+  if (c.score) box.append(scoreBadge(c.score, c.viral_kind, true));
+  return h('article', { class: 'clipcard' + (c.score >= 85 ? ' on-fire' : '') }, box, h('span', { class: 't', text: c.title }), h('span', { class: 'm', text: fmtDate(c.created) }), tags,
     h('div', { class: 'acts' }, h('button', { class: 'btn ghost', type: 'button', style: 'flex:1', text: 'Editar', onclick: () => openLibraryClip(c) }),
       c.missing ? null : h('button', { class: 'btn primary', type: 'button', title: 'Descargar en alta calidad (1080 × 1920)', 'aria-label': 'Descargar en alta calidad', text: '↓', onclick: (e) => downloadClip(c, e.currentTarget) }), del));
 }
@@ -725,6 +726,25 @@ function paintLiveMoments() {
   const ids = list.filter((m) => m.status !== 'rendering').slice(0, 12).map((m) => momentId(s.id, m.id)).join(',');
   if (ids && ids !== liveUI.warmed) { liveUI.warmed = ids; api('/api/library?origin=live').then(() => api('/api/library/previews/warm', jsonOptions({ ids: ids.split(',') }))).catch(() => {}); }
 }
+// Score badge: the note at a glance. 85+ is on fire (post it now), then rocket, thumbs up and «flojo».
+const EMOJI = (n) => `/static/img/emoji/${n}.png`;
+const KIND_EMOJI = { humor: ['laugh', 'Humor'], suspenso: ['eyes', 'Suspenso'], 'polémica': ['pepper', 'Polémica'], conflicto: ['boxing', 'Conflicto'] };
+function scoreTier(score) {
+  const n = Math.round(score || 0);
+  if (n >= 85) return { cls: 'fire', icon: 'fire', label: '¡Súbelo ya!' };
+  if (n >= 75) return { cls: 'great', icon: 'rocket', label: 'Muy bueno' };
+  if (n >= 60) return { cls: 'good', icon: 'thumbs', label: 'Bueno' };
+  return { cls: 'weak', icon: 'zzz', label: 'Flojo' };
+}
+function scoreBadge(score, kind, compact) {
+  const n = Math.round(score || 0), t = scoreTier(n), k = KIND_EMOJI[kind];
+  const badge = h('span', { class: `sbadge ${t.cls}${compact ? ' compact' : ''}`, title: `Nota ${n} de 100 · ${t.cls === 'fire' ? 'En llamas: súbelo ya' : t.label}${k ? ' · ' + k[1] : ''}` });
+  if (t.cls === 'fire') badge.append(h('span', { class: 'flames', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'), h('i'), h('i')));
+  badge.append(h('img', { class: 'em', src: EMOJI(n >= 95 ? 'hundred' : t.icon), alt: '' }), h('b', { text: String(n) }));
+  if (!compact) badge.append(h('span', { class: 'sb-lbl', text: t.label }));
+  if (k) badge.append(h('img', { class: 'em kind', src: EMOJI(k[0]), alt: k[1], title: k[1] }));
+  return badge;
+}
 function momentCard(s, m) {
   if (m.status === 'rendering') return h('div', { class: 'card mcard preparing' }, h('div', { class: 'thumb9' }, h('span', { class: 'bars', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'), h('i')), h('span', { class: 'muted', text: 'Preparando el clip…' })), h('b', { class: 't', text: m.title }), h('span', { class: 'muted', text: `Detectado ${m.detected_at}` }));
   const id = momentId(s.id, m.id), picked = liveUI.picked.has(m.id);
@@ -735,19 +755,20 @@ function momentCard(s, m) {
   // Same big preview with sound as in the library: the moment as it will look, without opening the editor.
   const look = { id, title: m.title, channel: s.channel || 'Directo', duration: m.duration, thumb_url: thumb };
   hoverPreview(box, look, () => openMoment(s, m));
-  if (m.score != null) box.append(h('span', { class: 'chip score', text: String(Math.round(m.score)) }));
+  if (m.score != null) box.append(scoreBadge(m.score, m.viral_kind, true));
   box.append(h('span', { class: 'chip glass dur', text: fmtDur(m.duration) }));
-  const card = h('div', { class: 'card mcard' + (picked ? ' sel' : ''), role: 'button', tabindex: '0', 'aria-pressed': String(picked),
+  const card = h('div', { class: 'card mcard' + (picked ? ' sel' : '') + (m.score >= 85 ? ' on-fire' : ''), role: 'button', tabindex: '0', 'aria-pressed': String(picked),
     onclick: () => { picked ? liveUI.picked.delete(m.id) : liveUI.picked.add(m.id); paintLiveMoments(); },
     onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); card.click(); } } }, box,
-    h('b', { class: 't', text: m.title }), h('span', { class: 'muted', text: `${m.detected_at} · ${m.status === 'opened' ? 'Abierto en el editor' : 'Listo'}` }),
+    h('b', { class: 't', text: m.title }), m.score != null ? scoreBadge(m.score, m.viral_kind) : '', h('span', { class: 'muted', text: `${m.detected_at} · ${m.status === 'opened' ? 'Abierto en el editor' : 'Listo'}` }),
+    m.analysis?.motivo ? h('span', { class: 'why', text: m.analysis.motivo }) : '',
     h('div', { class: 'acts' }, h('button', { class: 'btn primary', type: 'button', text: 'Editar', onclick: (e) => { e.stopPropagation(); openMoment(s, m); } }),
       h('button', { class: 'btn ghost', type: 'button', text: 'Descartar', onclick: (e) => { e.stopPropagation(); discardMoment(s, m); } })));
   return card;
 }
 function momentRow(s, m) {
   return h('div', { class: 'live-row' }, h('img', { src: `/api/library/${encodeURIComponent(momentId(s.id, m.id))}/thumb`, alt: '', loading: 'lazy' }), h('b', { text: m.title, style: 'flex:1;min-width:0' }),
-    h('span', { class: 'muted', text: fmtDur(m.duration) }), h('span', { class: 'muted', text: m.detected_at }), h('span', { class: 'muted', text: m.score != null ? `relevancia ${Math.round(m.score)}` : '' }),
+    h('span', { class: 'muted', text: fmtDur(m.duration) }), h('span', { class: 'muted', text: m.detected_at }), m.score != null ? scoreBadge(m.score, m.viral_kind, true) : h('span'),
     m.status === 'rendering' ? h('span', { class: 'muted', text: 'Preparando…' }) : h('button', { class: 'btn ghost', type: 'button', text: 'Editar', onclick: () => openMoment(s, m) }));
 }
 async function openMoment(s, m) {
@@ -965,7 +986,11 @@ function filterMoments() {
     const ok = (!momentFilter.q || text.includes(momentFilter.q)) && (momentFilter.kind === 'all' || (momentFilter.kind === 'top' && c.potential) || (momentFilter.kind === 'edited' && isEdited(c.id)) || (momentFilter.kind === 'todo' && !isEdited(c.id)));
     el.hidden = !ok; if (ok) shown++;
     el.classList.toggle('is-edited', isEdited(c.id));
-    if (c.score != null && !el.querySelector('.score-bar')) el.append(h('span', { class: 'score-bar', 'aria-hidden': 'true' }, h('i', { style: `width:${Math.max(4, Math.min(100, c.score))}%` })));
+    if (c.score != null && !el.querySelector('.score-bar')) {
+      el.append(h('span', { class: 'score-bar ' + scoreTier(c.score).cls, 'aria-hidden': 'true' }, h('i', { style: `width:${Math.max(4, Math.min(100, c.score))}%` })));
+      const old = el.querySelector('.score'); if (old) old.replaceWith(h('div', { class: 'score' }, scoreBadge(c.score, c.viral_kind), c.analysis?.motivo ? h('span', { class: 'why', text: c.analysis.motivo }) : ''));
+      el.classList.toggle('on-fire', c.score >= 85);
+    }
   }
   if ($('empty') && job?.clips?.length) $('empty').textContent = `${shown} de ${job.clips.length} momentos · rango ${job.analysis_range?.minimum ?? ''}–${job.analysis_range?.maximum ?? ''} s`;
 }
