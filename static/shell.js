@@ -1295,30 +1295,39 @@ async function renderStorage() {
 
 // «Configura tus clips» for a live stream starts with what was used last time for that streamer.
 // «¿De cuántos segundos quieres los clips?» first thing before a live session starts (the min/max fields were easy to miss).
-const CLIP_LENGTHS = [['short', 'Cortos', 15, 30, 'Reacciones rápidas para TikTok y Shorts'], ['medium', 'Medios', 20, 60, 'Recomendado: el momento con su contexto'], ['long', 'Largos', 45, 90, 'Historias completas y conversaciones']];
+const CLIP_LENGTHS = [['short', 'Cortos', 15, 30, 'Reacciones rápidas'], ['medium', 'Medios', 20, 60, 'El momento con su contexto'], ['long', 'Largos', 45, 90, 'Historias completas']];
 function buildDurationQuestion() {
   const box = $('cfgLiveDuration'); if (!box || box.dataset.q) return; box.dataset.q = '1';
   const inputs = [...box.children];
   const custom = h('div', { class: 'dur-custom', hidden: true }, inputs);
   const pick = (key) => {
-    for (const b of box.querySelectorAll('.dur-opt')) b.classList.toggle('on', b.dataset.key === key);
+    for (const b of box.querySelectorAll('.dur-opt')) { b.classList.toggle('on', b.dataset.key === key); b.setAttribute('aria-checked', String(b.dataset.key === key)); }
     custom.hidden = key !== 'custom';
     const preset = CLIP_LENGTHS.find((x) => x[0] === key);
     if (preset) { $('liveMin').value = preset[2]; $('liveMax').value = preset[3]; }
     paintDurationNote();
   };
   box.replaceChildren(
-    h('div', { class: 'dur-head' }, h('b', { text: '¿De cuántos segundos quieres los clips?' }), h('span', { class: 'muted', id: 'durNote' })),
-    h('div', { class: 'dur-options' }, CLIP_LENGTHS.map(([key, name, a, b, why]) => h('button', { type: 'button', class: 'dur-opt', 'data-key': key, onclick: () => pick(key) },
-        h('b', { text: name }), h('span', { class: 'dur-range', text: `${a}–${b} s` }), h('small', { text: why }))),
-      h('button', { type: 'button', class: 'dur-opt', 'data-key': 'custom', onclick: () => pick('custom') }, h('b', { text: 'Personalizado' }), h('span', { class: 'dur-range', text: 'Tú eliges' }), h('small', { text: 'Mínimo y máximo exactos, de 5 a 180 s' }))),
+    h('div', { class: 'dur-head' }, h('span', { class: 'dur-eyebrow', text: 'DURACIÓN DE CADA CLIP' }), h('b', { text: '¿De cuántos segundos quieres los clips?' }), h('span', { class: 'dur-note', id: 'durNote' })),
+    h('div', { class: 'dur-options', role: 'radiogroup', 'aria-label': 'Duración de los clips' },
+      CLIP_LENGTHS.map(([key, name, a, b, why]) => h('button', { type: 'button', class: 'dur-opt', role: 'radio', 'data-key': key, onclick: () => pick(key) },
+        key === 'medium' ? h('span', { class: 'dur-badge', text: 'Recomendado' }) : null,
+        h('span', { class: 'dur-top' }, h('b', { text: name }), h('span', { class: 'dur-check', 'aria-hidden': 'true', text: '✓' })),
+        h('span', { class: 'dur-range' }, h('strong', { text: `${a}–${b}` }), h('em', { text: 's' })),
+        h('span', { class: 'dur-bar', 'aria-hidden': 'true' }, h('i', { style: `left:${a / 90 * 100}%;width:${(b - a) / 90 * 100}%` })),
+        h('small', { text: why }))),
+      h('button', { type: 'button', class: 'dur-opt', role: 'radio', 'data-key': 'custom', onclick: () => pick('custom') },
+        h('span', { class: 'dur-top' }, h('b', { text: 'Personalizado' }), h('span', { class: 'dur-check', 'aria-hidden': 'true', text: '✓' })),
+        h('span', { class: 'dur-range' }, h('strong', { text: '5–180' }), h('em', { text: 's' })),
+        h('span', { class: 'dur-bar dashed', 'aria-hidden': 'true' }, h('i', { style: 'left:3%;width:94%' })),
+        h('small', { text: 'Tú eliges mínimo y máximo' }))),
     custom);
   for (const id of ['liveMin', 'liveMax']) $(id).addEventListener('input', paintDurationNote);
   box.classList.add('dur-question');
 }
 function paintDurationNote() {
   const a = Number($('liveMin').value), b = Number($('liveMax').value), note = $('durNote'); if (!note) return;
-  note.textContent = a >= b ? '⚠ El máximo tiene que ser mayor que el mínimo.' : `Cada clip durará entre ${a} y ${b} segundos.`;
+  note.textContent = a >= b ? 'El máximo tiene que ser mayor que el mínimo.' : `Cada clip durará entre ${a} y ${b} segundos.`;
   note.classList.toggle('warn', a >= b);
 }
 function syncDurationQuestion() {
