@@ -1346,7 +1346,13 @@ def live_segment(sid:str,index:int):
  session=live_session(sid)
  if index<0:raise HTTPException(400)
  path=session.segments/f'seg{index:06d}.ts'
+ # The player asks for the next segment as soon as the current one starts: wait (up to 15 s) until it is finished
+ # (a newer one exists or the session stopped), so the browser never has to poll with timers, which Chrome slows
+ # down when the window is covered or in the background (the sound used to stop there after a few minutes).
+ nxt=session.segments/f'seg{index+1:06d}.ts';deadline=time.time()+15
+ while not nxt.exists() and session.status in live.RUNNING and time.time()<deadline:time.sleep(.3)
  if not path.exists():raise HTTPException(404,'Ese fragmento ya no está en el búfer.')
+ if not nxt.exists() and session.status in live.RUNNING:raise HTTPException(425,'Ese fragmento todavía se está grabando.')
  cached=_segments_mp4.get((sid,index))
  if cached is None:
   r=subprocess.run(['ffmpeg','-v','error','-i',str(path),'-map','0:v:0','-map','0:a:0?','-c','copy','-bsf:a','aac_adtstoasc','-movflags','frag_keyframe+empty_moov+default_base_moof','-f','mp4','-'],capture_output=True,timeout=20)

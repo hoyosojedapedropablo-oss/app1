@@ -120,6 +120,15 @@ class LiveSessionTests(unittest.TestCase):
   loaded=live.LiveSession.load(s.root)
   self.assertEqual(loaded.status,'interrupted');self.assertEqual(loaded.media_s,125.5);self.assertEqual(loaded.segment_times,{3:[30,40]});self.assertEqual(loaded.moments[0]['id'],'m1')
 
+ def test_a_resumed_session_records_after_its_newest_segment(self):
+  """ClipStudio closed while recording keeps an old next_index: resuming from it overwrote older segments, the preview
+  went back to them (silent) and the new ones were never analysed because they were «already processed»."""
+  s=self.session();s.next_index=0;s.processed_index=66
+  for i in (60,61,62,63,64,65,66,67,68):(s.segments/f'seg{i:06d}.ts').write_bytes(b'x')
+  self.assertEqual(s.next_segment_number(),69)
+  t=live.LiveSession(self.root/'other','https://kick.com/canal');t.segments.mkdir(parents=True);t.processed_index=4
+  self.assertEqual(t.next_segment_number(),5)          # files evicted from the buffer: never reuse a processed number
+
  def test_eviction_keeps_only_the_buffer(self):
   s=self.session();s.buffer_s=60
   for i in range(10):(s.segments/f'seg{i:06d}.ts').write_bytes(b'x');s.segment_times[i]=[i*10,i*10+10]

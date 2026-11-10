@@ -144,11 +144,11 @@ setInterval(() => {
   if (panel && panel._card && !panel._card.isConnected) hideBigPreview();
   for (const m of document.querySelectorAll('video,audio')) {
     if (m.classList.contains('live-vid')) { if (m.muted !== livePlayer.muted) m.muted = livePlayer.muted; if (current !== 'live' && !m.paused) m.pause(); continue; }
-    if (!m.paused && !m.muted && !m.getClientRects().length) m.pause();
+    if (!m.paused && !m.muted && !m.getClientRects().length && !m.closest('.clip-modal')) m.pause();
   }
 }, 1000);
-// A hidden browser tab stops its sound too (the live preview restarts by itself when you come back).
-document.addEventListener('visibilitychange', () => { if (document.hidden) { hideBigPreview(); for (const m of document.querySelectorAll('video,audio')) if (!m.paused && !m.muted) m.pause(); } });
+// A covered or background window keeps its sound (you can listen to a stream while doing something else): Chrome
+// reports such a window as hidden, and stopping the sound there was the «sound lost after a few minutes».
 
 // --- hover preview: starts after a short pause, muted, scrubbable with the mouse -------------------------------------
 function previewBox(img, videoUrl, start, length, ratio) {
@@ -606,7 +606,7 @@ function paintLiveView(s) {
   refresh();
   // Only on the live screen: the session keeps being followed from other screens, and the player restarting there
   // (hidden, with its sound on) was the stream heard in the background with no button to silence it.
-  runLivePlayer(s, running && current === 'live' && !document.hidden);
+  runLivePlayer(s, running && current === 'live');
   paintLiveMoments();
 }
 
@@ -631,35 +631,43 @@ async function runLivePlayer(s, running) {
   if (livePlayer.sid === s.id && livePlayer.playing) return;
   stopLivePlayer(); livePlayer.sid = s.id; const token = livePlayer.token;
   const [a, b] = liveVideos();
-  const ready = async (index) => {   // wait until that segment is finished
-    for (let i = 0; i < 30 && token === livePlayer.token; i++) {
-      const seg = await api(`/api/live/${s.id}/segments`).catch(() => ({ done: [] }));
-      if (seg.done.includes(index)) return true;
-      if (seg.done.length && seg.done[seg.done.length - 1] > index + 3) { livePlayer.index = seg.done[seg.done.length - 2] - 1; return false; }   // fell behind: jump ahead
-      await new Promise((r) => setTimeout(r, 1500));
-    }
-    return false;
-  };
   const load = (video, index) => { video.muted = livePlayer.muted; video.src = `/api/live/${s.id}/segment/${index}`; video.load(); };
   const seg = await api(`/api/live/${s.id}/segments`).catch(() => ({ done: [] }));
   if (token !== livePlayer.token || seg.done.length < 1) { if (token === livePlayer.token) setTimeout(() => { if (livePlayer.sid === s.id) { livePlayer.sid = null; runLivePlayer(s, true); } }, 4000); return; }
   livePlayer.index = seg.done[seg.done.length - 1];
   let current = a, next = b;
   load(current, livePlayer.index);
-  const advance = async () => {
-    if (token !== livePlayer.token) return;
-    const want = livePlayer.index + 1;
-    if (await ready(want)) { livePlayer.index = want; load(next, want); }
-    else if (token === livePlayer.token) { load(next, ++livePlayer.index); }
-  };
+  // The next segment is asked for at once: the server answers when it is finished (no timers in the page, which
+  // Chrome slows down when the window is covered). A segment that is gone makes the watchdog start from the newest.
+  const advance = () => { if (token !== livePlayer.token) return; livePlayer.index += 1; load(next, livePlayer.index); };
   current.oncanplay = () => { if (token !== livePlayer.token) return; current.play().catch(() => {}); current.classList.add('on'); livePlayer.playing = true; $('liveSound').hidden = false; current.oncanplay = null; advance(); };
   const swap = () => {
     if (token !== livePlayer.token || current === null) return;
     if (current.currentTime === 0 && !current.ended) return;
-    next.play().then(() => { next.classList.add('on'); current.classList.remove('on'); [current, next] = [next, current]; advance(); }).catch(() => setTimeout(swap, 500));
+    next.play().then(() => { next.classList.add('on'); current.classList.remove('on'); [current, next] = [next, current]; advance(); }).catch(() => { if (token === livePlayer.token) setTimeout(swap, 500); });
   };
-  for (const v of [a, b]) v.onended = () => { if (v === current) swap(); };
+  for (const v of [a, b]) {
+    v.onended = () => { if (v === current) swap(); };
+    v.onerror = () => { if (token === livePlayer.token) restartLivePlayer('segment error'); };   // a segment that did not load
+  }
+  livePlayer.current = () => current; livePlayer.lastT = -1; livePlayer.lastAt = Date.now();
 }
+// The chain of 6 s segments must keep moving: when the picture stops advancing for 8 s (a segment that failed, a swap
+// that never happened), it starts again from the newest segment, with the same sound setting. Before, it stayed
+// frozen and silent while the button still said «Silenciar».
+function restartLivePlayer(why) {
+  const s = liveUI.session; if (!s || current !== 'live') return;
+  livePlayer.restarts = (livePlayer.restarts || 0) + 1; livePlayer.lastRestart = why;
+  const running = ['starting', 'live', 'reconnecting'].includes(s.status);
+  stopLivePlayer(); if (running) runLivePlayer(s, true);
+}
+setInterval(() => {
+  if (current !== 'live' || !livePlayer.playing || !livePlayer.current) return;
+  const v = livePlayer.current();
+  if (!v) return;
+  if (v.currentTime !== livePlayer.lastT) { livePlayer.lastT = v.currentTime; livePlayer.lastAt = Date.now(); return; }
+  if (Date.now() - livePlayer.lastAt > 8000) restartLivePlayer('stalled');
+}, 2000);
 function paintLiveMoments() {
   const s = liveUI.session; if (!s) return;
   for (const b of document.querySelectorAll('[data-sort]')) b.classList.toggle('on', b.dataset.sort === liveUI.sort);

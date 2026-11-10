@@ -335,6 +335,7 @@ class LiveSession:
                 self.status = 'live'
             self.note('Capturando el directo y buscando momentos.' if self.reconnects == 0 else f'Reconectado (intento {self.reconnects}).')
             started = time.monotonic()
+            with self.lock: self.next_index = self.next_segment_number()
             try:
                 self.proc = subprocess.Popen(ffmpeg_capture_command(stream, self.segments, self.next_index), stdin=subprocess.DEVNULL,
                                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -351,6 +352,13 @@ class LiveSession:
                 self.reconnects += 1; self.status = 'reconnecting'
             if time.monotonic() - started > 60: backoff = 2
             self._wait_retry(backoff, 'Se perdió la señal del directo.'); backoff = min(60, backoff * 2)
+
+    def next_segment_number(self):
+        """Always after the newest segment on disk. The saved number can be old when ClipStudio was closed while
+        recording (it is only updated when FFmpeg stops): starting from it overwrote older segments, the preview went
+        back to them and went silent, and the new ones were never analysed (they were «already processed»)."""
+        existing = [int(p.stem[3:]) for p in self.segments.glob('seg*.ts') if p.stem[3:].isdigit()]
+        return max([self.next_index, self.processed_index + 1] + [n + 1 for n in existing])
 
     def _wait_retry(self, seconds, why):
         with self.lock: self.status = 'reconnecting'
