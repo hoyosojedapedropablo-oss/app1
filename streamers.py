@@ -26,6 +26,18 @@ FEATURED_YOUTUBE = [(s, 'es') for s in ('@auronplay', '@thegrefg', '@vegetta777'
 YOUTUBE_TTL = 600
 
 
+def youtube_live_page(ydl, slug):
+    """What a channel's /live page shows. YouTube answers it with a redirect to the live video (a «url» result with
+    no live fields), which was read as «not live» for every channel (HotSpanish, 795 k watching, «Desconectado»):
+    follow it to the video and read its real state. A channel that is not live answers with an error or its page."""
+    try: page = ydl.extract_info(f'https://www.youtube.com/{slug}/live', download=False, process=False) or {}
+    except Exception: return {}
+    if page.get('_type') == 'url' and 'watch?v=' in (page.get('url') or ''):
+        try: page = ydl.extract_info(page['url'], download=False, process=False) or {}
+        except Exception: return {}
+    return page
+
+
 def featured_all():
     return [('kick', s, l) for s, l in FEATURED_KICK] + [('youtube', s, l) for s, l in FEATURED_YOUTUBE]
 
@@ -83,8 +95,7 @@ class Streamers:
             except Exception: info = {}
             photo = next((t.get('url') for t in reversed(info.get('thumbnails') or []) if 'avatar' in (t.get('id') or '') or (t.get('width') or 0) == (t.get('height') or -1)), '')
             live = {}
-            try: live = ydl.extract_info(f'https://www.youtube.com/{slug}/live', download=False, process=False) or {}
-            except Exception: live = {}
+            live = youtube_live_page(ydl, slug)
             on = bool(live.get('is_live') or live.get('live_status') == 'is_live')
             return dict(platform='youtube', slug=slug, url=url_for('youtube', slug), name=info.get('channel') or info.get('uploader') or slug,
                         photo=photo, live=on, title=(live.get('title') or '') if on else '', viewers=live.get('concurrent_view_count') if on else None,
@@ -203,8 +214,7 @@ class Streamers:
     # --- featured Kick streamers: recommended on Inicio as soon as they go live (kept apart from the user's own) -------
     def _youtube_live(self, slug):
         with self._ydl() as ydl:
-            try: live = ydl.extract_info(f'https://www.youtube.com/{slug}/live', download=False, process=False) or {}
-            except Exception: live = {}
+            live = youtube_live_page(ydl, slug)
         on = bool(live.get('is_live') or live.get('live_status') == 'is_live')
         return dict(live=on, title=(live.get('title') or '') if on else '', viewers=live.get('concurrent_view_count') if on else None,
                     thumb=(live.get('thumbnail') or '') if on else '', video_id=live.get('id') if on else '')
@@ -336,8 +346,28 @@ class Streamers:
                 out.append(dict(key=key, platform='youtube', slug=slug, url=url_for('youtube', slug), name=e.get('channel') or e.get('title') or slug,
                                 avatar=('https:' + thumbs[-1]['url']) if thumbs and thumbs[-1].get('url', '').startswith('//') else (thumbs[-1].get('url') if thumbs else ''),
                                 live=False, followers=e.get('channel_follower_count'), clips=self.items.get(key, {}).get('clips', 0), new=key not in known))
-            return out
+            self._youtube_live_status(out)
+            return sorted(out, key=lambda r: not r['live'])
         return []
+
+    def _youtube_live_status(self, rows, check=6):
+        """YouTube's channel search does not say who is live (HotSpanish, 795 k watching, showed «Desconectado»):
+        take it from the live list already known, and look at the /live page of the first few results, in parallel."""
+        known = {r['key']: r for r in ((getattr(self, '_yt_live', None) or (0, []))[1])}
+        known.update({k: v for k, v in self.featured.items() if v.get('platform') == 'youtube' and v.get('live') and time.time() - v.get('checked', 0) < YOUTUBE_TTL})
+        def apply(r, info):
+            if info.get('live'): r.update(live=True, title=info.get('title') or '', viewers=info.get('viewers'), video_id=info.get('video_id') or '',
+                                          thumb=info.get('thumb') or (f"https://i.ytimg.com/vi/{info['video_id']}/hqdefault_live.jpg" if info.get('video_id') else ''))
+        todo = []
+        for r in rows:
+            if r['key'] in known: apply(r, known[r['key']])
+            elif len(todo) < check: todo.append(r)
+        if todo:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=len(todo)) as pool:
+                for r, info in zip(todo, pool.map(lambda r: self._youtube_live(r['slug']), todo)):
+                    try: apply(r, info)
+                    except Exception: pass
 
     def search(self, q):
         """Known streamers matching the name, plus an exact public lookup of the name on Kick (and @name on YouTube)."""
