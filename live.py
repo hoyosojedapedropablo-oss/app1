@@ -560,14 +560,28 @@ class LiveSession:
             with self.lock:
                 if any(m['status'] != 'discarded' and (overlaps(m, clip) or similar_text(m.get('text', ''), text)) for m in self.moments): continue
             if source:
+                verdict = self._judge(text)
+                if verdict and verdict['score'] < __import__('judge').DROP_BELOW:
+                    self.note(f'Se descartó un momento flojo (nota {verdict["score"]}): {verdict["analysis"].get("motivo") or ""}'[:200]); continue
+                if verdict: clip = {**clip, 'score': verdict['score'], 'verdict': verdict['verdict'], 'viral_kind': verdict['kind'],
+                                    'analysis': verdict['analysis'], 'marks': verdict['marks']}
                 clip = {**clip, **self._viral_title(text, clip)}
             self._add_moment({**clip, 'text': text, 'source': clip.get('source', source)})
+
+    def _judge(self, text):
+        """The viral judge's verdict on a moment (None when the local AI is not available: the moment is kept)."""
+        try:
+            import judge
+            return judge.judge(text, speaker=self.channel, context=self.title, names=self.names(), cancel=self.stop_event)
+        except Exception:
+            return None
 
     def _viral_title(self, text, clip):
         """Hook-first titles from what is actually said; the analyst's own title stays as an alternative."""
         try:
             import viral
-            result = viral.generate(text, speaker=self.channel, context=self.title, names=self.names(), cancel=self.stop_event)
+            result = viral.generate(text, speaker=self.channel, context=self.title, names=self.names(), cancel=self.stop_event,
+                                    analysis=clip.get('analysis'))
         except Exception:
             return {}
         if not result: return {}
@@ -609,6 +623,7 @@ class LiveSession:
                   'title': clip.get('title') or 'Momento del directo', 'titles': clip.get('titles') or [], 'text': clip.get('text', ''),
                   'score': clip.get('score'), 'category': clip.get('category', ''), 'reason': clip.get('reason', ''),
                   'evidence': clip.get('evidence', ''), 'claim': clip.get('claim', ''), 'source': clip.get('source', ''), 'cut_at_topic': bool(clip.get('cut_at_topic')),
+                  'verdict': clip.get('verdict', ''), 'viral_kind': clip.get('viral_kind', ''), 'analysis': clip.get('analysis') or {}, 'marks': clip.get('marks') or {},
                   'detected_at': datetime.now().strftime('%H:%M:%S'), 'status': 'rendering', 'job_id': None}
         with self.lock: self.moments.append(moment)
         self.note(f'Momento detectado: {moment["title"]}')

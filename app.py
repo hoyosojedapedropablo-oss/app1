@@ -312,6 +312,15 @@ def analyze(ident,options):
   def title_progress(done,total,stage):job.update(progress=98+round(done/max(1,total)),message=f'Títulos de clips para revisar · {done} de {total}')
   clips=complete_coverage(clips,transcript,job['duration'],options.minimum,options.maximum,completion,speaker=options.speaker,context=options.context,profile=profile,cancel=event,on_progress=title_progress,topics=topics)
   job['timings']['titles_s']=round(time.monotonic()-started,1)
+  if options.engine=='gpu':
+   # The viral judge gives the strongest clips an honest note (who says what to whom, why, what happens after).
+   import judge
+   top=sorted(clips,key=lambda c:-(c.get('score') or 0))[:15]
+   for i,c in enumerate(top):
+    if event.is_set():break
+    job.update(message=f'Revisando el potencial viral de los mejores clips · {i+1} de {len(top)}')
+    v=judge.judge(c.get('text',''),speaker=options.speaker,context=options.context)
+    if v:c.update(score=v['score'],verdict=v['verdict'],viral_kind=v['kind'],analysis=v['analysis'],marks=v['marks'],potential=v['score']>=75)
   job['topics']=topics
   job['coverage_percent']=round(100*covered(clips)/job['duration'],2)
   message=f'{len(clips)} clips · cobertura {job["coverage_percent"]}% del video. Mayor potencial identifica los destacados; el resto queda para tu revisión.' if clips else 'La selección quedó vacía tras la revisión. Esto no demuestra que el video no tenga potencial. Revisa la transcripción y añade contexto para volver a analizar sin transcribir de nuevo.'

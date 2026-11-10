@@ -715,3 +715,37 @@ input,select,textarea{font-family:var(--ui)!important}
 #configModal .modal-card.cfg-structured>:not(.cfg-head):not(.cfg-body):not(.modal-actions){display:none!important}
 #configModal .cfg-structured .cfg-head,#configModal .cfg-structured .modal-actions{flex:0 0 auto}
 #configModal{overflow:hidden!important}
+
+/* Score badges (Fluent 3D emoji, MIT, Microsoft): 85+ burns, so the clipper knows it goes up right now */
+.sbadge{position:relative;display:inline-flex;align-items:center;gap:6px;padding:4px 10px 4px 6px;border-radius:999px;font:700 12px var(--ui);line-height:1;white-space:nowrap;width:max-content;max-width:100%;background:rgba(10,10,12,.82);color:#f2f2f4;border:1px solid rgba(255,255,255,.08)}
+.sbadge .em{width:20px;height:20px;flex:none;position:relative;z-index:1}
+.sbadge .em.kind{width:18px;height:18px;margin-left:2px}
+.sbadge b{font:800 14px var(--ui);position:relative;z-index:1}
+.sbadge .sb-lbl{font:700 12px var(--ui);letter-spacing:0;text-transform:none;color:inherit;opacity:.95;position:relative;z-index:1}
+.sbadge.weak{color:#a9a9b2}.sbadge.weak .em{opacity:.75}
+.sbadge.good{color:#e6f3d6;border-color:rgba(130,200,80,.35)}
+.sbadge.great{color:#fff;background:linear-gradient(135deg,rgba(60,90,220,.9),rgba(140,70,230,.9));border-color:rgba(170,150,255,.5);box-shadow:0 0 14px rgba(120,100,255,.35)}
+.sbadge.great .em{animation:sb-lift 2.4s ease-in-out infinite}
+.sbadge.fire{color:#fff;background:linear-gradient(135deg,#ff3d00,#ff8a00 55%,#ffc400);border-color:#ffd54a;box-shadow:0 0 0 1px rgba(255,120,0,.4),0 0 18px rgba(255,90,0,.65),0 0 36px rgba(255,60,0,.35);animation:sb-glow 1.6s ease-in-out infinite;text-shadow:0 1px 2px rgba(120,20,0,.6);overflow:visible}
+.sbadge.fire .em{animation:sb-flick .9s ease-in-out infinite alternate;filter:drop-shadow(0 0 6px rgba(255,200,0,.9))}
+.sbadge .flames{position:absolute;left:8px;right:8px;top:-9px;height:14px;pointer-events:none;display:flex;justify-content:space-around}
+.sbadge .flames i{width:8px;height:12px;border-radius:50% 50% 50% 50%/65% 65% 35% 35%;background:radial-gradient(circle at 50% 75%,#fff59d,#ffb300 45%,rgba(255,61,0,0) 75%);animation:sb-rise 1.1s ease-in infinite;opacity:0}
+.sbadge .flames i:nth-child(2){animation-delay:.25s;height:15px}
+.sbadge .flames i:nth-child(3){animation-delay:.5s}
+.sbadge .flames i:nth-child(4){animation-delay:.15s;height:14px}
+.sbadge .flames i:nth-child(5){animation-delay:.7s}
+.sbadge.compact{padding:3px 8px 3px 4px}.sbadge.compact .em{width:18px;height:18px}.sbadge.compact b{font-size:13px}
+@keyframes sb-glow{0%,100%{box-shadow:0 0 0 1px rgba(255,120,0,.4),0 0 14px rgba(255,90,0,.55),0 0 28px rgba(255,60,0,.25)}50%{box-shadow:0 0 0 1px rgba(255,170,0,.6),0 0 24px rgba(255,110,0,.85),0 0 48px rgba(255,60,0,.45)}}
+@keyframes sb-flick{0%{transform:scale(1) rotate(-4deg)}100%{transform:scale(1.14) rotate(4deg)}}
+@keyframes sb-lift{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
+@keyframes sb-rise{0%{transform:translateY(6px) scale(.6);opacity:0}30%{opacity:.95}100%{transform:translateY(-10px) scale(1.1);opacity:0}}
+.thumb9 .sbadge,.clipcard .sbadge.compact{position:absolute;left:8px;top:8px;z-index:3}
+.live-row .sbadge{flex:none}
+.mcard>.sbadge{margin:2px 0}
+.why{display:block;font:500 12px/1.35 var(--ui);color:var(--muted,#9a9aa3);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.card.on-fire,.clipcard.on-fire,.clip.on-fire{box-shadow:0 0 0 1px rgba(255,120,0,.55),0 0 22px rgba(255,90,0,.22)}
+.clip .score{display:flex;flex-direction:column;gap:4px;align-items:flex-start}
+.score-bar.fire i{background:linear-gradient(90deg,#ff3d00,#ffc400)}
+.score-bar.great i{background:linear-gradient(90deg,#3c5adc,#8c46e6)}
+.score-bar.weak i{background:#55555e}
+@media (prefers-reduced-motion:reduce){.sbadge,.sbadge .em,.sbadge .flames i{animation:none!important}.sbadge .flames{display:none}}
