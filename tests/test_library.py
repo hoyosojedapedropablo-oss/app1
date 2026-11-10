@@ -113,7 +113,8 @@ class ApiTests(unittest.TestCase):
     def test_export_is_kept_and_recorded_but_a_preview_is_not(self):
         import app as backend
         from fastapi.testclient import TestClient
-        with tempfile.TemporaryDirectory() as tmp:
+        # ignore_cleanup_errors: the background thumbnail render may still be reading the video when the test ends
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             lib = library.Library(Path(tmp))
             with patch.object(backend, 'LIBRARY', lib), patch.object(backend, 'DATA', Path(tmp)), patch.object(backend, 'LIVE_DIR', Path(tmp) / 'live'), patch.dict(backend.JOBS, {}, clear=True):
                 client = TestClient(backend.app); source = Path(tmp) / 'src.mp4'

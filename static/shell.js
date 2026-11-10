@@ -35,9 +35,21 @@ function toast(title, text, action) {
 // --- navigation ---------------------------------------------------------------------------------------------------
 const VIEWS = ['home', 'analysis', 'live', 'library', 'editor', 'projects', 'settings'];
 let current = 'home';
+// «Editor» from the menu with no clip open: the last clip you edited (or the newest one) opens in the editor.
+async function openLastClip() {
+  toast('Abriendo tu último clip…', 'Continúas donde lo dejaste.');
+  try {
+    const lib = await api('/api/library?sort=recent');
+    const items = lib.items.filter((c) => !c.missing);
+    const last = items.filter((c) => c.status === 'edited' || c.status === 'draft').sort((a, b) => (b.updated || '').localeCompare(a.updated || ''))[0] || items[0];
+    if (!last) { toast('Aún no tienes clips', 'Empieza con un directo o un video largo.'); navigate('home'); return; }
+    await openLibraryClip(last);
+    if (current !== 'editor' && job) navigate('editor');
+  } catch (e) { toast('No se pudo abrir el editor', e.message); navigate('library'); }
+}
 function navigate(name) {
   if (!VIEWS.includes(name)) name = 'home';
-  if (name === 'editor' && !job) { toast('Abre un clip primero', 'Elige uno en la biblioteca o en proyectos.'); name = 'library'; }
+  if (name === 'editor' && !job) { openLastClip(); return; }      // «Editor» with nothing open: continue with the last clip
   current = name;
   if (name !== 'live') { try { stopLivePlayer(); } catch {} }
   try { silenceOutside(name); } catch {}
@@ -132,11 +144,11 @@ setInterval(() => {
   if (panel && panel._card && !panel._card.isConnected) hideBigPreview();
   for (const m of document.querySelectorAll('video,audio')) {
     if (m.classList.contains('live-vid')) { if (m.muted !== livePlayer.muted) m.muted = livePlayer.muted; if (current !== 'live' && !m.paused) m.pause(); continue; }
-    if (!m.paused && !m.muted && !m.getClientRects().length) m.pause();
+    if (!m.paused && !m.muted && !m.getClientRects().length && !m.closest('.clip-modal')) m.pause();
   }
 }, 1000);
-// A hidden browser tab stops its sound too (the live preview restarts by itself when you come back).
-document.addEventListener('visibilitychange', () => { if (document.hidden) { hideBigPreview(); for (const m of document.querySelectorAll('video,audio')) if (!m.paused && !m.muted) m.pause(); } });
+// A covered or background window keeps its sound (you can listen to a stream while doing something else): Chrome
+// reports such a window as hidden, and stopping the sound there was the «sound lost after a few minutes».
 
 // --- hover preview: starts after a short pause, muted, scrubbable with the mouse -------------------------------------
 function previewBox(img, videoUrl, start, length, ratio) {
@@ -195,7 +207,10 @@ function showBigPreview(c, card) {
 }
 function hideBigPreview() { clearTimeout(hoverTimer); hoverFor = null; document.querySelectorAll('#bigPreview').forEach((p) => { p.querySelectorAll('video').forEach(stopMedia); p.remove(); }); }
 // --- Clip preview, centred: the clip comes to the middle, everything behind it blurs (Biblioteca, Inicio, directo) ---
-function openClipModal(c) {
+// After closing, a clip under the cursor does not open it again by itself (move to another clip, or click).
+let modalClosedAt = 0;
+function openClipModal(c, onEdit) {
+  if (document.querySelector(`.clip-modal[data-id="${CSS.escape(c.id)}"]`)) return;      // already open for this clip
   hideBigPreview(); document.querySelectorAll('.clip-modal').forEach((m) => m.remove());
   const video = h('video', { playsinline: true, loop: true, preload: 'auto' }); video.muted = false;
   const wait = h('div', { class: 'bp-wait' }, h('span', { class: 'bars', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'), h('i')), h('span', { text: 'Preparando la vista previa…' }));
@@ -203,13 +218,13 @@ function openClipModal(c) {
   const bar = h('i'); const progress = h('div', { class: 'cm-progress', title: 'Ir a este punto' }, bar);
   const sound = h('button', { class: 'cm-sound', type: 'button', title: 'Sonido', text: '🔊' });
   const frame = h('div', { class: 'cm-frame' }, h('img', { src: c.thumb_url, alt: '' }), video, wait, playBtn, sound, progress);
-  const close = () => { stopMedia(video); modal.classList.remove('in'); modal.classList.add('out'); setTimeout(() => modal.remove(), 220); };
-  const modal = h('div', { class: 'clip-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': `Vista previa de ${c.title}`, onclick: (e) => { if (e.target === modal) close(); } },
+  const close = () => { modalClosedAt = Date.now(); stopMedia(video); modal.classList.remove('in'); modal.classList.add('out'); setTimeout(() => modal.remove(), 220); };
+  const modal = h('div', { class: 'clip-modal', 'data-id': c.id, role: 'dialog', 'aria-modal': 'true', 'aria-label': `Vista previa de ${c.title}`, onclick: (e) => { if (e.target === modal) close(); } },
     h('div', { class: 'cm-box' },
       h('button', { class: 'theater-x', type: 'button', title: 'Cerrar (Esc)', 'aria-label': 'Cerrar la vista previa', text: '×', onclick: close }),
       frame,
       h('div', { class: 'cm-foot' }, h('span', { class: 'tf-text' }, h('b', { text: c.title }), h('span', { class: 'muted', text: [c.channel, fmtDur(c.duration || 0)].filter(Boolean).join(' · ') })),
-        h('button', { class: 'btn ghost', type: 'button', text: 'Editar', onclick: () => { close(); openLibraryClip(c).catch?.(() => {}); } }),
+        h('button', { class: 'btn ghost', type: 'button', text: 'Editar', onclick: () => { close(); (onEdit ? onEdit() : openLibraryClip(c))?.catch?.(() => {}); } }),
         h('button', { class: 'btn primary', type: 'button', text: '↓ Exportar', onclick: (e) => downloadClip(c, e.currentTarget) }))));
   const toggle = () => { if (video.paused) video.play().catch(() => {}); else video.pause(); };
   frame.addEventListener('click', (e) => { if (e.target === video || e.target === frame || e.target === playBtn || playBtn.contains(e.target)) toggle(); });
@@ -243,10 +258,10 @@ async function downloadClip(c, button) {
 function clipCard(c, onChange) {
   const box = previewBox(c.thumb_url, null, clipStart(c), c.duration);
   const thumbImg = box.querySelector('img'); if (thumbImg) retryThumb(thumbImg, c.thumb_url);
-  box.addEventListener('click', () => { hideBigPreview(); openLibraryClip(c); });
+  box.addEventListener('click', () => { clearTimeout(hoverTimer); hideBigPreview(); openLibraryClip(c); });
   if (!c.missing) {
-    box.addEventListener('mouseenter', () => { clearTimeout(hoverTimer); hoverTimer = setTimeout(() => { if (box.isConnected) showBigPreview(c, box); }, 350); });
-    box.addEventListener('mouseleave', (e) => { clearTimeout(hoverTimer); if (!e.relatedTarget?.closest?.('#bigPreview')) hideBigPreview(); });
+    box.addEventListener('mouseenter', () => { clearTimeout(hoverTimer); hoverTimer = setTimeout(() => { if (box.isConnected && box.matches(':hover') && Date.now() - modalClosedAt > 1200) openClipModal(c); }, 650); });
+    box.addEventListener('mouseleave', () => clearTimeout(hoverTimer));
   }
   const star = h('button', { class: 'star', type: 'button', 'aria-label': c.favorite ? 'Quitar de favoritos' : 'Añadir a favoritos', 'aria-pressed': String(c.favorite),
     onclick: async (e) => { e.stopPropagation(); await api(`/api/library/${encodeURIComponent(c.id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ favorite: !c.favorite }) }); c.favorite = !c.favorite; onChange?.(); } });
@@ -591,7 +606,7 @@ function paintLiveView(s) {
   refresh();
   // Only on the live screen: the session keeps being followed from other screens, and the player restarting there
   // (hidden, with its sound on) was the stream heard in the background with no button to silence it.
-  runLivePlayer(s, running && current === 'live' && !document.hidden);
+  runLivePlayer(s, running && current === 'live');
   paintLiveMoments();
 }
 
@@ -616,35 +631,43 @@ async function runLivePlayer(s, running) {
   if (livePlayer.sid === s.id && livePlayer.playing) return;
   stopLivePlayer(); livePlayer.sid = s.id; const token = livePlayer.token;
   const [a, b] = liveVideos();
-  const ready = async (index) => {   // wait until that segment is finished
-    for (let i = 0; i < 30 && token === livePlayer.token; i++) {
-      const seg = await api(`/api/live/${s.id}/segments`).catch(() => ({ done: [] }));
-      if (seg.done.includes(index)) return true;
-      if (seg.done.length && seg.done[seg.done.length - 1] > index + 3) { livePlayer.index = seg.done[seg.done.length - 2] - 1; return false; }   // fell behind: jump ahead
-      await new Promise((r) => setTimeout(r, 1500));
-    }
-    return false;
-  };
   const load = (video, index) => { video.muted = livePlayer.muted; video.src = `/api/live/${s.id}/segment/${index}`; video.load(); };
   const seg = await api(`/api/live/${s.id}/segments`).catch(() => ({ done: [] }));
   if (token !== livePlayer.token || seg.done.length < 1) { if (token === livePlayer.token) setTimeout(() => { if (livePlayer.sid === s.id) { livePlayer.sid = null; runLivePlayer(s, true); } }, 4000); return; }
   livePlayer.index = seg.done[seg.done.length - 1];
   let current = a, next = b;
   load(current, livePlayer.index);
-  const advance = async () => {
-    if (token !== livePlayer.token) return;
-    const want = livePlayer.index + 1;
-    if (await ready(want)) { livePlayer.index = want; load(next, want); }
-    else if (token === livePlayer.token) { load(next, ++livePlayer.index); }
-  };
+  // The next segment is asked for at once: the server answers when it is finished (no timers in the page, which
+  // Chrome slows down when the window is covered). A segment that is gone makes the watchdog start from the newest.
+  const advance = () => { if (token !== livePlayer.token) return; livePlayer.index += 1; load(next, livePlayer.index); };
   current.oncanplay = () => { if (token !== livePlayer.token) return; current.play().catch(() => {}); current.classList.add('on'); livePlayer.playing = true; $('liveSound').hidden = false; current.oncanplay = null; advance(); };
   const swap = () => {
     if (token !== livePlayer.token || current === null) return;
     if (current.currentTime === 0 && !current.ended) return;
-    next.play().then(() => { next.classList.add('on'); current.classList.remove('on'); [current, next] = [next, current]; advance(); }).catch(() => setTimeout(swap, 500));
+    next.play().then(() => { next.classList.add('on'); current.classList.remove('on'); [current, next] = [next, current]; advance(); }).catch(() => { if (token === livePlayer.token) setTimeout(swap, 500); });
   };
-  for (const v of [a, b]) v.onended = () => { if (v === current) swap(); };
+  for (const v of [a, b]) {
+    v.onended = () => { if (v === current) swap(); };
+    v.onerror = () => { if (token === livePlayer.token) restartLivePlayer('segment error'); };   // a segment that did not load
+  }
+  livePlayer.current = () => current; livePlayer.lastT = -1; livePlayer.lastAt = Date.now();
 }
+// The chain of 6 s segments must keep moving: when the picture stops advancing for 8 s (a segment that failed, a swap
+// that never happened), it starts again from the newest segment, with the same sound setting. Before, it stayed
+// frozen and silent while the button still said «Silenciar».
+function restartLivePlayer(why) {
+  const s = liveUI.session; if (!s || current !== 'live') return;
+  livePlayer.restarts = (livePlayer.restarts || 0) + 1; livePlayer.lastRestart = why;
+  const running = ['starting', 'live', 'reconnecting'].includes(s.status);
+  stopLivePlayer(); if (running) runLivePlayer(s, true);
+}
+setInterval(() => {
+  if (current !== 'live' || !livePlayer.playing || !livePlayer.current) return;
+  const v = livePlayer.current();
+  if (!v) return;
+  if (v.currentTime !== livePlayer.lastT) { livePlayer.lastT = v.currentTime; livePlayer.lastAt = Date.now(); return; }
+  if (Date.now() - livePlayer.lastAt > 8000) restartLivePlayer('stalled');
+}, 2000);
 function paintLiveMoments() {
   const s = liveUI.session; if (!s) return;
   for (const b of document.querySelectorAll('[data-sort]')) b.classList.toggle('on', b.dataset.sort === liveUI.sort);
@@ -668,8 +691,8 @@ function momentCard(s, m) {
   const img = box.querySelector('img'); if (img) retryThumb(img, thumb);
   // Same big preview with sound as in the library: the moment as it will look, without opening the editor.
   const look = { id, title: m.title, channel: s.channel || 'Directo', duration: m.duration, thumb_url: thumb };
-  box.addEventListener('mouseenter', () => { clearTimeout(hoverTimer); hoverTimer = setTimeout(() => { if (box.isConnected) showBigPreview(look, box); }, 350); });
-  box.addEventListener('mouseleave', (e) => { clearTimeout(hoverTimer); if (!e.relatedTarget?.closest?.('#bigPreview')) hideBigPreview(); });
+  box.addEventListener('mouseenter', () => { clearTimeout(hoverTimer); hoverTimer = setTimeout(() => { if (box.isConnected && box.matches(':hover') && Date.now() - modalClosedAt > 1200) openClipModal(look, () => openMoment(s, m)); }, 650); });
+  box.addEventListener('mouseleave', () => clearTimeout(hoverTimer));
   if (m.score != null) box.append(h('span', { class: 'chip score', text: String(Math.round(m.score)) }));
   box.append(h('span', { class: 'chip glass dur', text: fmtDur(m.duration) }));
   const card = h('div', { class: 'card mcard' + (picked ? ' sel' : ''), role: 'button', tabindex: '0', 'aria-pressed': String(picked),
