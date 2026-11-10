@@ -40,6 +40,7 @@ function navigate(name) {
   if (name === 'editor' && !job) { toast('Abre un clip primero', 'Elige uno en la biblioteca o en proyectos.'); name = 'library'; }
   current = name;
   if (name !== 'live') { try { stopLivePlayer(); } catch {} }
+  try { silenceOutside(name); } catch {}
   for (const v of VIEWS) $(v + 'View')?.classList.toggle('hidden', v !== name);
   for (const b of document.querySelectorAll('#sideNav button')) b.classList.toggle('on', b.dataset.view === name);
   window.scrollTo({ top: 0 });
@@ -78,6 +79,35 @@ async function openLibraryClip(item) {
     await openProject(item.project_id, item.origin === 'live' ? null : item.clip_ref);
   } catch (e) { toast('No se pudo abrir el clip', e.message); }
 }
+
+// --- Sound: one thing plays with sound at a time ------------------------------------------------------------------
+// Videos with sound (editor, big previews, the live preview, the official Kick/YouTube player) used to keep playing
+// when another started or when you changed screen, with nothing to stop them. Now the newest one wins.
+function muteLivePlayer() {
+  livePlayer.muted = true;
+  for (const v of document.querySelectorAll('.live-vid')) v.muted = true;
+  if ($('liveSound')) $('liveSound').textContent = '🔇 Activar sonido';
+}
+function silenceOthers(keep) {
+  for (const m of document.querySelectorAll('video,audio')) {
+    if (m === keep || m.paused || m.muted) continue;
+    if (m.classList.contains('live-vid')) { if (!keep?.classList?.contains('live-vid')) muteLivePlayer(); continue; }   // the live chain keeps going, silent
+    m.pause();
+  }
+  if (!keep?.closest?.('.player-box')) document.querySelectorAll('.player-box').forEach((b) => b.closest('.cs-modal')?.remove());
+}
+function silenceOutside(view) {
+  hideBigPreview();
+  document.querySelectorAll('.player-box').forEach((b) => b.closest('.cs-modal')?.remove());
+  const host = $(view + 'View');
+  for (const m of document.querySelectorAll('video,audio')) if (!m.paused && !host?.contains(m)) m.pause();
+}
+for (const ev of ['play', 'volumechange']) document.addEventListener(ev, (e) => {
+  const m = e.target;
+  if (m instanceof HTMLMediaElement && !m.paused && !m.muted && m.volume > 0) silenceOthers(m);
+}, true);
+// A hidden browser tab stops its sound too (the live preview restarts by itself when you come back).
+document.addEventListener('visibilitychange', () => { if (document.hidden) { hideBigPreview(); for (const m of document.querySelectorAll('video,audio')) if (!m.paused && !m.muted) m.pause(); } });
 
 // --- hover preview: starts after a short pause, muted, scrubbable with the mouse -------------------------------------
 function previewBox(img, videoUrl, start, length, ratio) {
@@ -188,7 +218,9 @@ $('removeModal').addEventListener('keydown', (e) => { if (e.key === 'Escape') $(
 // --- Inicio -------------------------------------------------------------------------------------------------------
 async function renderHome() {
   const root = $('homeView'); put(root, h('p', { class: 'muted', text: 'Cargando…' }));
-  const [lib, jobs, sessions, people] = await Promise.all([api('/api/library?sort=recent').catch(() => ({ items: [], channels: [], activity: [], total: 0 })), api('/api/jobs').catch(() => []), api('/api/live').catch(() => []), loadStreamers()]);
+  const [lib, jobs, sessions, people, featured] = await Promise.all([api('/api/library?sort=recent').catch(() => ({ items: [], channels: [], activity: [], total: 0 })), api('/api/jobs').catch(() => []), api('/api/live').catch(() => []), loadStreamers(), api('/api/streamers/featured').catch(() => [])]);
+  const discover = (people || []).length < 4 ? await api('/api/streamers/featured?all=true').catch(() => []) : [];
+  clearInterval(homeTimer); homeTimer = setInterval(refreshHomeLive, 60000);
   const hour = new Date().getHours();
   const hello = hour < 12 ? 'Buenos días' : hour < 19 ? 'Buenas tardes' : 'Buenas noches';
   const search = h('input', { 'aria-label': 'Buscar clips, streamers o proyectos', placeholder: 'Buscar clips, streamers o proyectos' });
@@ -198,8 +230,8 @@ async function renderHome() {
   const thumbs = lib.items.filter((c) => !c.missing).slice(0, 4).map((c) => c.thumb_url);
   const pic = (urls) => h('div', { class: 'pic' }, urls.length ? urls.map((u) => h('img', { src: u, alt: '', onerror: (e) => e.target.remove() })) : h('span', { class: 'noimg', text: '' }));
   put(root, 
-    h('div', { class: 'home-hello' }, h('h1', {}, h('span', { class: 'hi', text: hello }), '¿Qué vamos a crear hoy?'), h('label', { class: 'search' }, svg('<circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path>', 16), search)),
-    liveNowSection(people || []),
+    homeHero(hello, search, people || [], featured || [], lib, jobs),
+    h('div', { id: 'homeLive' }, homeLiveSections(people || [], featured || [], discover)),
     running.length ? h('div', {}, h('div', { class: 'section-head' }, h('span', { style: 'width:9px;height:9px;border-radius:50%;background:var(--live);animation:pulse 1.8s infinite' }), h('h2', { text: 'Directos en curso' }), h('span', { class: 'muted', text: 'ClipStudio los está siguiendo ahora mismo.' }), h('button', { class: 'btn ghost', type: 'button', text: 'Abrir clipping en vivo', onclick: () => navigate('live') })),
       h('div', { class: 'rail' }, running.map((s) => liveCard(s)))) : null,
     h('div', { class: 'grid quick' },
@@ -214,6 +246,108 @@ async function renderHome() {
       h('div', { class: 'card', style: 'padding:20px' }, h('h2', { text: 'Proyectos recientes', style: 'margin:0 0 12px;font-size:20px' }), jobs.slice().sort((a, b) => b.updated - a.updated).slice(0, 3).map(projectRow)),
       h('div', { class: 'card', style: 'padding:20px' }, h('h2', { text: 'Actividad', style: 'margin:0 0 12px;font-size:20px' }), lib.activity.length ? lib.activity.slice(0, 6).map((a) => h('div', { style: 'display:flex;gap:12px;margin-bottom:12px' }, h('span', { style: `width:8px;height:8px;border-radius:50%;margin-top:6px;flex:none;background:${a.kind === 'export' ? 'var(--blue)' : a.kind === 'remove' ? 'var(--amber)' : 'var(--green)'}` }), h('span', { style: 'display:flex;flex-direction:column;gap:2px' }, h('span', { text: a.text }), h('span', { class: 'muted', text: fmtDate(a.at) })))) : h('p', { class: 'muted', text: 'Aquí aparecerán tus análisis terminados, exportaciones y cambios.' })))
   );
+}
+// --- Inicio: who is live now (people you follow + recommended), refreshed every minute ----------------------------
+let homeTimer = null;
+async function refreshHomeLive() {
+  if (current !== 'home' || document.hidden || !$('homeLive')) return;
+  const [people, featured] = await Promise.all([loadStreamers(), api('/api/streamers/featured').catch(() => [])]);
+  const discover = people.length < 4 ? await api('/api/streamers/featured?all=true').catch(() => []) : [];
+  if (current === 'home' && $('homeLive')) put($('homeLive'), homeLiveSections(people, featured, discover));
+}
+const followUrl = (url) => api('/api/streamers/follow', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
+async function followStreamer(s, button) {
+  if (button) { button.disabled = true; button.textContent = '…'; }
+  try {
+    await followUrl(s.url);
+    toast(`Sigues a ${s.name}`, s.live ? 'Ya aparece en «En vivo ahora».' : 'Aparecerá en «En vivo ahora» cuando empiece un directo.');
+    refreshHomeLive(); setTimeout(refreshHomeLive, 4000);     // the first live check runs in the background
+  } catch (e) { toast('No se pudo seguir', e.message); if (button) { button.disabled = false; button.textContent = '+ Seguir'; } }
+}
+async function unfollowStreamer(s) {
+  if (!confirm(`¿Dejar de seguir a ${s.name}? Sus clips y tu configuración para este canal se conservan.`)) return;
+  try { await api(`/api/streamers/${encodeURIComponent(s.key)}`, { method: 'DELETE' }); toast(`Ya no sigues a ${s.name}`, 'Sus clips siguen en la biblioteca.'); refreshHomeLive(); }
+  catch (e) { toast('No se pudo cambiar', e.message); }
+}
+const compact = (n) => Number(n) >= 1e6 ? `${(Number(n) / 1e6).toLocaleString('es', { maximumFractionDigits: 1 })} M` : Number(n) >= 1e3 ? `${Math.round(Number(n) / 1e3)} mil` : String(n);
+const SEARCH_ICON = '<circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path>';
+function homeHero(hello, search, people, featured, lib, jobs) {
+  const live = people.filter((s) => s.live).concat(featured).filter((s) => s.thumb).slice(0, 3);
+  const liveCount = people.filter((s) => s.live).length + featured.length;
+  return h('section', { class: 'home-hero' },
+    h('div', { class: 'hero-glow', 'aria-hidden': 'true' }),
+    h('div', { class: 'hero-text' }, h('span', { class: 'hi', text: hello }),
+      h('h1', {}, '¿Qué vamos a ', h('span', { class: 'grad', text: 'crear' }), ' hoy?'),
+      h('p', { class: 'muted', text: 'Convierte directos y videos largos en clips verticales listos para publicar, con IA local y sin pagar APIs.' }),
+      h('label', { class: 'search' }, svg(SEARCH_ICON, 16), search),
+      h('div', { class: 'hero-stats' },
+        h('button', { class: 'stat', type: 'button', onclick: () => $('homeLive')?.scrollIntoView({ behavior: 'smooth' }) }, h('span', { class: 'pulse-dot' }), h('b', { text: String(liveCount) }), h('span', { text: 'en directo ahora' })),
+        h('button', { class: 'stat', type: 'button', onclick: () => navigate('library') }, h('b', { text: String(lib.total) }), h('span', { text: 'clips guardados' })),
+        h('button', { class: 'stat', type: 'button', onclick: () => navigate('projects') }, h('b', { text: String(jobs.length) }), h('span', { text: 'proyectos' })))),
+    h('div', { class: 'hero-wall' + (live.length ? '' : ' empty') }, live.length
+      ? live.map((s, i) => h('button', { class: 'wall-tile t' + i, type: 'button', title: `Ver a ${s.name}`, onclick: () => watchStream(s) },
+          h('img', { src: s.thumb, alt: `Directo de ${s.name}`, referrerpolicy: 'no-referrer', onerror: (e) => e.target.closest('.wall-tile')?.remove() }),
+          h('span', { class: 'chip live', text: '● EN VIVO' }),
+          h('span', { class: 'wall-who' }, avatarImg(s, 26, 'var(--live)'), h('b', { text: s.name }), s.viewers ? h('span', { text: compact(s.viewers) }) : null)))
+      : h('img', { class: 'wall-banner', src: '/static/img/clipping-en-vivo.webp', alt: 'Clipping en vivo en YouTube y Kick' })));
+}
+function homeLiveSections(people, featured, discover) {
+  const live = people.filter((s) => s.live);
+  const head = (title, note, extra, dot) => h('div', { class: 'section-head' }, dot ? h('span', { class: 'pulse-dot' }) : null, h('h2', { text: title }), h('span', { class: 'muted', text: note }), extra || null);
+  const offline = discover.filter((s) => !s.live);
+  return [
+    // People you follow: photo with a red ring when live; × to stop following
+    h('div', { class: 'following' },
+      head('Siguiendo', people.length ? `${people.length} streamers y canales · los que están en directo van primero.` : 'Sigue a tus streamers de Kick y canales de YouTube para ver aquí cuándo están en directo.',
+        h('button', { class: 'btn ghost', type: 'button', text: '+ Seguir streamer o canal', onclick: followDialog })),
+      h('div', { class: 'follow-strip' }, people.length
+        ? people.map((s) => h('div', { class: 'follow-pill' + (s.live ? ' is-live' : '') },
+            h('button', { class: 'fp-main', type: 'button', title: s.live ? `Ver a ${s.name} en directo` : `${s.name} no está en directo`, onclick: () => s.live ? watchStream(s) : toast(`${s.name} no está en directo`, 'Aparecerá en «En vivo ahora» cuando empiece.') },
+              h('span', { class: 'fp-photo' }, avatarImg(s, 60, s.live ? 'var(--live)' : '#2f2f36'), s.live ? h('span', { class: 'chip live mini', text: 'EN VIVO' }) : null),
+              h('b', { text: s.name }), h('span', { class: 'fp-plat' }, platformLogo(s.platform))),
+            h('button', { class: 'fp-x', type: 'button', title: `Dejar de seguir a ${s.name}`, 'aria-label': `Dejar de seguir a ${s.name}`, text: '×', onclick: () => unfollowStreamer(s) })))
+        : h('button', { class: 'follow-empty', type: 'button', onclick: followDialog }, h('span', { class: 'fe-plus', text: '+' }), h('b', { text: 'Sigue a tu primer streamer' }), h('span', { class: 'muted', text: 'Busca por nombre o pega su enlace de Kick o YouTube.' })))),
+    // Live now among the people you follow
+    live.length ? h('div', {}, head('En vivo ahora', 'Tus streamers en directo. Los que más clipeas van primero.', h('button', { class: 'btn ghost', type: 'button', text: 'Abrir clipping en vivo', onclick: () => navigate('live') }), true),
+      h('div', { class: 'rail' }, live.map((s, i) => streamCard(s, i === 0 && s.clips ? '★ El que más clipeas' : '')))) : null,
+    // Recommended streams live right now (Kick and YouTube)
+    featured.length ? h('div', {}, head(live.length ? 'Recomendados en directo' : 'En directo ahora · recomendados', 'Streamers de Kick y YouTube con más audiencia que están en directo ahora. Síguelos para tenerlos siempre aquí.', null, true),
+      h('div', { class: 'rail' }, featured.map((s) => streamCard(s, s.lang === 'es' ? 'Recomendado · Español' : 'Recomendado', true)))) : null,
+    // To follow, while you follow few
+    offline.length ? h('div', {}, head('Descubre streamers', 'Los más vistos de Kick y YouTube. Síguelos y aparecerán aquí en cuanto estén en directo.'),
+      h('div', { class: 'discover' }, offline.slice(0, 12).map((s) => h('div', { class: 'disc-card' }, avatarImg(s, 64), h('b', { text: s.name }),
+        h('span', { class: 'muted disc-meta' }, platformLogo(s.platform), s.followers ? h('span', { text: `${compact(s.followers)} seguidores` }) : null),
+        h('button', { class: 'btn ghost', type: 'button', text: '+ Seguir', onclick: (e) => followStreamer(s, e.currentTarget) }))))) : null,
+  ];
+}
+// «Seguir streamer o canal»: search by name on Kick and YouTube, or paste a link.
+function followDialog() {
+  const input = h('input', { placeholder: 'Nombre del streamer o enlace de Kick / YouTube', 'aria-label': 'Nombre o enlace del streamer' });
+  const list = h('div', { class: 'follow-results' }, h('p', { class: 'muted', text: 'Escribe al menos 2 letras. Se busca en Kick y en YouTube.' }));
+  const modal = h('div', { class: 'cs-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Seguir streamer o canal', onclick: (e) => { if (e.target === modal) modal.remove(); } },
+    h('div', { class: 'box follow-box' },
+      h('div', { style: 'display:flex;align-items:center;gap:12px' }, h('h2', { text: 'Seguir streamer o canal', style: 'margin:0;flex:1' }), h('button', { class: 'btn ghost', type: 'button', text: 'Cerrar', onclick: () => modal.remove() })),
+      h('label', { class: 'search' }, svg(SEARCH_ICON, 16), input), list));
+  modal.addEventListener('keydown', (e) => { if (e.key === 'Escape') modal.remove(); });
+  let timer = null, token = 0;
+  input.addEventListener('input', () => {
+    clearTimeout(timer); const q = input.value.trim(); if (q.length < 2) return;
+    const isLink = /^https?:|kick\.com\/|youtu/i.test(q);
+    timer = setTimeout(async () => {
+      const mine = ++token; put(list, h('p', { class: 'muted', text: `Buscando «${q}» en Kick y YouTube…` }));
+      const groups = await Promise.all((isLink ? ['link'] : ['kick', 'youtube']).map((sc) => api(`/api/streamers/search?scope=${sc}&q=${encodeURIComponent(q)}`).catch(() => [])));
+      if (mine !== token) return;
+      const found = groups.flat(); const known = new Set(streamersCache.map((s) => s.key));
+      put(list, found.length ? found.slice(0, 10).map((s) => h('div', { class: 'streamer-row' }, avatarImg(s, 48),
+          h('span', { style: 'display:flex;flex-direction:column;gap:3px;min-width:0;flex:1' },
+            h('span', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' }, h('b', { text: s.name }), s.live ? h('span', { class: 'chip live', text: '● EN VIVO' }) : null, platformLogo(s.platform)),
+            h('span', { class: 'muted', text: s.followers ? `${compact(s.followers)} seguidores` : s.platform === 'kick' ? 'Kick' : 'YouTube' })),
+          known.has(s.key) ? h('span', { class: 'chip glass', text: '✓ Siguiendo' })
+            : h('button', { class: 'btn primary', type: 'button', text: '+ Seguir', onclick: async (e) => { const b = e.currentTarget; await followStreamer(s, b); b.replaceWith(h('span', { class: 'chip glass', text: '✓ Siguiendo' })); loadStreamers(); } })))
+        : h('p', { class: 'muted', text: 'Sin resultados. Prueba con otro nombre o pega el enlace del canal.' }));
+    }, isLink ? 0 : 300);
+  });
+  document.body.append(modal); input.focus();
 }
 function continueCard(items) {
   const last = items.filter((c) => c.status === 'edited' || c.status === 'draft').sort((a, b) => (b.updated || '').localeCompare(a.updated || ''))[0];
@@ -387,7 +521,9 @@ function paintLiveView(s) {
   // Still image as a fallback (and for stopped sessions); while recording, the video player below takes over.
   const refresh = () => { const img = $('liveFrame'); const next = new Image(); next.onload = () => { img.src = next.src; }; next.src = `/api/live/${s.id}/frame?t=${Date.now()}`; if (running && current === 'live' && !livePlayer.playing) liveUI.frameTimer = setTimeout(refresh, 5000); };
   refresh();
-  runLivePlayer(s, running);
+  // Only on the live screen: the session keeps being followed from other screens, and the player restarting there
+  // (hidden, with its sound on) was the stream heard in the background with no button to silence it.
+  runLivePlayer(s, running && current === 'live' && !document.hidden);
   paintLiveMoments();
 }
 
@@ -592,6 +728,203 @@ window.paintTime = () => { basePaintTime(); try { paintTimeline(); } catch {} };
 paintTime = window.paintTime;
 $('title').addEventListener('input', () => paintEditorHeader());
 buildEditorLayout();
+// --- Editor (parte 4): undo / redo, moments filter, slider values, shortcuts --------------------------------------
+// Undo history per clip: a snapshot of the clip's settings after each change (grouped: a drag or typing is one step).
+const history = new Map();   // clip id -> { past: [json], future: [json] }
+let historyTimer = null, applyingHistory = false;
+function histFor(id) { if (!history.has(id)) history.set(id, { past: [], future: [] }); return history.get(id); }
+function snapshot() {
+  if (applyingHistory || !selected || selected.id === 'manual') return;
+  const hst = histFor(selected.id), now = JSON.stringify(settings());
+  if (hst.past[hst.past.length - 1] !== now) { hst.past.push(now); if (hst.past.length > 80) hst.past.shift(); hst.future = []; }
+  paintHistoryButtons();
+}
+const baseSaveCurrent = saveCurrent;
+window.saveCurrent = () => { baseSaveCurrent(); clearTimeout(historyTimer); historyTimer = setTimeout(snapshot, 450); };
+saveCurrent = window.saveCurrent;
+function applySnapshot(json) {
+  const e = JSON.parse(json), framingBefore = $('framing').value;
+  applyingHistory = true;
+  try {
+    for (const [k, v] of Object.entries(e)) { const el = $(k); if (!el || k === 'clip_id') continue; if (el.type === 'checkbox') el.checked = !!v; else el.value = v ?? ''; }
+    cues = (e.captions || []).map((c) => ({ ...c }));
+    renderCueEditor();
+    if ($('framing').value !== framingBefore) $('framing').dispatchEvent(new Event('change'));
+    baseSaveCurrent(); paint(); paintEditorHeader(); cueSignature = ''; paintTimeline();
+  } finally { applyingHistory = false; }
+  paintHistoryButtons();
+}
+function undo() {
+  if (!selected) return; const hst = histFor(selected.id);
+  if (hst.past.length < 2) { toast('Nada que deshacer', 'Aún no hay cambios en este clip.'); return; }
+  hst.future.push(hst.past.pop()); applySnapshot(hst.past[hst.past.length - 1]); say('Cambio deshecho.');
+}
+function redo() {
+  if (!selected) return; const hst = histFor(selected.id);
+  if (!hst.future.length) return;
+  const next = hst.future.pop(); hst.past.push(next); applySnapshot(next); say('Cambio rehecho.');
+}
+function paintHistoryButtons() {
+  const hst = selected ? histFor(selected.id) : { past: [], future: [] };
+  if ($('undoBtn')) $('undoBtn').disabled = hst.past.length < 2;
+  if ($('redoBtn')) $('redoBtn').disabled = !hst.future.length;
+}
+function shortcutsDialog() {
+  const rows = [['Ctrl + Z', 'Deshacer el último cambio'], ['Ctrl + Y  ·  Ctrl + Shift + Z', 'Rehacer'], ['Espacio', 'Reproducir / pausar'], ['← / →', 'Retroceder / adelantar 5 s'], ['[ / ]', 'Clip anterior / siguiente'], ['Ctrl + E', 'Exportar el clip'], ['?', 'Ver estos atajos']];
+  const modal = h('div', { class: 'cs-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Atajos del editor', onclick: (e) => { if (e.target === modal) modal.remove(); } },
+    h('div', { class: 'box', style: 'width:min(460px,92vw)' }, h('h2', { text: 'Atajos del editor', style: 'margin:0 0 12px' }),
+      h('div', { class: 'shortcuts' }, rows.map(([k, t]) => h('div', {}, h('kbd', { text: k }), h('span', { text: t })))),
+      h('button', { class: 'btn primary', type: 'button', style: 'width:100%;margin-top:14px', text: 'Entendido', onclick: () => modal.remove() })));
+  modal.addEventListener('keydown', (e) => { if (e.key === 'Escape') modal.remove(); });
+  document.body.append(modal); modal.querySelector('button').focus();
+}
+function stepEditorClip(d) {
+  const list = (job?.clips || []).filter((c) => !document.querySelector(`#clips .clip[data-id="${CSS.escape(c.id)}"]`)?.hidden);
+  const i = list.findIndex((c) => c.id === selected?.id); const next = list[i + d]; if (next) choose(next);
+}
+document.addEventListener('keydown', (e) => {
+  if (current !== 'editor' || document.querySelector('.cs-modal')) return;
+  const typing = e.target instanceof Element && e.target.closest('input[type=text],input[type=search],input[type=number],input[type=checkbox],input:not([type]),textarea,select');
+  const k = e.key.toLowerCase(), mod = e.ctrlKey || e.metaKey;
+  if (mod && k === 'z' && !e.shiftKey && !typing) { e.preventDefault(); undo(); }
+  else if (mod && (k === 'y' || (k === 'z' && e.shiftKey)) && !typing) { e.preventDefault(); redo(); }
+  else if (mod && k === 'e') { e.preventDefault(); $('export').click(); }
+  else if (typing || mod || (typeof inTheater === 'function' && inTheater())) return;   // the big view has its own keys
+  else if (e.key === '?') { e.preventDefault(); shortcutsDialog(); }
+  else if (e.key === ' ' && !(e.target instanceof HTMLButtonElement)) { e.preventDefault(); $('play').click(); }
+  else if (e.key === '[' || e.key === ']') { e.preventDefault(); stepEditorClip(e.key === ']' ? 1 : -1); }
+});
+// Moments list: search, filters and a mark on the clips you already edited.
+const momentFilter = { q: '', kind: 'all' };
+function buildMomentsToolbar() {
+  if ($('momentTools')) return;
+  const q = h('input', { id: 'momentSearch', type: 'search', placeholder: 'Buscar momento…', 'aria-label': 'Buscar momento' });
+  q.addEventListener('input', () => { momentFilter.q = q.value.trim().toLowerCase(); filterMoments(); });
+  const chip = (kind, text) => h('button', { type: 'button', class: 'chipbtn' + (momentFilter.kind === kind ? ' on' : ''), 'data-kind': kind, text, onclick: (e) => { momentFilter.kind = kind; for (const b of e.currentTarget.parentElement.children) b.classList.toggle('on', b === e.currentTarget); filterMoments(); } });
+  $('clips').before(h('div', { id: 'momentTools', class: 'moment-tools' }, q, h('div', { class: 'moment-chips' }, chip('all', 'Todos'), chip('top', '★ Potencial'), chip('edited', 'Editados'), chip('todo', 'Sin editar'))));
+}
+function isEdited(id) { const e = job?.clip_edits?.[id]; return !!e && !e.partial; }
+function filterMoments() {
+  let shown = 0;
+  for (const el of document.querySelectorAll('#clips .clip')) {
+    const c = job?.clips?.find((x) => x.id === el.dataset.id); if (!c) continue;
+    const text = `${c.title} ${c.reason || ''} ${c.category || ''}`.toLowerCase();
+    const ok = (!momentFilter.q || text.includes(momentFilter.q)) && (momentFilter.kind === 'all' || (momentFilter.kind === 'top' && c.potential) || (momentFilter.kind === 'edited' && isEdited(c.id)) || (momentFilter.kind === 'todo' && !isEdited(c.id)));
+    el.hidden = !ok; if (ok) shown++;
+    el.classList.toggle('is-edited', isEdited(c.id));
+    if (c.score != null && !el.querySelector('.score-bar')) el.append(h('span', { class: 'score-bar', 'aria-hidden': 'true' }, h('i', { style: `width:${Math.max(4, Math.min(100, c.score))}%` })));
+  }
+  if ($('empty') && job?.clips?.length) $('empty').textContent = `${shown} de ${job.clips.length} momentos · rango ${job.analysis_range?.minimum ?? ''}–${job.analysis_range?.maximum ?? ''} s`;
+}
+// Sliders show their value next to their name.
+function decorateSliders() {
+  for (const r of document.querySelectorAll('#editorView .inspector input[type=range]')) {
+    if (r.dataset.out) continue; r.dataset.out = '1';
+    const out = h('output', { class: 'range-val' }); const label = r.previousElementSibling?.tagName === 'LABEL' ? r.previousElementSibling : null;
+    const unit = /size|width/.test(r.id) ? '' : /_x|_y|focus/.test(r.id) ? '%' : '';
+    r._show = () => { out.textContent = (Math.round(Number(r.value) * 10) / 10).toLocaleString('es') + unit; };
+    if (label) label.append(out); else r.before(out);
+    r.addEventListener('input', r._show); r._show();
+  }
+}
+// Values set by code (choosing a clip, undo, dragging a layer) do not fire «input»: refresh them after those.
+function refreshSliderValues() { for (const r of document.querySelectorAll('#editorView .inspector input[type=range]')) r._show?.(); }
+{ const p = paint; window.paint = (...a) => { const out = p(...a); try { refreshSliderValues(); } catch {} return out; }; paint = window.paint; }
+function buildEditorV4() {
+  if ($('undoBtn')) return;
+  const actions = document.querySelector('#editorView .editor-actions');
+  actions.prepend(
+    h('button', { id: 'undoBtn', class: 'btn ghost icon-btn', type: 'button', title: 'Deshacer (Ctrl + Z)', 'aria-label': 'Deshacer', text: '↶', disabled: true, onclick: undo }),
+    h('button', { id: 'redoBtn', class: 'btn ghost icon-btn', type: 'button', title: 'Rehacer (Ctrl + Y)', 'aria-label': 'Rehacer', text: '↷', disabled: true, onclick: redo }),
+    h('button', { class: 'btn ghost icon-btn', type: 'button', title: 'Atajos de teclado (?)', 'aria-label': 'Atajos de teclado', text: '⌨', onclick: shortcutsDialog }));
+  const nav = h('div', { class: 'clip-nav' },
+    h('button', { class: 'btn ghost', type: 'button', title: 'Clip anterior ( [ )', text: '‹ Anterior', onclick: () => stepEditorClip(-1) }),
+    h('span', { id: 'clipIndex', class: 'muted' }),
+    h('button', { class: 'btn ghost', type: 'button', title: 'Clip siguiente ( ] )', text: 'Siguiente ›', onclick: () => stepEditorClip(1) }));
+  $('seek').before(nav);
+  buildMomentsToolbar(); decorateSliders();
+  new MutationObserver(() => filterMoments()).observe($('clips'), { childList: true });
+}
+function paintClipIndex() {
+  const i = (job?.clips || []).findIndex((c) => c.id === selected?.id);
+  if ($('clipIndex')) $('clipIndex').textContent = i >= 0 ? `Clip ${i + 1} de ${job.clips.length}` : '';
+}
+buildEditorV4();
+{
+  const prev = choose;
+  window.choose = (c) => { prev(c); paintClipIndex(); refreshSliderValues(); filterMoments(); const hst = histFor(c.id); if (!hst.past.length) hst.past.push(JSON.stringify(settings())); paintHistoryButtons(); };
+  choose = window.choose;
+}
+
+
+// --- Videos largos a clips (parte 4): hero, steps, drag & drop, recent videos -----------------------------------------
+// Only presentation: every control of the existing screen stays the same element with the same behaviour (app.js).
+function buildAnalysisLayout() {
+  const view = $('analysisView'); if (!view || view.dataset.v4) return; view.dataset.v4 = '1';
+  const intro = view.querySelector('.intro');
+  const thumbs = h('div', { class: 'lv-phones', 'aria-hidden': 'true' }, [0, 1, 2].map((i) => h('span', { class: 'lv-phone p' + i }, h('i'))));
+  intro.replaceChildren(
+    h('div', { class: 'lv-text' }, h('span', { class: 'eyebrow', text: 'ENCUENTRA UNA HISTORIA, NO SOLO UN CORTE' }),
+      h('h1', {}, 'De un video largo a ', h('span', { class: 'grad', text: 'clips que conectan.' })),
+      h('p', { text: 'Sube tu video o pega un enlace de YouTube. La IA local lo transcribe, entiende las historias y te propone los mejores momentos en vertical, con título y subtítulos.' }),
+      h('div', { class: 'lv-feats' }, ['Transcripción local', 'IA sin pagar API', 'Clips 9:16 con título', 'Hasta 200 min'].map((t) => h('span', { class: 'lv-feat', text: t })))),
+    h('div', { class: 'lv-visual', 'aria-hidden': 'true' },
+      h('div', { class: 'lv-strip' }, h('div', { class: 'lv-frames' }), h('span', { class: 'lv-scan' })),
+      h('span', { class: 'lv-arrow', text: '↓' }), thumbs));
+  // Real images: frames of your latest long video on the strip, your best clips on the phones.
+  api('/api/jobs').then((jobs) => {
+    const long = jobs.filter((j) => j.kind !== 'live' && j.duration).sort((a, b) => b.updated - a.updated);
+    const j = long[0]; const frames = intro.querySelector('.lv-frames');
+    if (j) put(frames, [1, 2, 3, 4, 5, 6].map((k) => h('img', { src: `/api/jobs/${j.id}/frame?t=${Math.round(j.duration * k / 7)}`, alt: '', loading: 'lazy', onerror: (e) => e.target.remove() })));
+    renderRecentVideos(long);
+  }).catch(() => {});
+  api('/api/library?sort=score').then((lib) => {
+    const best = lib.items.filter((c) => !c.missing).slice(0, 3);
+    best.forEach((c, i) => { const ph = intro.querySelector('.lv-phone.p' + i); if (ph) ph.replaceChildren(h('img', { src: c.thumb_url, alt: '', onerror: (e) => e.target.remove() })); });
+  }).catch(() => {});
+  // Steps
+  const steps = h('ol', { class: 'lv-steps', 'aria-label': 'Pasos' }, [['Tu video', 'Archivo o YouTube'], ['Contexto', 'Opcional, mejora los títulos'], ['Motor de IA', 'Local, sin pagar'], ['Momentos', 'Revisa y edita']].map(([t, s], i) =>
+    h('li', { 'data-step': String(i + 1) }, h('span', { class: 'n', text: String(i + 1) }), h('span', {}, h('b', { text: t }), h('small', { text: s })))));
+  view.querySelector('.setup-grid').before(steps);
+  const panels = view.querySelectorAll('.setup-grid > .panel');
+  [['1', 'Tu video y su contexto'], ['2', 'Qué quieres encontrar']].forEach(([n, t], i) => { const h2 = panels[i]?.querySelector('h2'); if (h2) h2.replaceChildren(h('span', { class: 'lv-num', text: n }), t); });
+  const markSteps = () => {
+    const hasVideo = !!job && !$('analyze').disabled || !!job?.clips?.length;
+    const running = !$('cancelAnalysis').classList.contains('hidden');
+    const state = [hasVideo, !!$('videoContext').value.trim(), hasVideo, !!job?.clips?.length];
+    steps.querySelectorAll('li').forEach((li, i) => { li.classList.toggle('done', state[i]); li.classList.toggle('now', !state[i] && state.slice(0, i).every(Boolean) || (i === 3 && running)); });
+    view.classList.toggle('lv-running', running);
+  };
+  new MutationObserver(markSteps).observe($('analyze'), { attributes: true, attributeFilter: ['disabled'] });
+  new MutationObserver(markSteps).observe($('cancelAnalysis'), { attributes: true, attributeFilter: ['class'] });
+  $('videoContext').addEventListener('input', markSteps); markSteps();
+  // Drag & drop a file onto the upload zone (same as choosing it with the button).
+  const drop = $('videoFileDrop');
+  for (const ev of ['dragenter', 'dragover']) drop.addEventListener(ev, (e) => { e.preventDefault(); if (!$('source').disabled) drop.classList.add('over'); });
+  for (const ev of ['dragleave', 'drop']) drop.addEventListener(ev, () => drop.classList.remove('over'));
+  drop.addEventListener('drop', (e) => {
+    e.preventDefault(); const f = e.dataTransfer?.files?.[0];
+    if (!f || $('source').disabled) return;
+    if (!/^video\//.test(f.type) && !/\.(mp4|mov|webm|mkv)$/i.test(f.name)) { toast('Ese archivo no es un video', 'Usa un MP4, MOV o WebM.'); return; }
+    const dt = new DataTransfer(); dt.items.add(f); $('source').files = dt.files; $('source').dispatchEvent(new Event('change'));
+  });
+  drop.querySelector('h3').textContent = 'Arrastra tu video aquí';
+  drop.querySelector('p').textContent = 'o elige el archivo · MP4, MOV o WebM · hasta 120 minutos · 12 GB';
+  view.append(h('section', { id: 'lvRecent', class: 'lv-recent', hidden: true }));
+}
+function renderRecentVideos(long) {
+  const box = $('lvRecent'); if (!box) return;
+  const items = long.slice(0, 8); box.hidden = !items.length;
+  put(box, h('div', { class: 'section-head' }, h('h2', { text: 'Tus videos recientes' }), h('span', { class: 'muted', text: 'Vuelve a uno para revisar sus clips o analizarlo otra vez. La transcripción guardada se reutiliza.' }),
+      h('button', { class: 'btn ghost', type: 'button', text: 'Ver todos los proyectos', onclick: () => navigate('projects') })),
+    h('div', { class: 'lv-recent-grid' }, items.map((j) => {
+      const t = Math.round((j.duration || 0) / 3);
+      return h('button', { class: 'card lv-video', type: 'button', onclick: () => openProject(j.id, null, j.clips ? 'editor' : 'analysis').catch((e) => toast('No se pudo abrir', e.message)) },
+        h('span', { class: 'lv-thumb' }, previewBox(`/api/jobs/${j.id}/frame?t=${t}`, `/api/jobs/${j.id}/video`, t, 8), h('span', { class: 'chip glass', text: fmtDur(j.duration || 0) })),
+        h('b', { text: j.title || j.name }), h('span', { class: 'muted', text: [j.clips ? `${j.clips} clips` : 'Sin analizar', j.updated ? ago(j.updated * 1000) : ''].filter(Boolean).join(' · ') }));
+    })));
+}
+buildAnalysisLayout();
 
 // --- Streamers: «En vivo ahora», search and profile photos -----------------------------------------------------------
 let streamersCache = [];
@@ -606,6 +939,7 @@ function watchStream(s) {
   // The platform's own player (the authorized way to watch), only when the user asks for it.
   const src = s.platform === 'kick' ? `https://player.kick.com/${encodeURIComponent(s.slug)}` : s.video_id ? `https://www.youtube.com/embed/${encodeURIComponent(s.video_id)}?autoplay=1` : '';
   if (!src) { window.open(s.url, '_blank', 'noopener'); return; }
+  silenceOthers(null);
   const modal = h('div', { class: 'cs-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': `Directo de ${s.name}`, onclick: (e) => { if (e.target === modal) modal.remove(); } },
     h('div', { class: 'box player-box' }, h('div', { style: 'display:flex;align-items:center;gap:12px' }, avatarImg(s, 36), h('b', { text: s.name, style: 'font:600 18px var(--head);flex:1' }), h('button', { class: 'btn ghost', type: 'button', text: 'Cerrar', onclick: () => modal.remove() })),
       h('iframe', { src, title: `Reproductor oficial de ${s.platform === 'kick' ? 'Kick' : 'YouTube'}`, allow: 'autoplay; fullscreen; picture-in-picture', allowfullscreen: true, referrerpolicy: 'strict-origin-when-cross-origin' }),
@@ -616,22 +950,32 @@ function watchStream(s) {
 function liveNowSection(list) {
   const live = list.filter((s) => s.live), off = list.filter((s) => !s.live && s.checked);
   if (!list.length) return null;
-  const card = (s, i) => h('article', { class: 'card livecard' },
-    h('div', { style: 'position:relative;aspect-ratio:16/9;background:var(--panel2);overflow:hidden;cursor:pointer', onclick: () => watchStream(s) },
-      s.thumb ? h('img', { src: s.thumb, alt: `Directo de ${s.name}`, style: 'width:100%;height:100%;object-fit:cover;display:block', referrerpolicy: 'no-referrer', onerror: (e) => e.target.remove() }) : null,
-      h('span', { class: 'chip live', style: 'position:absolute;left:10px;top:10px', text: '● EN VIVO' }), h('span', { class: 'chip logo', style: 'position:absolute;right:10px;top:12px' }, platformLogo(s.platform)),
-      i === 0 && s.clips ? h('span', { class: 'chip', style: 'position:absolute;left:10px;bottom:10px;background:var(--green);color:var(--green-ink)', text: '★ El que más clipeas' }) : null,
-      s.viewers ? h('span', { class: 'chip glass', style: 'position:absolute;right:10px;bottom:10px', text: `${Number(s.viewers).toLocaleString('es')} espectadores` }) : null),
-    h('div', { style: 'display:flex;align-items:center;gap:12px;padding:14px' }, avatarImg(s, 44),
-      h('span', { style: 'display:flex;flex-direction:column;gap:3px;min-width:0;flex:1' }, h('b', { text: s.name, style: 'font:600 16px var(--head)' }), h('span', { class: 'muted', style: 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis', text: s.title || '' }),
-        s.clips ? h('span', { style: 'font-size:12px;color:var(--green);font-weight:600', text: `${s.clips} clips tuyos de este streamer` }) : null)),
-    h('div', { style: 'display:flex;gap:8px;padding:0 14px 14px' }, h('button', { class: 'btn primary', type: 'button', style: 'flex:1', text: 'Clipear este directo', onclick: () => clipThisStream(s) }), h('button', { class: 'btn ghost', type: 'button', text: 'Ver en directo', onclick: () => watchStream(s) })));
   return h('div', {}, h('div', { class: 'section-head' }, h('span', { style: 'width:9px;height:9px;border-radius:50%;background:var(--live);animation:pulse 1.8s infinite' }), h('h2', { text: 'En vivo ahora' }),
       h('span', { class: 'muted', text: live.length ? 'Primero los streamers que más clipeas. Desliza para ver más.' : 'Ninguno de tus streamers está en directo ahora. Se comprueba cada pocos minutos.' }), h('button', { class: 'btn ghost', type: 'button', text: 'Buscar otro streamer', onclick: () => { navigate('live'); $('liveUrl').focus(); } })),
-    h('div', { class: 'rail' }, live.map(card),
+    h('div', { class: 'rail' }, live.map((s, i) => streamCard(s, i === 0 && s.clips ? '★ El que más clipeas' : '')),
       off.length ? h('article', { class: 'card livecard', style: 'display:grid;place-items:center;text-align:center;padding:20px;border-style:dashed' },
         h('span', { style: 'display:flex;flex-direction:column;align-items:center;gap:10px' }, h('span', { style: 'display:flex' }, off.slice(0, 4).map((s) => h('span', { style: 'margin-left:-8px;filter:grayscale(1);opacity:.75' }, avatarImg(s, 44)))),
           h('b', { text: off.slice(0, 3).map((s) => s.name).join(', ') + (off.length > 3 ? ` y ${off.length - 3} más` : '') + (off.length === 1 ? ' no está en directo' : ' no están en directo') }), h('span', { class: 'muted', text: 'Aparecerán aquí cuando empiecen.' }))) : null));
+}
+// Recommended: the most relevant Kick streamers (Spanish-speaking first), shown as soon as they go live.
+function featuredSection(list) {
+  if (!list?.length) return null;
+  return h('div', {}, h('div', { class: 'section-head' }, platformLogo('kick'), h('h2', { text: 'Recomendados en Kick' }),
+      h('span', { class: 'muted', text: 'Los streamers más vistos de Kick que están en directo ahora. Desliza para ver más.' })),
+    h('div', { class: 'rail' }, list.map((s) => streamCard(s, s.lang === 'es' ? 'Recomendado · Español' : 'Recomendado'))));
+}
+function streamCard(s, badge, canFollow) {
+  return h('article', { class: 'card livecard' },
+    h('div', { style: 'position:relative;aspect-ratio:16/9;background:var(--panel2);overflow:hidden;cursor:pointer', onclick: () => watchStream(s) },
+      s.thumb ? h('img', { src: s.thumb, alt: `Directo de ${s.name}`, style: 'width:100%;height:100%;object-fit:cover;display:block', referrerpolicy: 'no-referrer', onerror: (e) => e.target.remove() }) : null,
+      h('span', { class: 'chip live', style: 'position:absolute;left:10px;top:10px', text: '● EN VIVO' }), h('span', { class: 'chip logo', style: 'position:absolute;right:10px;top:12px' }, platformLogo(s.platform)),
+      badge ? h('span', { class: 'chip', style: 'position:absolute;left:10px;bottom:10px;background:var(--green);color:var(--green-ink)', text: badge }) : null,
+      s.viewers ? h('span', { class: 'chip glass', style: 'position:absolute;right:10px;bottom:10px', text: `${Number(s.viewers).toLocaleString('es')} espectadores` }) : null),
+    h('div', { style: 'display:flex;align-items:center;gap:12px;padding:14px' }, avatarImg(s, 44),
+      h('span', { style: 'display:flex;flex-direction:column;gap:3px;min-width:0;flex:1' }, h('b', { text: s.name, style: 'font:600 16px var(--head)' }), h('span', { class: 'muted', style: 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis', text: s.title || '' }),
+        s.clips ? h('span', { style: 'font-size:12px;color:var(--green);font-weight:600', text: `${s.clips} clips tuyos de este streamer` }) : null),
+      canFollow ? h('button', { class: 'btn ghost follow-mini', type: 'button', text: '+ Seguir', onclick: (e) => followStreamer(s, e.currentTarget) }) : null),
+    h('div', { style: 'display:flex;gap:8px;padding:0 14px 14px' }, h('button', { class: 'btn primary', type: 'button', style: 'flex:1', text: 'Clipear este directo', onclick: () => clipThisStream(s) }), h('button', { class: 'btn ghost', type: 'button', text: 'Ver en directo', onclick: () => watchStream(s) })));
 }
 // Search by name in the link field of «Clips en vivo» (a link still works as before).
 let searchTimer = null, searchToken = 0;
@@ -670,7 +1014,7 @@ function setupStreamerSearch() {
             h('span', { class: 'muted', style: 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis', text: s.live ? s.title || 'En directo' : s.clips ? `${s.clips} clips tuyos` : (s.followers ? `${Number(s.followers).toLocaleString('es')} seguidores` : '') })),
           s.thumb ? h('img', { src: s.thumb, alt: '', referrerpolicy: 'no-referrer', style: 'width:120px;height:68px;object-fit:cover;border-radius:8px;flex:none', onerror: (e) => e.target.remove() }) : null,
           h('button', { class: 'btn ' + (s.live ? 'primary' : 'ghost'), type: 'button', text: s.live ? 'Elegir directo' : 'Seguir',
-            onclick: async () => { input.value = s.url; box.hidden = true; if (s.new) await api('/api/streamers/follow', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: s.url }) }).catch(() => {});
+            onclick: async () => { input.value = s.url; box.hidden = true; await followUrl(s.url).catch(() => {}); loadStreamers();
               toast(s.live ? `${s.name} elegido` : `Sigues a ${s.name}`, s.live ? 'Pulsa «Iniciar clipping en vivo» para empezar.' : 'Te avisaremos en Inicio cuando esté en directo.'); } }))));
   }
   document.addEventListener('click', (e) => { if (!box.contains(e.target) && e.target !== input) box.hidden = true; });

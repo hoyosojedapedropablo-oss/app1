@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 
 VERSION = 1
-DETECTOR_VERSION = 3          # 2: steady/busy seam search (Spreen) · 3: needs real fixed edges (one-camera IRL streams)
+DETECTOR_VERSION = 4          # 2: steady/busy seam (Spreen) · 3: needs real fixed edges (IRL) · 4: small camera box by its edges (Westcol)
 CANVAS_W, CANVAS_H = 1080, 1920
 TOP_MIN, TOP_MAX = 768, 960        # camera panel: 40-50 % of the height
 SEAM = 6                           # dark line between camera and game (px)
@@ -109,8 +109,138 @@ def _content_region(ex, ey, cam, sw, sh):
     return (0, 0, sw, sh) if best is None else best[1:]
 
 
-def detect_overlay(source, duration=None, samples=40, progress=lambda v: None, start=0.0):
-    """Return the facecam overlay {'found', 'x','y','w','h' (source px), 'face', 'presence', 'kind'}."""
+def _corner_box(ex, ey, sw, sh, strength=.5):
+    """A camera box in a corner found from its edges alone: a vertical line from the frame edge down (or up) to a
+    horizontal line that runs from the frame edge to it, both present in most samples. Returns (l, t, r, b) or None.
+
+    Measured on Westcol (Cuphead, camera top-left at 30 % x 30 %): right edge .90 and bottom edge .75 of the samples,
+    while the people in the camera were too small for the face detector on the whole frame."""
+    shift = lambda a, axis: np.maximum(np.maximum(a, np.roll(a, 1, axis)), np.roll(a, -1, axis))   # lines 1 px off
+    best = None
+    for flip_x in (False, True):
+        for flip_y in (False, True):
+            X, Y = ex, ey
+            if flip_x: X, Y = X[:, ::-1], Y[:, ::-1]
+            if flip_y: X, Y = X[::-1], Y[::-1]
+            # The line must also be there in its half next to the frame edge (a camera floating near a corner has its
+            # lines only over the far part of that length).
+            cv = np.cumsum(X, axis=0); ch = np.cumsum(Y, axis=1)
+            iy = np.arange(sh); hy = iy // 2; ix = np.arange(sw); hx = ix // 2
+            v1 = cv[hy, :] / (hy + 1)[:, None]
+            h1 = ch[:, hx] / (hx + 1)[None, :]
+            vert = shift(cv / (iy + 1)[:, None], 1); hori = shift(ch / (ix + 1)[None, :], 0)      # whole length
+            near_edge = (shift(v1, 1) >= .3) & (shift(h1, 0) >= .3)                            # and the half at the frame edge
+            score = np.where(near_edge, np.minimum(vert, hori), 0)
+            ys, xs = np.mgrid[0:sh, 0:sw]
+            aspect = (xs + 1) / (ys + 1)
+            ok = (xs >= .12 * sw) & (xs <= .55 * sw) & (ys >= .12 * sh) & (ys <= .62 * sh) & (aspect >= 1.0) & (aspect <= 2.4)
+            score = np.where(ok, score, 0)
+            y, x = np.unravel_index(int(np.argmax(score)), score.shape)
+            if score[y, x] < strength or (best and score[y, x] <= best[0]): continue
+            l, r = (sw - 1 - x, sw - 1) if flip_x else (0, x)
+            t, b = (sh - 1 - y, sh - 1) if flip_y else (0, y)
+            best = (float(score[y, x]), (l, t, r, b))
+    return best[1] if best else None
+
+
+def _faces_in_box(source, times, box, ratio):
+    """Faces inside the box, looked for at full resolution (a small camera's faces are too small in the whole frame)."""
+    from tracking import make_detector
+    l, t, r, b = box
+    x, y, w, h = (int(round(v * ratio / 2)) * 2 for v in (l, t, r - l + 1, b - t + 1))
+    cw = 960; ch = max(2, int(round(h * cw / max(1, w) / 2)) * 2)
+    detect = make_detector(cw, ch); found = []; used = 0
+    for i, tt in enumerate(times):
+        raw = subprocess.run(['ffmpeg', '-v', 'error', '-ss', f'{tt:.3f}', '-i', str(source), '-frames:v', '1', '-an', '-vf', f'crop={w}:{h}:{x}:{y},scale={cw}:{ch}',
+                              '-pix_fmt', 'bgr24', '-f', 'rawvideo', '-'], capture_output=True, timeout=60).stdout
+        if len(raw) != cw * ch * 3: continue
+        used += 1
+        for fx, fy, fw, fh, score in detect(np.frombuffer(raw, dtype=np.uint8).reshape(ch, cw, 3)):
+            if fh >= 14 and .55 <= fw / max(1, fh) <= 1.6: found.append((x + (fx + fw / 2) * w / cw, y + (fy + fh / 2) * h / ch, fw * w / cw, fh * h / ch, i))
+    return found, used
+
+
+def _refines(tight, corner, ex, ey, sw, sh, people=()):
+    """Whether a box found around the face is a real refinement of a corner box: it keeps the corner box's edges that
+    are inside the frame, and each side it moves inward sits on a line that is clearly there (Westcol: lines of the
+    room inside the camera must not shrink it; Spreen's Minecraft: text drawn above the camera must be left out)."""
+    l, t, r, b = corner; tl, tt, tr, tb = tight
+    if not (l - 2 <= tl and t - 2 <= tt and tr <= r + 2 and tb <= b + 2): return False
+    # Never leave out someone who is in the camera (Westcol: the room's ceiling and fireplace lines cut off his friend).
+    if any(not (tl <= x <= tr and tt <= y <= tb) for x, y in people): return False
+    same = lambda a, c, size: abs(a - c) <= .04 * size
+    if not ((same(tr, r, sw) if r < sw - 1 else True) and (same(tb, b, sh) if b < sh - 1 else True)
+            and (same(tl, l, sw) if l > 0 else True) and (same(tt, t, sh) if t > 0 else True)): return False
+    strong_v = lambda x, y0, y1: float(ex[y0:y1 + 1, max(0, x - 1):x + 2].max(axis=1).mean()) >= .6
+    strong_h = lambda y, x0, x1: float(ey[max(0, y - 1):y + 2, x0:x1 + 1].max(axis=0).mean()) >= .6
+    return ((tl <= l + 3 or strong_v(tl, tt, tb)) and (tt <= t + 3 or strong_h(tt, tl, tr))
+            and (tr >= r - 3 or strong_v(tr, tt, tb)) and (tb >= b - 3 or strong_h(tb, tl, tr)))
+
+
+def _room_not_camera(groups, box, samples, var, min_h=0.0, min_presence=.3):
+    """True for a one-camera picture: someone else is seen for a good part of the video outside the «box», and the
+    picture outside it is not busier than inside (a game or a reacted video around a camera is: measured on Westcol,
+    Spreen and TheDonato). NaimDarrechi in a restaurant: two people, one inside and one outside, the same calm room."""
+    l, t, r, b = box
+    outside = [g for g in groups if len({f[4] for f in g}) / max(1, samples) >= min_presence and float(np.median([f[3] for f in g])) >= min_h
+               and not (l <= np.median([f[0] for f in g]) <= r and t <= np.median([f[1] for f in g]) <= b)]
+    if not outside: return False
+    inside = float(var[t:b + 1, l:r + 1].mean()); n_in = (b - t + 1) * (r - l + 1)
+    rest = (float(var.sum()) - inside * n_in) / max(1, var.size - n_in)
+    return rest < 1.5 * inside
+
+
+def _boxed_camera(source, times, ex, ey, sw, sh, W, H, ratio, prefer, frame_faces=(), samples=1, var=None, around=None):
+    """Second chance when the whole-frame pass found no streamer face: a camera box with fixed edges in a corner,
+    confirmed by faces inside it at full resolution (or accepted as it is when the user chose «Cámara + juego»).
+
+    Not a camera: a still shot of a room (NaimDarrechi in a restaurant, camera on a tripod) also has fixed lines that
+    close a corner, and real faces. There the people are big and seen on the whole frame outside that «box»."""
+    box = _corner_box(ex, ey, sw, sh)
+    if not box: return None
+    l, t, r, b = box
+    if not .025 * sw * sh <= (r - l + 1) * (b - t + 1) <= .4 * sw * sh: return None     # a camera is 3-40 % of the frame
+    clusters = _clusters(list(frame_faces), samples)
+    outside = [g for g in clusters if len({f[4] for f in g}) / max(1, samples) >= .3 and not (l <= np.median([f[0] for f in g]) <= r and t <= np.median([f[1] for f in g]) <= b)]
+    if outside and not prefer: return None            # someone seen big and often outside the corner: a room (IRL), not a camera
+    if var is not None and _room_not_camera(clusters, box, samples, var, min_presence=.2): return None
+    faces, used = _faces_in_box(source, times[::max(1, len(times) // 10)], box, ratio)
+    presence = len({f[4] for f in faces}) / used if used else 0
+    if faces and float(np.median([f[3] for f in faces])) > .11 * H: return None        # big faces: a room, not a small camera
+    if presence < .2 and not prefer: return None
+    # With the streamer's face found, the usual border search around it gives the exact camera (the corner box can
+    # also hold text or panels drawn next to the camera: Spreen's Minecraft stats above his camera).
+    if faces and around:
+        g = _clusters(faces, used)[0]
+        fx, fy, fw, fh = (float(np.median([f[k] for f in g])) / ratio for k in range(4))
+        tight = around(fx, fy, fw, fh)
+        people = [(float(np.median([f[0] for f in c])) / ratio, float(np.median([f[1] for f in c])) / ratio) for c in _clusters(faces, used) if len({f[4] for f in c}) / used >= .2]
+        if isinstance(tight, tuple) and _refines(tight, (l, t, r, b), ex, ey, sw, sh, people): l, t, r, b = tight
+    even = lambda v: int(round(v * ratio / 2)) * 2
+    out = dict(found=True, kind='overlay', detector=DETECTOR_VERSION, width=W, height=H, presence=round(presence, 2), boxed=True,
+               x=even(l), y=even(t), w=min(even(r - l + 1), W - even(l)), h=min(even(b - t + 1), H - even(t)))
+    if faces:
+        groups = _clusters([f for f in faces], used)
+        g = groups[0]; out['face'] = {k: round(float(np.median([f[i] for f in g])), 1) for i, k in enumerate(('x', 'y', 'w', 'h'))}
+    else:       # no face seen: centre of the box, upper half (where a webcam usually frames the streamer)
+        out['face'] = dict(x=round(out['x'] + out['w'] / 2, 1), y=round(out['y'] + out['h'] * .42, 1), w=round(out['w'] * .18, 1), h=round(out['w'] * .18, 1))
+    x0, y0, x1, y1 = _content_region(ex, ey, (l, t, r + 1, b + 1), sw, sh)
+    # A region cut exactly at the camera's own edge is the camera drawn over the game, not a sidebar: whole frame.
+    own_edge = any(abs(a - c) <= 3 for a, c in ((x0, r + 1), (x1, l), (y0, b + 1), (y1, t)))
+    content = dict(x=even(x0), y=even(y0), w=min(W, even(x1)) - even(x0), h=min(H, even(y1)) - even(y0))
+    out['content'] = dict(x=0, y=0, w=W, h=H) if own_edge or (content['w'] >= W - 4 and content['h'] >= H - 4) else content
+    return out
+
+
+def detect_overlay(source, duration=None, samples=40, progress=lambda v: None, start=0.0, prefer=False):
+    """Return the facecam overlay {'found', 'x','y','w','h' (source px), 'face', 'presence', 'kind'}.
+    `prefer`: the user chose «Cámara + juego», so a camera box with fixed edges is accepted even without a face seen."""
+    result = _detect_overlay(source, duration, samples, progress, start, prefer)
+    progress(100)
+    return result
+
+
+def _detect_overlay(source, duration, samples, progress, start, prefer):
     import cv2
     from tracking import make_detector
     W, H, probed = _probe(source)
@@ -132,42 +262,72 @@ def detect_overlay(source, duration=None, samples=40, progress=lambda v: None, s
         edges_x += np.abs(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)) > 40
         edges_y += np.abs(cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)) > 40
     none = dict(found=False, kind='none', detector=DETECTOR_VERSION, width=W, height=H, presence=0)
-    if not used or not faces: return none
+    if not used: return none
+    ex, ey = edges_x / used, edges_y / used
+    # How much each pixel changes across the samples: high in the game, low in the streamer's room.
+    var = np.stack(grays).astype(np.float32).std(axis=0)
+    boxed = lambda fallback: _boxed_camera(source, times, ex, ey, sw, sh, W, H, ratio, prefer, faces, used, var, around) or fallback
+
+    def around(fx, fy, fw, fh):
+        """Camera rectangle (l, t, r, b) around a face, or the reason there is none: 'none' / 'single'."""
+        # Search each side of the face for a line that is there in most frames (border or camera/game seam).
+        span_y = slice(max(0, int(fy - .6 * fh)), min(sh, int(fy + 1.4 * fh)))
+        span_x = slice(max(0, int(fx - 1.2 * fw)), min(sw, int(fx + 1.2 * fw)))
+        col = ex[span_y].mean(axis=0); row = ey[:, span_x].mean(axis=1)
+        vcol = var[span_y].mean(axis=0); vrow = var[:, span_x].mean(axis=1)
+        # 1) the steady/busy seam, searched far (a wide camera can be 9 face widths across); 2) else the strongest line nearby.
+        seams = (_seam(col, vcol, fx - 7 * fw, fx - .9 * fw, -1), _seam(col, vcol, fx + .9 * fw, fx + 7 * fw, 1),
+                 _seam(row, vrow, fy - 4 * fh, fy - .8 * fh, -1), _seam(row, vrow, fy + 1.0 * fh, fy + 4.5 * fh, 1))
+        left = seams[0] if seams[0] is not None else _border(col, fx - 3.2 * fw, fx - .9 * fw, fx - 1.7 * fw, 0)
+        right = seams[1] if seams[1] is not None else _border(col, fx + .9 * fw, fx + 3.2 * fw, fx + 1.7 * fw, sw - 1)
+        top = seams[2] if seams[2] is not None else _border(row, fy - 2.6 * fh, fy - .8 * fh, fy - 1.3 * fh, 0)
+        bottom = seams[3] if seams[3] is not None else _border(row, fy + 1.0 * fh, fy + 3.4 * fh, fy + 2.0 * fh, sh - 1)
+        # Refine with the found extent (a border is a line across the camera's full height / width).
+        col = ex[max(0, top + 2):max(top + 3, bottom - 1)].mean(axis=0); row = ey[:, max(0, left + 2):max(left + 3, right - 1)].mean(axis=1)
+        left = _border(col, left - 6, min(left + 7, fx - .9 * fw), left, 0); right = _border(col, max(right - 6, fx + .9 * fw), right + 7, right, sw - 1)
+        top = _border(row, top - 6, min(top + 7, fy - .8 * fh), top, 0); bottom = _border(row, max(bottom - 6, fy + 1.0 * fh), bottom + 7, bottom, sh - 1)
+        left, top = max(0, left), max(0, top); right, bottom = min(sw - 1, right), min(sh - 1, bottom)
+        w, h = right - left + 1, bottom - top + 1
+        # A big box floating in the middle, touching no edge of the frame, is a one-camera picture (measured: NaimDarrechi
+        # in a restaurant gave an 880x828 «camera» with 24 samples); real camera insets that large sit against an edge.
+        touches = left <= 3 or top <= 3 or right >= sw - 4 or bottom >= sh - 4
+        # Too small to be a camera either (Westcol full screen: a 138x112 patch of a chair; real ones measured 8-9 %).
+        if w * h > .45 * sw * sh or w * h < .025 * sw * sh or not .5 <= w / max(1, h) <= 2.6 or (w * h > .25 * sw * sh and not touches): return 'none'
+        # A real camera inset has fixed edges: borders, or the seam with the game. A one-camera stream (IRL, a webcam
+        # filling the screen) has none, because the camera moves. Measured: NaimDarrechi walking in a mall gave a 648x1080
+        # "box" from the top to the bottom of the frame with no line at all; TheDonato, Spreen and the tests have 2-4.
+        line = lambda profile, i, size: 2 < i < size - 3 and profile[i] >= .3
+        lines = sum((line(col, left, sw), line(col, right, sw), line(row, top, sh), line(row, bottom, sh)))
+        full_height = top <= 2 and bottom >= sh - 3
+        if lines < 2 or (full_height and lines < 3): return 'single'
+        return (left, top, right, bottom)
+    if not faces: return boxed(none)
     groups = _clusters(faces, used)
     group = groups[0]; presence = len({f[4] for f in group}) / used
     fx, fy, fw, fh = (float(np.median([f[k] for f in group])) for k in range(4))
     if fh > .42 * sh:
         return dict(none, kind='fullcam', presence=round(presence, 2))   # the camera is the whole picture: normal framing
-    if presence < .3: return dict(none, presence=round(presence, 2))
-    ex, ey = edges_x / used, edges_y / used
-    # Search each side of the face for a line that is there in most frames (border or camera/game seam).
-    span_y = slice(max(0, int(fy - .6 * fh)), min(sh, int(fy + 1.4 * fh)))
-    span_x = slice(max(0, int(fx - 1.2 * fw)), min(sw, int(fx + 1.2 * fw)))
-    col = ex[span_y].mean(axis=0); row = ey[:, span_x].mean(axis=1)
-    # How much each pixel changes across the samples: high in the game, low in the streamer's room.
-    var = np.stack(grays).astype(np.float32).std(axis=0); vcol = var[span_y].mean(axis=0); vrow = var[:, span_x].mean(axis=1)
-    # 1) the steady/busy seam, searched far (a wide camera can be 9 face widths across); 2) else the strongest line nearby.
-    seams = (_seam(col, vcol, fx - 7 * fw, fx - .9 * fw, -1), _seam(col, vcol, fx + .9 * fw, fx + 7 * fw, 1),
-             _seam(row, vrow, fy - 4 * fh, fy - .8 * fh, -1), _seam(row, vrow, fy + 1.0 * fh, fy + 4.5 * fh, 1))
-    left = seams[0] if seams[0] is not None else _border(col, fx - 3.2 * fw, fx - .9 * fw, fx - 1.7 * fw, 0)
-    right = seams[1] if seams[1] is not None else _border(col, fx + .9 * fw, fx + 3.2 * fw, fx + 1.7 * fw, sw - 1)
-    top = seams[2] if seams[2] is not None else _border(row, fy - 2.6 * fh, fy - .8 * fh, fy - 1.3 * fh, 0)
-    bottom = seams[3] if seams[3] is not None else _border(row, fy + 1.0 * fh, fy + 3.4 * fh, fy + 2.0 * fh, sh - 1)
-    # Refine with the found extent (a border is a line across the camera's full height / width).
-    col = ex[max(0, top + 2):max(top + 3, bottom - 1)].mean(axis=0); row = ey[:, max(0, left + 2):max(left + 3, right - 1)].mean(axis=1)
-    left = _border(col, left - 6, min(left + 7, fx - .9 * fw), left, 0); right = _border(col, max(right - 6, fx + .9 * fw), right + 7, right, sw - 1)
-    top = _border(row, top - 6, min(top + 7, fy - .8 * fh), top, 0); bottom = _border(row, max(bottom - 6, fy + 1.0 * fh), bottom + 7, bottom, sh - 1)
-    left, top = max(0, left), max(0, top); right, bottom = min(sw - 1, right), min(sh - 1, bottom)
-    w, h = right - left + 1, bottom - top + 1
-    if w * h > .45 * sw * sh or not .5 <= w / max(1, h) <= 2.6:
-        return dict(none, presence=round(presence, 2))
-    # A real camera inset has fixed edges: borders, or the seam with the game. A one-camera stream (IRL, a webcam
-    # filling the screen) has none, because the camera moves. Measured: NaimDarrechi walking in a mall gave a 648x1080
-    # "box" from the top to the bottom of the frame with no line at all; TheDonato, Spreen and the tests have 2-4.
-    line = lambda profile, i, size: 2 < i < size - 3 and profile[i] >= .3
-    lines = sum((line(col, left, sw), line(col, right, sw), line(row, top, sh), line(row, bottom, sh)))
-    full_height = top <= 2 and bottom >= sh - 3
-    if lines < 2 or (full_height and lines < 3):
+    if presence < .3: return boxed(dict(none, presence=round(presence, 2)))
+    found = around(fx, fy, fw, fh)
+    if found == 'none': return boxed(dict(none, presence=round(presence, 2)))
+    if found == 'single': return boxed(dict(none, kind='single', presence=round(presence, 2)))   # e.g. the faces were a cartoon's
+    corner = _corner_box(ex, ey, sw, sh)
+    if corner:
+        cl, ct, cr, cb = corner
+        inner = cl - 2 <= found[0] and ct - 2 <= found[1] and found[2] <= cr + 2 and found[3] <= cb + 2
+        people = ()
+        if inner and found != corner:          # who is in the corner box, seen at full resolution
+            crop, n = _faces_in_box(source, times[::max(1, len(times) // 10)], corner, ratio)
+            people = [(float(np.median([f[0] for f in c])) / ratio, float(np.median([f[1] for f in c])) / ratio) for c in _clusters(crop, n) if n and len({f[4] for f in c}) / n >= .2]
+        if inner and found != corner and not _refines(found, corner, ex, ey, sw, sh, people):
+            same = lambda a, c, size: abs(a - c) <= .04 * size
+            # Same inner edges as the corner box (its vertical and its horizontal line inside the frame), but sides that
+            # stop short with no line there: the camera reaches the frame's corner (Westcol: 5 of 26 clips).
+            v_edge = (cr < sw - 1 and same(found[2], cr, sw)) or (cl > 0 and same(found[0], cl, sw))
+            h_edge = (cb < sh - 1 and same(found[3], cb, sh)) or (ct > 0 and same(found[1], ct, sh))
+            if v_edge and h_edge: found = corner
+    left, top, right, bottom = found; w, h = right - left + 1, bottom - top + 1
+    if _room_not_camera(groups[1:], found, used, var, min_h=.5 * fh):        # a still room with people: one camera
         return dict(none, kind='single', presence=round(presence, 2))
     even = lambda v: int(round(v * ratio / 2)) * 2
     box = dict(x=even(left), y=even(top), w=even(w), h=even(h))

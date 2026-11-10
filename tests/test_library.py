@@ -89,6 +89,26 @@ class LibraryTests(unittest.TestCase):
         scores = [c['score'] for c in self.lib.list(sort='score')]; self.assertEqual(scores, sorted(scores, reverse=True))
 
 
+class SharedEditsTests(unittest.TestCase):
+    def test_apply_to_all_clips_copies_the_look_but_keeps_each_clip_text_and_times(self):
+        import app as backend
+        from fastapi.testclient import TestClient
+        with tempfile.TemporaryDirectory() as tmp:
+            ident = 'a' * 32; (Path(tmp) / ident).mkdir()
+            j = dict(id=ident, name='v.mp4', duration=100, clips=[dict(id='c0', start=0, end=20, title='Uno', text='a'), dict(id='c1', start=30, end=55, title='Dos', text='b')],
+                     clip_edits=dict(c0=dict(title='Mi título', start=1, end=21, logo='none', framing='stack', title_y=40)))
+            with patch.object(backend, 'DATA', Path(tmp)), patch.dict(backend.JOBS, {ident: j}, clear=True):
+                client = TestClient(backend.app)
+                r = client.put(f'/api/jobs/{ident}/edits/shared', json=dict(settings=dict(logo='kick', logo_width=30, title_size=70, title_y=12, framing='zoom', start=99)))
+                self.assertEqual(r.status_code, 200)
+                saved = json.loads((Path(tmp) / ident / 'job.json').read_text(encoding='utf-8'))['clip_edits']
+                for cid in ('c0', 'c1'): self.assertEqual((saved[cid]['logo'], saved[cid]['logo_width'], saved[cid]['title_size']), ('kick', 30, 70))
+                self.assertEqual((saved['c0']['title'], saved['c0']['start'], saved['c0']['framing'], saved['c0']['title_y']), ('Mi título', 1, 'stack', 40))
+                self.assertEqual((saved['c1']['title'], saved['c1']['start'], saved['c1']['end']), ('Dos', 30, 55))
+                self.assertTrue(saved['c1']['partial']); self.assertNotIn('framing', saved['c1']); self.assertNotIn('partial', saved['c0'])
+                self.assertEqual(client.put('/api/jobs/missing/edits/shared', json=dict(settings={})).status_code, 404)
+
+
 class ApiTests(unittest.TestCase):
     def test_export_is_kept_and_recorded_but_a_preview_is_not(self):
         import app as backend

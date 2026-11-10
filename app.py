@@ -815,7 +815,7 @@ def detect_job_overlay(ident):
  state=OVERLAY[ident]
  try:
   state.update(status='running',progress=0)
-  value=layout.detect_overlay(DATA/ident/'source',JOBS[ident].get('duration'),progress=lambda v:state.update(progress=v))
+  value=layout.detect_overlay(DATA/ident/'source',JOBS[ident].get('duration'),progress=lambda v:state.update(progress=v),prefer=clip_settings(JOBS[ident]).get('framing')=='stack')
   value.update(status='ready',manual=False);write_overlay(ident,value);state.clear();state.update(value)
  except Exception as e:state.update(status='error',message=str(e))
 
@@ -875,7 +875,7 @@ def clip_layout(ident,start,end):
   with lock:
    overlay=read_overlay(ident)
    if overlay is None:
-    overlay=layout.detect_overlay(DATA/ident/'source',JOBS[ident].get('duration'));overlay.update(status='ready',manual=False);write_overlay(ident,overlay)
+    overlay=layout.detect_overlay(DATA/ident/'source',JOBS[ident].get('duration'),prefer=clip_settings(JOBS[ident]).get('framing')=='stack');overlay.update(status='ready',manual=False);write_overlay(ident,overlay)
  if not overlay.get('found'):return dict(overlay=overlay,panels=None)
  cache=layout_cache(ident,start,end,overlay)
  with _layout_locks:lock=LAYOUT_LOCKS.setdefault(cache.name,threading.Lock())
@@ -1175,6 +1175,28 @@ def save_clip_edits(ident:str,clip_id:str,edits:ClipEdits):
  return dict(saved=True)
 
 
+# «Aplicar a todos los clips»: the look (logo, title style, subtitles, quality) copied to every clip of the project.
+# Each clip keeps its own text, times, subtitles and framing; the vertical title position depends on each clip's format.
+SHARED_STYLE=('logo','logo_width','logo_x','logo_y','title_font','title_size','title_padding_x','title_padding_y','title_bg_color',
+ 'title_text_color','title_outline_color','title_outline_width','title_corners','title_x','style','font','caption_size','caption_color',
+ 'outline_color','outline_width','caption_x','caption_y','show_subtitles','resolution')
+class SharedEdits(BaseModel):
+ settings:dict
+
+@app.put('/api/jobs/{ident}/edits/shared')
+def save_shared_edits(ident:str,item:SharedEdits):
+ if ident not in JOBS:raise HTTPException(404)
+ style={k:v for k,v in item.settings.items() if k in SHARED_STYLE and isinstance(v,(str,int,float,bool))}
+ job=JOBS[ident];saved=job.setdefault('clip_edits',{})
+ for c in job.get('clips') or []:
+  entry=saved.get(c['id'])
+  # A clip never opened gets its own defaults plus the shared look; «partial» tells the editor to fill the rest.
+  if entry is None:entry=saved[c['id']]=dict(title=c.get('title',''),subtitles=c.get('text',''),start=c['start'],end=c['end'],captions=c.get('captions') or [],clip_id=c['id'],partial=True)
+  entry.update(style)
+ save_job(job)
+ return dict(clip_edits=saved,shared=sorted(style))
+
+
 # --- Clips en vivo: what the stream looks like now, from the recording ClipStudio already makes -------------------
 _frames={}
 @app.get('/api/live/{sid}/frame')
@@ -1208,16 +1230,33 @@ def streamers_loop():
  while True:
   try:streamers_sync();STREAMERS.check_all()
   except Exception as e:logging.getLogger('uvicorn.error').warning('Streamer check failed: %s',e)
+  try:STREAMERS.check_featured()
+  except Exception as e:logging.getLogger('uvicorn.error').warning('Featured streamer check failed: %s',e)
   time.sleep(60)
+
+def refresh_live_layouts():
+ """After a camera-detector update: the recent live sessions' moments where no camera was found are checked again,
+ one at a time in the background, so their clips open (and their thumbnails show) with the camera when there is one."""
+ time.sleep(20)   # let the app finish starting first
+ for session in sorted(LIVE.values(),key=lambda s:s.created,reverse=True)[:15]:
+  settings=session.clip_settings or {}
+  if not (settings.get('framing')=='stack' or settings.get('auto_stack',True)):continue
+  try:session.refresh_layouts()
+  except Exception as e:logging.getLogger('uvicorn.error').warning('Layout refresh failed: %s',e)
 
 @app.on_event('startup')
 def start_streamer_checks():
  # Runs when the app really starts (uvicorn), not when tests import the module.
- if os.environ.get('CLIPSTUDIO_NO_STREAMER_CHECKS')!='1':threading.Thread(target=streamers_loop,daemon=True).start()
+ if os.environ.get('CLIPSTUDIO_NO_STREAMER_CHECKS')!='1':
+  threading.Thread(target=streamers_loop,daemon=True).start();threading.Thread(target=refresh_live_layouts,daemon=True).start()
 
 @app.get('/api/streamers')
 def streamers_list():
  return STREAMERS.listing()
+
+@app.get('/api/streamers/featured')
+def streamers_featured(all:bool=False):
+ return STREAMERS.featured_listing(include_offline=all)
 
 @app.get('/api/streamers/search')
 def streamers_search(q:str='',scope:Literal['all','link','local','kick','youtube']='all'):
@@ -1233,10 +1272,15 @@ class FollowInput(BaseModel):
 
 @app.post('/api/streamers/follow')
 def streamers_follow(item:FollowInput):
- try:key=STREAMERS.follow(item.url)
+ try:key=STREAMERS.follow(item.url,explicit=True)
  except ValueError as e:raise HTTPException(400,str(e))
  threading.Thread(target=STREAMERS.refresh,args=(key,True),daemon=True).start()
  return dict(key=key)
+
+@app.delete('/api/streamers/{key}')
+def streamers_unfollow(key:str):
+ if not STREAMERS.unfollow(key):raise HTTPException(404)
+ return dict(unfollowed=key)
 
 @app.get('/api/streamers/{key}/avatar')
 def streamer_avatar(key:str):

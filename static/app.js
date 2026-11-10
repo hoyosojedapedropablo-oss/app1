@@ -20,7 +20,17 @@ function settings(){return {...styles(),title:$('title').value,subtitles:$('subt
 let persistTimer=null;
 function saveCurrent(){if(!selected)return;edits.set(selected.id,settings());if(!job||selected.id==='manual')return;
  const jobId=job.id,clipId=selected.id,value=edits.get(clipId);clearTimeout(persistTimer);
- persistTimer=setTimeout(()=>{if(job?.clip_edits)job.clip_edits[clipId]=value;else if(job)job.clip_edits={[clipId]:value};request(`/api/jobs/${jobId}/clips/${encodeURIComponent(clipId)}/edits`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({settings:value})}).catch(()=>{});},800);}
+ persistTimer=setTimeout(()=>{if(job?.clip_edits)job.clip_edits[clipId]=value;else if(job)job.clip_edits={[clipId]:value};request(`/api/jobs/${jobId}/clips/${encodeURIComponent(clipId)}/edits`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({settings:value})}).catch(()=>{});},800);
+ if(shareAllOn())shareStyle();}
+// «Aplicar a todos los clips»: the look is copied to every clip of the project (each keeps its text, times and framing).
+const SHARED_STYLE=['logo','logo_width','logo_x','logo_y','title_font','title_size','title_padding_x','title_padding_y','title_bg_color','title_text_color','title_outline_color','title_outline_width','title_corners','title_x','style','font','caption_size','caption_color','outline_color','outline_width','caption_x','caption_y','show_subtitles','resolution'];
+let shareTimer=null,shareSent='';
+function shareAllOn(){try{return !!job&&localStorage.getItem('cs.shareAll.'+job.id)==='1';}catch{return false;}}
+function shareStyle(now){if(!job||!selected)return;const look=styles(),value=Object.fromEntries(SHARED_STYLE.map(k=>[k,look[k]])),sig=job.id+JSON.stringify(value);if(sig===shareSent)return;
+ clearTimeout(shareTimer);const jobId=job.id;shareTimer=setTimeout(async()=>{try{const r=await(await request(`/api/jobs/${jobId}/edits/shared`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({settings:value})})).json();
+  shareSent=sig;if(job?.id!==jobId)return;job.clip_edits=r.clip_edits;for(const [id,e] of edits)if(job.clips.some(c=>c.id===id))Object.assign(e,value);
+  if(now)say(`Aplicado a los ${job.clips.length} clips del proyecto.`);}catch(e){say(e.message);}},now?0:900);}
+$('shareAll').onchange=()=>{if(!job)return;try{localStorage.setItem('cs.shareAll.'+job.id,$('shareAll').checked?'1':'0');}catch{}if($('shareAll').checked){shareSent='';shareStyle(true);}else say('Los cambios vuelven a aplicarse solo al clip abierto.');};
 function validRange(opts){const duration=opts.end-opts.start;if(!Number.isFinite(duration)||duration<=0||opts.start<0||opts.end>job.duration)throw Error('El inicio y final deben estar dentro del video.');if(opts.clip_id&&job.analysis_range&&(duration<job.analysis_range.minimum-.001||duration>job.analysis_range.maximum+.001))throw Error(`El clip debe durar ${job.analysis_range.minimum}–${job.analysis_range.maximum} segundos.`);return duration;}
 function paint(){
  $('focus_x').disabled=$('auto_follow').checked;$('focus_y').disabled=$('auto_follow').checked;
@@ -109,7 +119,7 @@ function choose(c){
  ++trackingRequest;trackingPoints=[];trackingRange=null;$('auto_follow').checked=false;$('trackingState').textContent='';
 ++cueVersion;clearTimeout(captionTimer);captionPending=false;selected=c;
  const saved=job?.clip_edits?.[c.id];if(saved&&!edits.has(c.id))edits.set(c.id,saved);
- const fresh=!edits.has(c.id);if(fresh)applyProjectToEditor();$('tracking_person').value='auto';
+ const fresh=!edits.has(c.id)||!!edits.get(c.id).partial;if(fresh)applyProjectToEditor();$('shareAll').checked=shareAllOn();$('tracking_person').value='auto';
  const e=edits.get(c.id)||{title:c.title,subtitles:c.text,start:c.start,end:c.end};for(const [k,v]of Object.entries(e))if($(k)){if(CHECKS.includes(k))$(k).checked=!!v;else $(k).value=v;}
  if($('framing').value==='stack')loadStackPath().catch(e=>say(e.message));else if($('auto_follow').checked)prepareTracking().catch(e=>say(e.message));
  cues=(e.captions||c.captions||[]).map(cue=>({...cue}));$('video').pause();$('video').currentTime=Number($('start').value);$('play').textContent='▶ Reproducir clip';$('export').disabled=false;
@@ -259,7 +269,7 @@ function refreshTitleImage(ratio){
   const blob=await response.blob();if(version!==titleImageVersion)return;
   if(titleImageURL)URL.revokeObjectURL(titleImageURL);titleImageURL=URL.createObjectURL(blob);
   const img=new Image();img.style.width='0px';img.alt=appearance.title;img.src=titleImageURL;img.onload=()=>{if(version===titleImageVersion)img.style.width=(img.naturalWidth*$('preview').clientWidth/1080)+'px';};node.replaceChildren(img);
- }catch(e){if(version===titleImageVersion)say(e.message);}},100);
+ }catch(e){if(version===titleImageVersion){node.replaceChildren();titleImageSignature='';say(e.message);}}},100);
 }
 
 function paintYoutubeAccess(state){
