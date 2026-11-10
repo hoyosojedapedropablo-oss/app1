@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 
 VERSION = 1
-DETECTOR_VERSION = 4          # 2: steady/busy seam (Spreen) · 3: needs real fixed edges (IRL) · 4: small camera box by its edges (Westcol)
+DETECTOR_VERSION = 5          # 2: seam (Spreen) · 3: fixed edges (IRL) · 4: small corner camera (Westcol) · 5: banner faces are not the camera (MrStivenTc)
 CANVAS_W, CANVAS_H = 1080, 1920
 TOP_MIN, TOP_MAX = 768, 960        # camera panel: 40-50 % of the height
 SEAM = 6                           # dark line between camera and game (px)
@@ -160,6 +160,22 @@ def _faces_in_box(source, times, box, ratio):
     return found, used
 
 
+def _face_change(g, var, scale=1.0):
+    """How much the picture changes where a face cluster is (mean per-pixel std across the samples, 0-255)."""
+    cx, cy, w, h = (float(np.median([f[k] for f in g])) / scale for k in range(4))
+    region = var[int(max(0, cy - h / 2)):max(int(cy - h / 2) + 1, int(cy + h / 2)), int(max(0, cx - w / 2)):max(int(cx - w / 2) + 1, int(cx + w / 2))]
+    return float(region.mean()) if region.size else 0.0
+
+
+STILL_FACE = 4.0      # below this, a face is a printed picture (banner, poster, sticker), never the camera
+
+
+def _living(groups, var, scale=1.0):
+    """Face clusters of real people: a picture of a face on the stream's banner never changes (measured on
+    MrStivenTc: 0.9-1.9 for the photo and drawing on his banner, 15.8-26.5 for his face in the camera)."""
+    return [g for g in groups if _face_change(g, var, scale) >= STILL_FACE]
+
+
 def _refines(tight, corner, ex, ey, sw, sh, people=()):
     """Whether a box found around the face is a real refinement of a corner box: it keeps the corner box's edges that
     are inside the frame, and each side it moves inward sits on a line that is clearly there (Westcol: lines of the
@@ -199,12 +215,13 @@ def _boxed_camera(source, times, ex, ey, sw, sh, W, H, ratio, prefer, frame_face
     box = _corner_box(ex, ey, sw, sh)
     if not box: return None
     l, t, r, b = box
-    if not .025 * sw * sh <= (r - l + 1) * (b - t + 1) <= .4 * sw * sh: return None     # a camera is 3-40 % of the frame
+    if not .045 * sw * sh <= (r - l + 1) * (b - t + 1) <= .4 * sw * sh: return None     # a camera is 4.5-40 % of the frame
     clusters = _clusters(list(frame_faces), samples)
     outside = [g for g in clusters if len({f[4] for f in g}) / max(1, samples) >= .3 and not (l <= np.median([f[0] for f in g]) <= r and t <= np.median([f[1] for f in g]) <= b)]
     if outside and not prefer: return None            # someone seen big and often outside the corner: a room (IRL), not a camera
     if var is not None and _room_not_camera(clusters, box, samples, var, min_presence=.2): return None
     faces, used = _faces_in_box(source, times[::max(1, len(times) // 10)], box, ratio)
+    if var is not None: faces = [f for g in _living(_clusters(faces, used), var, ratio) for f in g]
     presence = len({f[4] for f in faces}) / used if used else 0
     if faces and float(np.median([f[3] for f in faces])) > .11 * H: return None        # big faces: a room, not a small camera
     if presence < .2 and not prefer: return None
@@ -287,12 +304,34 @@ def _detect_overlay(source, duration, samples, progress, start, prefer):
         left = _border(col, left - 6, min(left + 7, fx - .9 * fw), left, 0); right = _border(col, max(right - 6, fx + .9 * fw), right + 7, right, sw - 1)
         top = _border(row, top - 6, min(top + 7, fy - .8 * fh), top, 0); bottom = _border(row, max(bottom - 6, fy + 1.0 * fh), bottom + 7, bottom, sh - 1)
         left, top = max(0, left), max(0, top); right, bottom = min(sw - 1, right), min(sh - 1, bottom)
+        # A still graphic next to the camera (MrStivenTc's banner with his photo, a menu of the game) is not part of it:
+        # going out from the face, where the picture stops changing on a border line, the camera ends. Downwards the
+        # border can be nearer or further than the line found; sideways only nearer (a room's quiet wall stays in).
+        still = STILL_FACE * .62; run = max(6, int(.04 * sh))
+        def transition(profile, edges, start, stop, step, still=still, line=.4):
+            for i in range(int(start), int(stop), step):
+                window = profile[i:i + run] if step > 0 else profile[max(0, i - run + 1):i + 1]
+                if window.size == run and window.max() < still:
+                    lo, hi = (max(0, i - 8), i + 4) if step > 0 else (i - 3, min(len(edges), i + 9))
+                    seg = edges[lo:hi]
+                    return lo + int(np.argmax(seg)) if seg.size and seg.max() >= line else None
+            return None
+        if right - left > 8:
+            rows = var[:, left:right + 1].mean(axis=1); erow = ey[:, left:right + 1].mean(axis=1)
+            b = transition(rows, erow, fy + 1.2 * fh, min(sh - run, fy + 5 * fh), 1)
+            if b is not None and b > fy + fh: bottom = b
+        if bottom - top > 8:
+            cols = var[top:bottom + 1].mean(axis=0); ecol = ex[top:bottom + 1].mean(axis=0)
+            r = transition(cols, ecol, fx + .6 * fw, right - run, 1, 1.2, .5)
+            if r is not None and fx + .5 * fw < r < right and right < sw - 1 - .03 * sw: right = r     # a side at the frame edge stays
+            l = transition(cols, ecol, fx - .6 * fw, left + run, -1, 1.2, .5)
+            if l is not None and left < l < fx - .5 * fw and left > .03 * sw: left = l   # (Spreen: his still room and shelf)
         w, h = right - left + 1, bottom - top + 1
         # A big box floating in the middle, touching no edge of the frame, is a one-camera picture (measured: NaimDarrechi
         # in a restaurant gave an 880x828 «camera» with 24 samples); real camera insets that large sit against an edge.
         touches = left <= 3 or top <= 3 or right >= sw - 4 or bottom >= sh - 4
-        # Too small to be a camera either (Westcol full screen: a 138x112 patch of a chair; real ones measured 8-9 %).
-        if w * h > .45 * sw * sh or w * h < .025 * sw * sh or not .5 <= w / max(1, h) <= 2.6 or (w * h > .25 * sw * sh and not touches): return 'none'
+        # Too small to be a camera either (Westcol full screen: a 138x112 patch of a chair; real ones measured 7-9 %: MrStivenTc, Westcol, Spreen).
+        if w * h > .45 * sw * sh or w * h < .045 * sw * sh or not .5 <= w / max(1, h) <= 2.6 or (w * h > .25 * sw * sh and not touches): return 'none'
         # A real camera inset has fixed edges: borders, or the seam with the game. A one-camera stream (IRL, a webcam
         # filling the screen) has none, because the camera moves. Measured: NaimDarrechi walking in a mall gave a 648x1080
         # "box" from the top to the bottom of the frame with no line at all; TheDonato, Spreen and the tests have 2-4.
@@ -302,7 +341,9 @@ def _detect_overlay(source, duration, samples, progress, start, prefer):
         if lines < 2 or (full_height and lines < 3): return 'single'
         return (left, top, right, bottom)
     if not faces: return boxed(none)
-    groups = _clusters(faces, used)
+    groups = _living(_clusters(faces, used), var)
+    faces = [f for g in groups for f in g]            # the boxed fallback below sees only real people too
+    if not faces: return boxed(none)
     group = groups[0]; presence = len({f[4] for f in group}) / used
     fx, fy, fw, fh = (float(np.median([f[k] for f in group])) for k in range(4))
     if fh > .42 * sh:

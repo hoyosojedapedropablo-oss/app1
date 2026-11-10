@@ -583,7 +583,7 @@ class LiveSession:
             pass        # the editor computes it when the moment is opened
 
     def refresh_layouts(self):
-        """Moments prepared by an older camera detector that found no camera are prepared again (newer detector)."""
+        """Moments prepared by an older camera detector are prepared again with the current one."""
         import layout
         redone = 0
         for m in list(self.moments):
@@ -591,7 +591,7 @@ class LiveSession:
             if not f.exists() or not (self.clips / f'{m["id"]}.mp4').exists(): continue
             try: ov = json.loads(f.read_text(encoding='utf-8')).get('overlay') or {}
             except (OSError, ValueError): continue
-            if ov.get('found') or ov.get('detector', 1) >= layout.DETECTOR_VERSION: continue
+            if ov.get('manual') or ov.get('detector', 1) >= layout.DETECTOR_VERSION: continue
             self._prepare_layout(m); redone += 1
         return redone
 

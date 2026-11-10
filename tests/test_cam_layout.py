@@ -12,11 +12,22 @@ import layout
 BOX = dict(x=900, y=20, w=340, h=260)
 
 
+GAME = "drawbox=x='mod(t*160\\,1100)':y=420:w=90:h=90:color=0x10C010:t=fill"
+
+
+def camera_graph(game, box, border, person, fill='0xC01010'):
+    """[0] the game; a camera box drawn over it with a person that moves inside (a real camera is never still; this
+    FFmpeg's drawbox does not animate, overlay does) and its border on top. Output [v]."""
+    (px, py, ax, ay, pw, ph) = person
+    return (f"[0]{game},drawbox=x={box['x']}:y={box['y']}:w={box['w']}:h={box['h']}:color={fill}:t=fill[b];"
+            f"color=c=0xe0a888:s={pw}x{ph}:r=30[p];[b][p]overlay=x='{px}+{ax}*sin(t*5)':y='{py}+{ay}*sin(t*4)':shortest=1,"
+            f"drawbox=x={box['x']}:y={box['y']}:w={box['w']}:h={box['h']}:color=white:t={border}[v]")
+
+
 def make_stream(path, seconds=6, size='1280x720', cam=True):
-    draw = (f",drawbox=x={BOX['x']}:y={BOX['y']}:w={BOX['w']}:h={BOX['h']}:color=0xC01010:t=fill"
-            f",drawbox=x={BOX['x']}:y={BOX['y']}:w={BOX['w']}:h={BOX['h']}:color=white:t=6") if cam else ''
-    backend.command(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', f'gradients=s={size}:c0=0x1a3d5c:c1=0x5c8a3d:nb_colors=2:seed=7:speed=0.08:rate=30', '-f', 'lavfi', '-i', 'sine=f=440:sample_rate=48000',
-                     '-vf', f"drawbox=x='mod(t*160\\,1100)':y=420:w=90:h=90:color=0x10C010:t=fill{draw}", '-t', str(seconds), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-shortest', str(path)])
+    inputs = ['-f', 'lavfi', '-i', f'gradients=s={size}:c0=0x1a3d5c:c1=0x5c8a3d:nb_colors=2:seed=7:speed=0.08:rate=30', '-f', 'lavfi', '-i', 'sine=f=440:sample_rate=48000']
+    video = ['-filter_complex', camera_graph(GAME, BOX, 6, (1045, 105, 50, 30, 40, 50)), '-map', '[v]', '-map', '1:a'] if cam else ['-vf', GAME]
+    backend.command(['ffmpeg', '-v', 'error', '-y', *inputs, *video, '-t', str(seconds), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-shortest', str(path)])
 
 
 def fake_detector(face):
@@ -67,6 +78,22 @@ class DetectionTests(unittest.TestCase):
         self.assertFalse(o['found']); self.assertEqual(o['kind'], 'fullcam')
 
 
+class BannerFaceTests(unittest.TestCase):
+    """MrStivenTc (Free Fire, Nov 2026): the photo of his face on a banner under the camera was taken for the camera."""
+    def test_a_face_that_never_changes_is_a_picture_not_the_camera(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'banner.mp4'
+            banner = "drawbox=x='mod(t*160\\,1100)':y=200:w=90:h=90:color=0x10C010:t=fill,drawbox=x=60:y=380:w=300:h=300:color=0x2040c0:t=fill,drawbox=x=150:y=440:w=110:h=130:color=0xe0b090:t=fill"   # banner photo
+            backend.command(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'gradients=s=1280x720:c0=0x1a3d5c:c1=0x5c8a3d:nb_colors=2:seed=7:speed=0.08:rate=30',
+                             '-filter_complex', camera_graph(banner, BOX, 6, (BOX['x'] + 125, BOX['y'] + 70, 45, 25, 40, 50), fill='0x553322'), '-map', '[v]', '-t', '6', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(source)])
+            banner_face = (150 / 2 + 5, 440 / 2 + 5, 45, 55, .95)                      # bigger and steadier than the real one
+            cam_face = ((BOX['x'] + 120) / 2 + 2, (BOX['y'] + 60) / 2 + 2, 42, 52, .9)
+            with patch('tracking.make_detector', lambda w, h: (lambda frame: [banner_face, cam_face])):
+                o = layout.detect_overlay(source, 6, samples=16)
+        self.assertTrue(o['found'])
+        self.assertGreater(o['x'], 600, o)                                             # the camera at the top right, not the banner
+
+
 class SmallCornerCameraTests(unittest.TestCase):
     """Westcol (Cuphead, Nov 2026): a small camera in the top-left corner whose two people were too small for the face
     detector on the whole frame, so the clips came out without the camera even with «Cámara + juego» chosen."""
@@ -75,10 +102,8 @@ class SmallCornerCameraTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory(); cls.source = Path(cls.tmp.name) / 'corner.mp4'; c = cls.CORNER
-        draw = (f",drawbox=x={c['x']}:y={c['y']}:w={c['w']}:h={c['h']}:color=0xC01010:t=fill"
-                f",drawbox=x={c['x']}:y={c['y']}:w={c['w']}:h={c['h']}:color=white:t=4")
         backend.command(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'gradients=s=1280x720:c0=0x1a3d5c:c1=0x5c8a3d:nb_colors=2:seed=7:speed=0.08:rate=30',
-                         '-vf', f"drawbox=x='mod(t*160\\,1100)':y=420:w=90:h=90:color=0x10C010:t=fill{draw}", '-t', '6', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(cls.source)])
+                         '-filter_complex', camera_graph(GAME, c, 4, (165, 60, 40, 25, 36, 44)), '-map', '[v]', '-t', '6', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(cls.source)])
 
     @classmethod
     def tearDownClass(cls): cls.tmp.cleanup()
@@ -121,11 +146,12 @@ class WideCameraTests(unittest.TestCase):
         box = dict(x=30, y=250, w=560, h=310)
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / 'wide.mp4'
-            room = (f"drawbox=x={box['x']}:y={box['y']}:w={box['w']}:h={box['h']}:color=0x3a2a1a:t=fill,"
-                    f"drawbox=x={box['x'] + 150}:y={box['y']}:w=6:h={box['h']}:color=0xe0c080:t=fill,"     # the shelf edge
-                    f"drawbox=x={box['x']}:y={box['y']}:w={box['w']}:h={box['h']}:color=0x202020:t=4")
+            game = "drawbox=x='mod(t*300\\,1800)':y=700:w=120:h=120:color=0x10C010:t=fill"
+            shelf = f",drawbox=x={box['x'] + 150}:y={box['y']}:w=6:h={box['h']}:color=0xe0c080:t=fill"     # the shelf edge
+            graph = camera_graph(game, box, 4, (box['x'] + 410, box['y'] + 120, 50, 30, 40, 50), fill='0x3a2a1a').replace('[b];', shelf + '[b];', 1)
+            graph = graph.replace('color=white:t=4[v]', 'color=0x202020:t=4[v]')
             backend.command(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'gradients=s=1920x1080:c0=0x1a3d5c:c1=0x5c8a3d:nb_colors=2:seed=3:speed=0.2:rate=30',
-                             '-vf', "drawbox=x='mod(t*300\,1800)':y=700:w=120:h=120:color=0x10C010:t=fill," + room, '-t', '8', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(source)])
+                             '-filter_complex', graph, '-map', '[v]', '-t', '8', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(source)])
             face = ((box['x'] + 430) / 3 - 15, (box['y'] + 140) / 3 - 18, 30, 36, .9)      # on the right, 4.8 face widths from the left border (Spreen: 4.7)
             with patch('tracking.make_detector', fake_detector(face)):
                 o = layout.detect_overlay(source, 8, samples=16)
