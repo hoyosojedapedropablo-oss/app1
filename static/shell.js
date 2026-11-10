@@ -608,8 +608,11 @@ function buildLiveLayout() {
   const url = $('liveUrl'); url.placeholder = 'Pega el enlace del directo: kick.com/canal o youtube.com/@canal/live';
   const connect = h('div', { id: 'liveConnect', class: 'card live-connect' },
     h('label', { class: 'search big' }, svg('<circle cx="12" cy="12" r="2.5"></circle><path d="M7.5 7.5a6.4 6.4 0 0 0 0 9M16.5 7.5a6.4 6.4 0 0 1 0 9"></path>', 20), url),
-    h('div', { class: 'live-buttons' }, $('liveStart'), $('liveStop'), $('liveResume')),
+    h('div', { class: 'live-buttons' }, $('liveStart')),
     h('p', { class: 'muted', style: 'margin:0', text: 'Usa directos públicos y respeta los derechos del creador y las normas de Kick y YouTube. ClipStudio no evita restricciones de acceso, inicios de sesión ni DRM.' }));
+  // «Detener sesión» sits in the on air bar, red, with a stop icon: the one button that ends the live session.
+  $('liveStop').replaceChildren(h('span', { class: 'stop-ic', 'aria-hidden': 'true' }, h('i')), 'Detener sesión'); $('liveStop').title = 'Deja de grabar el directo. Los momentos ya encontrados se conservan.';
+  $('liveResume').textContent = '↻ Reanudar';
   const ring = h('div', { id: 'liveHeat', class: 'heat-ring' }); ring.innerHTML = HEAT_RING;
   ring.append(h('div', { class: 'heat-core' }, h('img', { id: 'liveHeatEmoji', class: 'em', alt: '' }), h('b', { id: 'liveHeatNum', text: '—' })));
   const tile = (icon, id, label) => h('div', { class: 'ltile' }, emo(icon), h('b', { id, text: '0' }), h('span', { text: label }));
@@ -620,7 +623,8 @@ function buildLiveLayout() {
       h('div', { class: 'onair-meta' },
         h('span', { class: 'onair-clock' }, h('small', { id: 'liveClockLabel', text: 'En directo' }), h('b', { id: 'liveClock', text: '0:00' })),
         h('span', { id: 'liveBadge', class: 'onair-pill' }),
-        h('span', { id: 'liveConn', class: 'live-conn' }))),
+        h('span', { id: 'liveConn', class: 'live-conn' })),
+      h('div', { class: 'onair-actions' }, $('liveStop'), $('liveResume'))),
     h('div', { class: 'card live-stage' },
       h('div', { class: 'live-frame' }, h('img', { id: 'liveFrame', alt: 'Imagen actual del directo' }), h('span', { class: 'scan', 'aria-hidden': 'true' }), h('span', { class: 'vignette', 'aria-hidden': 'true' }),
         h('div', { class: 'live-chips' }, h('span', { id: 'liveRec', class: 'chip glass rec' }, h('i'), 'REC'), h('span', { id: 'liveDelay', class: 'chip glass', text: 'Unos segundos de retraso' })),
@@ -1279,6 +1283,49 @@ document.querySelectorAll('#editorView input[type=range]').forEach(fillSlider);
 
 // --- Videos largos a clips (parte 4): hero, steps, drag & drop, recent videos -----------------------------------------
 // Only presentation: every control of the existing screen stays the same element with the same behaviour (app.js).
+// Popular long videos to clip (games, podcasts, entertainment), most viewed first. One click imports it from YouTube.
+const DISCOVER_TABS = [['juegos', 'Juegos', '🎮'], ['podcasts', 'Podcasts', '🎙️'], ['entretenimiento', 'Entretenimiento', '🎬']];
+const discoverUI = { cat: 'juegos', cache: {} };
+const viewsText = (n) => n >= 1e6 ? `${(n / 1e6).toLocaleString('es', { maximumFractionDigits: 1 })} M vistas` : n >= 1e3 ? `${Math.round(n / 1e3)} mil vistas` : `${n} vistas`;
+function buildDiscover() {
+  const box = h('section', { id: 'discoverBox', class: 'discover-box' },
+    h('div', { class: 'disc-head' },
+      h('div', {}, h('h2', {}, emo('fire'), 'Videos populares para clipear'), h('span', { class: 'muted', text: 'Los videos largos más vistos de grandes canales en español. Elige uno y la IA encuentra sus mejores momentos.' })),
+      h('div', { id: 'discoverTabs', class: 'disc-tabs', role: 'tablist' }, DISCOVER_TABS.map(([k, t, e]) => h('button', { type: 'button', role: 'tab', 'data-cat': k, onclick: () => { discoverUI.cat = k; paintDiscover(); } }, h('span', { 'aria-hidden': 'true', text: e }), t)))),
+    h('div', { id: 'discoverRow', class: 'disc-row' }));
+  setTimeout(paintDiscover, 0);
+  return box;
+}
+async function paintDiscover() {
+  const cat = discoverUI.cat, row = $('discoverRow'); if (!row) return;
+  for (const b of document.querySelectorAll('#discoverTabs button')) { const on = b.dataset.cat === cat; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); }
+  if (!discoverUI.cache[cat]) {
+    put(row, [0, 1, 2, 3, 4].map(() => h('div', { class: 'disc-card skeleton' }, h('span', { class: 'disc-thumb' }), h('i'), h('i'))));
+    const data = await api(`/api/discover/videos?category=${cat}`).catch(() => ({ videos: [] }));
+    if (data.videos?.length) discoverUI.cache[cat] = data.videos;
+    if (discoverUI.cat !== cat) return;
+    if (!data.videos?.length) { put(row, h('div', { class: 'empty', text: 'No se pudo leer YouTube ahora mismo. Revisa tu conexión e inténtalo más tarde.' })); return; }
+  }
+  put(row, discoverUI.cache[cat].map(discoverCard));
+}
+function discoverCard(v) {
+  const hot = v.views >= 5e6;
+  return h('article', { class: 'disc-card' + (hot ? ' hot' : '') },
+    h('a', { class: 'disc-thumb', href: v.url, target: '_blank', rel: 'noopener', title: 'Ver en YouTube' },
+      h('img', { src: v.thumb, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' }),
+      h('span', { class: 'chip glass disc-views' }, hot ? emo('fire') : '', viewsText(v.views)),
+      h('span', { class: 'chip glass disc-dur', text: fmtDur(v.duration) })),
+    h('div', { class: 'disc-body' },
+      h('span', { class: 'disc-who' }, avatarImg({ name: v.channel, avatar: v.avatar }, 28), h('span', { text: v.channel })),
+      h('b', { class: 'disc-title', text: v.title, title: v.title }),
+      h('button', { class: 'btn primary', type: 'button', text: 'Clipear este video', onclick: () => clipDiscovered(v) })));
+}
+function clipDiscovered(v) {
+  const panel = $('youtubePanel'); if (panel) panel.open = true;
+  $('youtubeUrl').value = v.url; $('youtubeUrl').dispatchEvent(new Event('input', { bubbles: true }));
+  panel?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  $('downloadYoutube').click();
+}
 function buildAnalysisLayout() {
   const view = $('analysisView'); if (!view || view.dataset.v4) return; view.dataset.v4 = '1';
   const intro = view.querySelector('.intro');
@@ -1306,6 +1353,7 @@ function buildAnalysisLayout() {
   const steps = h('ol', { class: 'lv-steps', 'aria-label': 'Pasos' }, [['Tu video', 'Archivo o YouTube'], ['Contexto', 'Opcional, mejora los títulos'], ['Motor de IA', 'Local, sin pagar'], ['Momentos', 'Revisa y edita']].map(([t, s], i) =>
     h('li', { 'data-step': String(i + 1) }, h('span', { class: 'n', text: String(i + 1) }), h('span', {}, h('b', { text: t }), h('small', { text: s })))));
   view.querySelector('.setup-grid').before(steps);
+  steps.before(buildDiscover());
   const panels = view.querySelectorAll('.setup-grid > .panel');
   [['1', 'Tu video y su contexto'], ['2', 'Qué quieres encontrar']].forEach(([n, t], i) => { const h2 = panels[i]?.querySelector('h2'); if (h2) h2.replaceChildren(h('span', { class: 'lv-num', text: n }), t); });
   const markSteps = () => {
