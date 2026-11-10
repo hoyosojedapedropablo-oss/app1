@@ -187,3 +187,14 @@ class ShellTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TitlePositionTests(unittest.TestCase):
+    def test_title_moved_by_hand_stays_and_an_automatic_one_follows_the_format(self):
+        import app as backend
+        with patch.object(backend, 'default_title_y', lambda framing, zoom, panels: {'stack': 44.3, 'zoom': 18.8}.get(framing, 12)):
+            self.assertEqual(backend.title_position('stack', 'balanced', None, 20, '1'), 20)        # by hand
+            self.assertEqual(backend.title_position('stack', 'balanced', None, 20, ''), 44.3)       # automatic: on the line
+            self.assertEqual(backend.title_position('stack', 'balanced', None, 20, None), 44.3)     # old edits on «Cámara + juego»
+            self.assertEqual(backend.title_position('zoom', 'balanced', None, 33, None), 33)        # old edits elsewhere: kept
+            self.assertEqual(backend.title_position('zoom', 'balanced', None, None, None), 18.8)

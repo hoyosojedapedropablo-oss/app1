@@ -162,3 +162,23 @@ class PrefsAndStorageTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class YoutubeLiveTests(unittest.TestCase):
+    def test_spanish_live_streams_by_audience_without_tv_radio_or_reruns(self):
+        entries = [dict(live_status='is_live', concurrent_view_count=733754, uploader_id='@hotspanishvlogs', id='a1', channel='HotSpanish Vlogs', title='LA MANSIÓN VIP TEMPORADA 2 | DÍA 2'),
+                   dict(live_status='is_live', concurrent_view_count=4576, uploader_id='@noticiascaracol', id='a2', channel='Noticias Caracol', title='🔴 NOTICIAS CARACOL EN VIVO'),
+                   dict(live_status='is_live', concurrent_view_count=2296, uploader_id='@elchavodel8', id='a3', channel='El Chavo del 8', title='El Chavo del 8 🔴 EN VIVO 🤣 Maratón de travesuras'),
+                   dict(live_status='is_live', concurrent_view_count=29786, uploader_id='@typicalgamer', id='a4', channel='Typical Gamer', title='LIVE! - FINDING the PIRATE TOKEN in FORTNITE!'),
+                   dict(live_status='is_live', concurrent_view_count=1384, uploader_id='@alfregames', id='a5', channel='Alfre Games', title='GTA: SAN ANDREAS EN VIVO | RUMBO A GTA 6'),
+                   dict(live_status='was_live', concurrent_view_count=99999, uploader_id='@old', id='a6', channel='Old', title='directo de ayer'),
+                   dict(live_status='is_live', concurrent_view_count=120, uploader_id='@tiny', id='a7', channel='Tiny', title='jugando en vivo')]
+        class YDL(FakeYDL):
+            params = {}
+            def extract_info(self, url, **kw): return dict(entries=entries)
+        with tempfile.TemporaryDirectory() as tmp:
+            s = streamers.Streamers(tmp, ydl_factory=YDL)
+            rows = s.youtube_live_now()
+        self.assertEqual([r['name'] for r in rows], ['HotSpanish Vlogs', 'Alfre Games'])
+        self.assertEqual(rows[0]['url'], 'https://www.youtube.com/@hotspanishvlogs/live')
+        self.assertEqual(rows[0]['video_id'], 'a1'); self.assertTrue(rows[0]['thumb'].endswith('/a1/hqdefault_live.jpg'))
