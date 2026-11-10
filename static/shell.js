@@ -116,7 +116,7 @@ function silenceOthers(keep) {
   if (!keep?.closest?.('.player-box')) document.querySelectorAll('.player-box').forEach((b) => b.closest('.cs-modal')?.remove());
 }
 function silenceOutside(view) {
-  hideBigPreview();
+  hideBigPreview(); document.querySelectorAll('.clip-modal').forEach((m) => { m.querySelectorAll('video').forEach(stopMedia); m.remove(); });
   document.querySelectorAll('.player-box').forEach((b) => b.closest('.cs-modal')?.remove());
   const host = $(view + 'View');
   for (const m of document.querySelectorAll('video,audio')) if (!m.paused && !host?.contains(m)) m.pause();
@@ -175,7 +175,10 @@ function showBigPreview(c, card) {
   const panel = h('div', { id: 'bigPreview', class: 'big-preview', role: 'dialog', 'aria-label': `Vista previa de ${c.title}` },
     h('div', { class: 'bp-frame' }, h('img', { src: c.thumb_url, alt: '' }), video, wait),
     h('div', { class: 'bp-info' }, h('b', { text: c.title }), h('span', { class: 'muted', text: `${c.channel} · ${fmtDur(c.duration || 0)}` }),
-      h('button', { class: 'btn ghost bp-sound', type: 'button', text: '🔇 Silenciar', onclick: (e) => { e.stopPropagation(); video.muted = !video.muted; e.target.textContent = video.muted ? '🔊 Con sonido' : '🔇 Silenciar'; } })));
+      h('div', { class: 'bp-actions' },
+        h('button', { class: 'btn ghost bp-sound', type: 'button', text: '🔇 Silenciar', onclick: (e) => { e.stopPropagation(); video.muted = !video.muted; e.target.textContent = video.muted ? '🔊 Con sonido' : '🔇 Silenciar'; } }),
+        h('button', { class: 'btn primary bp-big', type: 'button', text: '⤢ Ver en grande', onclick: (e) => { e.stopPropagation(); openClipModal(c); } }))));
+  panel.querySelector('.bp-frame').addEventListener('click', () => openClipModal(c));
   panel.addEventListener('mouseleave', () => hideBigPreview());
   panel._card = card;
   document.body.append(panel);
@@ -191,6 +194,40 @@ function showBigPreview(c, card) {
   video.src = `/api/library/${encodeURIComponent(c.id)}/preview.mp4`;
 }
 function hideBigPreview() { clearTimeout(hoverTimer); hoverFor = null; document.querySelectorAll('#bigPreview').forEach((p) => { p.querySelectorAll('video').forEach(stopMedia); p.remove(); }); }
+// --- Clip preview, centred: the clip comes to the middle, everything behind it blurs (Biblioteca, Inicio, directo) ---
+function openClipModal(c) {
+  hideBigPreview(); document.querySelectorAll('.clip-modal').forEach((m) => m.remove());
+  const video = h('video', { playsinline: true, loop: true, preload: 'auto' }); video.muted = false;
+  const wait = h('div', { class: 'bp-wait' }, h('span', { class: 'bars', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'), h('i')), h('span', { text: 'Preparando la vista previa…' }));
+  const playBtn = h('button', { class: 'pv-play', type: 'button', 'aria-label': 'Reproducir' }, svg('<path d="M8 5.5v13l11-6.5z" fill="currentColor" stroke="none"></path>', 34));
+  const bar = h('i'); const progress = h('div', { class: 'cm-progress', title: 'Ir a este punto' }, bar);
+  const sound = h('button', { class: 'cm-sound', type: 'button', title: 'Sonido', text: '🔊' });
+  const frame = h('div', { class: 'cm-frame' }, h('img', { src: c.thumb_url, alt: '' }), video, wait, playBtn, sound, progress);
+  const close = () => { stopMedia(video); modal.classList.remove('in'); modal.classList.add('out'); setTimeout(() => modal.remove(), 220); };
+  const modal = h('div', { class: 'clip-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': `Vista previa de ${c.title}`, onclick: (e) => { if (e.target === modal) close(); } },
+    h('div', { class: 'cm-box' },
+      h('button', { class: 'theater-x', type: 'button', title: 'Cerrar (Esc)', 'aria-label': 'Cerrar la vista previa', text: '×', onclick: close }),
+      frame,
+      h('div', { class: 'cm-foot' }, h('span', { class: 'tf-text' }, h('b', { text: c.title }), h('span', { class: 'muted', text: [c.channel, fmtDur(c.duration || 0)].filter(Boolean).join(' · ') })),
+        h('button', { class: 'btn ghost', type: 'button', text: 'Editar', onclick: () => { close(); openLibraryClip(c).catch?.(() => {}); } }),
+        h('button', { class: 'btn primary', type: 'button', text: '↓ Exportar', onclick: (e) => downloadClip(c, e.currentTarget) }))));
+  const toggle = () => { if (video.paused) video.play().catch(() => {}); else video.pause(); };
+  frame.addEventListener('click', (e) => { if (e.target === video || e.target === frame || e.target === playBtn || playBtn.contains(e.target)) toggle(); });
+  sound.addEventListener('click', (e) => { e.stopPropagation(); video.muted = !video.muted; sound.textContent = video.muted ? '🔇' : '🔊'; });
+  progress.addEventListener('click', (e) => { e.stopPropagation(); const r = progress.getBoundingClientRect(); if (video.duration) video.currentTime = video.duration * (e.clientX - r.left) / r.width; });
+  video.addEventListener('play', () => frame.classList.add('is-playing')); video.addEventListener('pause', () => frame.classList.remove('is-playing'));
+  video.addEventListener('timeupdate', () => { if (video.duration) bar.style.width = `${(video.currentTime / video.duration) * 100}%`; });
+  video.addEventListener('canplay', () => {
+    if (!modal.isConnected) { stopMedia(video); return; }
+    wait.remove(); frame.classList.add('ready');
+    video.play().catch(() => { video.muted = true; sound.textContent = '🔇'; video.play().catch(() => {}); });
+  }, { once: true });
+  video.addEventListener('error', () => { wait.querySelector('span:last-child').textContent = 'No se pudo preparar la vista previa'; });
+  modal.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); else if (e.key === ' ' && !(e.target instanceof HTMLButtonElement)) { e.preventDefault(); toggle(); } });
+  document.body.append(modal); modal.tabIndex = -1; modal.focus();
+  requestAnimationFrame(() => requestAnimationFrame(() => modal.classList.add('in')));
+  video.src = `/api/library/${encodeURIComponent(c.id)}/preview.mp4`;
+}
 async function downloadClip(c, button) {
   button.disabled = true; const label = button.textContent; button.textContent = '…';
   toast('Preparando la descarga', `«${c.title}» en alta calidad (1080 × 1920). Puede tardar unos segundos.`);
@@ -854,7 +891,7 @@ function decorateSliders() {
     if (r.dataset.out) continue; r.dataset.out = '1';
     const out = h('output', { class: 'range-val' }); const label = r.previousElementSibling?.tagName === 'LABEL' ? r.previousElementSibling : null;
     const unit = /size|width/.test(r.id) ? '' : /_x|_y|focus/.test(r.id) ? '%' : '';
-    r._show = () => { out.textContent = (Math.round(Number(r.value) * 10) / 10).toLocaleString('es') + unit; };
+    r._show = () => { out.textContent = (Math.round(Number(r.value) * 10) / 10).toLocaleString('es') + unit; const min = Number(r.min || 0), max = Number(r.max || 100); r.style.setProperty('--p', `${((Number(r.value) - min) / Math.max(1e-9, max - min)) * 100}%`); };
     if (label) label.append(out); else r.before(out);
     r.addEventListener('input', r._show); r._show();
   }
@@ -882,6 +919,82 @@ function paintClipIndex() {
   if ($('clipIndex')) $('clipIndex').textContent = i >= 0 ? `Clip ${i + 1} de ${job.clips.length}` : '';
 }
 buildEditorV4();
+// --- Vista ampliada (parte 5): centred over the app, which blurs behind it; × / click outside / Esc close it -----------
+// The editor's own preview is moved into the overlay (so title, captions and logo keep the export's proportions) and
+// put back exactly where it was when it closes. Before, it opened inside the editor column and could not be closed.
+let theaterHost = null, theaterSpot = null;
+function theaterChrome(panel) {
+  if (panel.querySelector('.theater-x')) return;
+  panel.prepend(h('button', { class: 'theater-x', type: 'button', title: 'Cerrar (Esc)', 'aria-label': 'Cerrar la vista ampliada', text: '×', onclick: () => setTheater(false) }));
+  panel.append(h('div', { class: 'theater-foot' },
+    h('span', { class: 'tf-text' }, h('b', { id: 'theaterTitle' }), h('span', { id: 'theaterMeta', class: 'muted' })),
+    h('button', { class: 'btn ghost', type: 'button', text: 'Volver al editor', onclick: () => setTheater(false) }),
+    h('button', { class: 'btn primary', type: 'button', text: '↓ Exportar', onclick: () => { setTheater(false); $('export').click(); } })));
+}
+{
+  const baseSetTheater = setTheater;
+  window.setTheater = (on) => {
+    const panel = previewPanel();
+    if (on && !theaterHost) {
+      theaterChrome(panel);
+      theaterSpot = document.createComment('preview'); panel.before(theaterSpot);
+      theaterHost = h('div', { class: 'theater-host', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Vista ampliada del clip', onclick: (e) => { if (e.target === theaterHost) setTheater(false); } });
+      theaterHost.append(panel); document.body.append(theaterHost);
+      $('theaterTitle').textContent = $('title').value || selected?.title || 'Clip';
+      $('theaterMeta').textContent = `${(Number($('end').value) - Number($('start').value)).toFixed(1).replace('.', ',')} s · ${({ stack: 'Cámara + juego', zoom: 'Zoom', crop: 'Pantalla completa', fit: 'Ajustado' })[$('framing').value] || ''}`;
+      requestAnimationFrame(() => requestAnimationFrame(() => theaterHost?.classList.add('in')));
+    }
+    baseSetTheater(on);
+    if (!on && theaterHost) {
+      const host = theaterHost; theaterHost = null;
+      host.classList.remove('in'); host.classList.add('out');
+      setTimeout(() => { theaterSpot.replaceWith(panel); host.remove(); requestAnimationFrame(paint); }, 220);
+    }
+  };
+  setTheater = window.setTheater;
+}
+
+// --- Play on the clip itself, like a video player: click the picture to play / pause --------------------------------
+function buildOnVideoPlay() {
+  const preview = $('preview'); if (preview.querySelector('.pv-play')) return;
+  const big = h('button', { class: 'pv-play', type: 'button', 'aria-label': 'Reproducir', title: 'Reproducir (Espacio)' }, svg('<path d="M8 5.5v13l11-6.5z" fill="currentColor" stroke="none"></path>', 34));
+  const flash = h('span', { class: 'pv-flash', 'aria-hidden': 'true' });
+  const time = h('span', { class: 'pv-time', 'aria-hidden': 'true' });
+  preview.append(big, flash, time);
+  const toggle = () => { $('play').click(); };
+  big.addEventListener('click', (e) => { e.stopPropagation(); toggle(); });
+  // A click on the picture (not on a title, caption or logo being moved) plays or pauses.
+  preview.addEventListener('click', (e) => {
+    if (e.target !== $('video') && e.target !== $('stackCanvas') && e.target !== preview) return;
+    if (!$('renderVideo').hidden) return;
+    toggle();
+  });
+  const v = $('video');
+  const paintState = (fromToggle) => {
+    const playing = !v.paused;
+    preview.classList.toggle('is-playing', playing);
+    big.setAttribute('aria-label', playing ? 'Pausar' : 'Reproducir');
+    if (fromToggle) {
+      flash.replaceChildren(svg(playing ? '<path d="M8 5.5v13l11-6.5z" fill="currentColor" stroke="none"></path>' : '<rect x="6.5" y="5" width="4" height="14" rx="1" fill="currentColor" stroke="none"></rect><rect x="13.5" y="5" width="4" height="14" rx="1" fill="currentColor" stroke="none"></rect>', 30));
+      flash.classList.remove('go'); void flash.offsetWidth; flash.classList.add('go');
+    }
+  };
+  v.addEventListener('play', () => paintState(true)); v.addEventListener('pause', () => paintState(!v.ended)); paintState(false);
+  v.addEventListener('timeupdate', () => {
+    const t = Math.max(0, v.currentTime - Number($('start').value)), d = Math.max(0, Number($('end').value) - Number($('start').value));
+    time.textContent = `${fmtClock(t)} / ${fmtClock(d)}`;
+  });
+  $('play').closest('.playback')?.classList.add('pv-hidden-play');
+}
+const fmtClock = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+buildOnVideoPlay();
+
+// --- Inspector: sliders show how far they are filled; panels slide in when you change tab ---------------------------
+function fillSlider(r) { const min = Number(r.min || 0), max = Number(r.max || 100); r.style.setProperty('--p', `${((Number(r.value) - min) / Math.max(1e-9, max - min)) * 100}%`); }
+document.addEventListener('input', (e) => { if (e.target instanceof HTMLInputElement && e.target.type === 'range' && e.target.closest('#editorView')) fillSlider(e.target); }, true);
+{ const prev = refreshSliderValues; refreshSliderValues = () => { prev(); document.querySelectorAll('#editorView input[type=range]').forEach(fillSlider); }; }
+document.querySelectorAll('#editorView input[type=range]').forEach(fillSlider);
+
 {
   const prev = choose;
   window.choose = (c) => { prev(c); paintClipIndex(); refreshSliderValues(); filterMoments(); const hst = histFor(c.id); if (!hst.past.length) hst.past.push(JSON.stringify(settings())); paintHistoryButtons(); };
