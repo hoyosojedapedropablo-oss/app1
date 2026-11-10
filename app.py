@@ -1152,7 +1152,8 @@ def library_thumb(cid:str):
    try:path=LIBRARY.make_thumb(cid)          # plain frame as a fallback
    except Exception:path=None
  if not path or not Path(path).exists():raise HTTPException(404,'Sin miniatura.')
- return FileResponse(path,media_type='image/jpeg',headers={'Cache-Control':'max-age=86400'})
+ # Revalidated every time (a cheap «not modified»): a thumbnail redone after a detector update shows at once.
+ return FileResponse(path,media_type='image/jpeg',headers={'Cache-Control':'no-cache'})
 
 @app.get('/api/library/{cid}/video')
 def library_video(cid:str):
