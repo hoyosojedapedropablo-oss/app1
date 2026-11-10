@@ -1235,7 +1235,7 @@ def streamers_loop():
   time.sleep(60)
 
 def refresh_live_layouts():
- """After a camera-detector update: the recent live sessions' moments where no camera was found are checked again,
+ """After a camera-detector update: the recent live sessions' moments are checked again with the new detector,
  one at a time in the background, so their clips open (and their thumbnails show) with the camera when there is one."""
  time.sleep(20)   # let the app finish starting first
  for session in sorted(LIVE.values(),key=lambda s:s.created,reverse=True)[:15]:
