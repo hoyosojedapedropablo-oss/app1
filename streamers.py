@@ -107,7 +107,7 @@ class Streamers:
         if not force and time.time() - item.get('checked', 0) < LIVE_TTL: return item
         try:
             info = self.lookup(item['platform'], item['slug'])
-            item.update(info, checked=time.time(), error='')
+            item.update(info, checked=time.time(), error='', read=self.LIVE_READ_VERSION)
             self._avatar(key, info.get('photo'))
             self._live_still(key, item)
         except Exception as e:
@@ -189,6 +189,15 @@ class Streamers:
                     item['clips'] = clip_counts.get((s.get('channel') or '').lower(), item.get('clips', 0))
         self.save()
 
+    LIVE_READ_VERSION = 2      # 2: the /live redirect is followed (before, every YouTube channel read as «not live»)
+
+    def recheck_old_youtube(self):
+        with _lock:
+            for item in self.items.values():
+                if item.get('platform') == 'youtube' and item.get('read', 1) < self.LIVE_READ_VERSION: item['checked'] = 0
+            for item in self.featured.values():
+                if item.get('platform') == 'youtube' and item.get('read', 1) < self.LIVE_READ_VERSION: item['checked'] = 0
+
     def check_all(self):
         """Background pass: refresh stale streamers one at a time (most clipped first)."""
         if self._checking: return
@@ -200,6 +209,8 @@ class Streamers:
             self._checking = False
 
     def listing(self):
+        cached = getattr(self, '_yt_live', None)
+        live_now = {r['key']: r for r in cached[1]} if cached and time.time() - cached[0] < YOUTUBE_TTL else {}
         with _lock:
             out = []
             for k, v in self.items.items():
@@ -208,6 +219,9 @@ class Streamers:
                 row.update(key=k, avatar=f'/api/streamers/{k}/avatar' if self.avatar_path(k) else '')
                 still = self.live_still(k)
                 if v.get('platform') == 'kick': row['thumb'] = f'/api/streamers/{k}/live.jpg?t={int(still.stat().st_mtime)}' if still and v.get('live') else ''
+                yt = live_now.get(k)
+                if yt and not row.get('live'):      # newer than the last check of this channel: the YouTube live list
+                    row.update(live=True, title=yt.get('title', ''), viewers=yt.get('viewers'), video_id=yt.get('video_id', ''), thumb=yt.get('thumb', ''))
                 out.append(row)
         return sorted(out, key=lambda v: (not v.get('live'), -v.get('clips', 0), v.get('name', '').lower()))
 
@@ -231,7 +245,7 @@ class Streamers:
                     info = self._youtube_live(slug)                  # photo and name already known
                 else:
                     info = self.lookup(platform, slug); self._avatar(key, info.get('photo'))
-                item.update(info, platform=platform, slug=slug, url=url_for(platform, slug), lang=lang, checked=time.time(), error='')
+                item.update(info, platform=platform, slug=slug, url=url_for(platform, slug), lang=lang, checked=time.time(), error='', read=self.LIVE_READ_VERSION)
                 if platform == 'kick': self._live_still(key, item)
             except Exception as e:
                 item.update(platform=platform, slug=slug, url=url_for(platform, slug), name=item.get('name') or slug, lang=lang, checked=time.time(), error=type(e).__name__, live=False)

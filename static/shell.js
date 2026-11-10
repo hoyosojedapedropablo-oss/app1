@@ -1305,7 +1305,13 @@ function setupStreamerSearch() {
   });
   function showResults(q, groups, finished) {
     const order = ['link', 'local', 'kick', 'youtube'], seen = new Set(), found = [];
-    for (const g of groups.slice().sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key))) for (const s of g.items) if (!seen.has(s.key)) { seen.add(s.key); found.push(s); }
+    // The same channel can come from your list and from Kick / YouTube: keep one, and the «en vivo» one wins.
+    const byKey = new Map();
+    for (const g of groups.slice().sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key))) for (const s of g.items) {
+      const prev = byKey.get(s.key);
+      if (!prev) { byKey.set(s.key, s); found.push(s); }
+      else if (s.live && !prev.live) { Object.assign(prev, s, { clips: prev.clips || s.clips, avatar: prev.avatar || s.avatar }); }
+    }
     found.sort((a, b) => (b.live - a.live) || ((b.clips || 0) - (a.clips || 0)));
     box.hidden = false;
     put(box, h('span', { class: 'lbl', style: 'padding:6px 10px', text: !q ? 'Tus streamers' : found.length ? `Resultados para «${q}»${finished ? '' : ' · buscando en Kick y YouTube…'}` : finished ? 'Sin resultados: prueba con otro nombre o pega el enlace del directo' : `Buscando «${q}» en Kick y YouTube…` }),

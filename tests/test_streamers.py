@@ -200,3 +200,15 @@ class YoutubeLivePageTests(unittest.TestCase):
             rows = [dict(key='youtube:@otro', slug='@otro', live=False), dict(key='youtube:@hotspanishvlogs', slug='@hotspanishvlogs', live=False)]
             s._youtube_live_status(rows)
             self.assertEqual([r['live'] for r in rows], [False, True])
+
+
+class FollowedYoutubeStateTests(unittest.TestCase):
+    def test_a_followed_channel_shows_live_from_the_newer_live_list_and_old_reads_are_redone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s = streamers.Streamers(tmp, ydl_factory=FakeYDL)
+            key = s.follow('https://www.youtube.com/@hotspanishvlogs', explicit=True)
+            s.items[key].update(live=False, checked=time.time())                     # read before the /live fix
+            s._yt_live = (time.time(), [dict(key=key, title='LA MANSIÓN VIP', viewers=795000, video_id='DxgDeW-gIcU', thumb='t.jpg')])
+            row = next(r for r in s.listing() if r['key'] == key)
+            self.assertTrue(row['live']); self.assertEqual(row['viewers'], 795000)
+            s.recheck_old_youtube(); self.assertEqual(s.items[key]['checked'], 0)     # checked again on the next pass

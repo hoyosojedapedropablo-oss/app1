@@ -1227,6 +1227,7 @@ def streamers_sync():
  STREAMERS.sync_from([s.public(full=False) for s in LIVE.values()],counts)
 
 def streamers_loop():
+ STREAMERS.recheck_old_youtube()      # once: YouTube channels read before the /live fix are checked again now
  # Every streamer the user clips is checked at most every 5 minutes, one request at a time.
  while True:
   try:streamers_sync();STREAMERS.check_all()
