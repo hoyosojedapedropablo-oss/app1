@@ -1409,6 +1409,19 @@ function paintDurationNote() {
   note.textContent = a >= b ? 'El máximo tiene que ser mayor que el mínimo.' : `Cada clip durará entre ${a} y ${b} segundos.`;
   note.classList.toggle('warn', a >= b);
 }
+// «¿Quiénes salen en el directo?»: names the transcriber should hear right and the titles should use (the stream's
+// own title, description and tags are added by the app). Remembered per streamer.
+function buildNamesField() {
+  if ($('liveVocab')) return;
+  const input = h('input', { id: 'liveVocab', type: 'text', maxlength: '600', autocomplete: 'off', placeholder: 'Ej.: JLexis, Kunno, La Mansión VIP' });
+  const box = h('div', { id: 'cfgNames', class: 'cfg-group cfg-names' },
+    h('span', { class: 'cfg-label', text: 'Nombres del directo' }),
+    h('b', { class: 'names-q', text: '¿Quiénes salen en el directo?' }),
+    h('label', { class: 'search names-input' }, svg('<path d="M20 21a8 8 0 0 0-16 0"></path><circle cx="12" cy="8" r="4"></circle>', 16), input),
+    h('small', { class: 'muted', text: 'Opcional. Sepáralos con comas. La IA los escuchará bien en la transcripción y los usará en los títulos. También toma los nombres del título y la descripción del directo.' }));
+  const duration = $('cfgLiveDuration')?.closest('.cfg-group');
+  (duration || document.querySelector('#configModal .cfg-body'))?.after(box);
+}
 function syncDurationQuestion() {
   const a = Number($('liveMin').value), b = Number($('liveMax').value);
   const key = (CLIP_LENGTHS.find((x) => x[2] === a && x[3] === b) || ['custom'])[0];
@@ -1458,7 +1471,9 @@ window.openConfig = (mode) => {
   const card = $('configModal').querySelector('.modal-card');
   $('cfgStart').blur(); card.focus({ preventScroll: true }); card.querySelector('.cfg-body').scrollTop = 0;
   setTimeout(() => card._paintSummary?.(), 0);
-  if (mode === 'live') { buildDurationQuestion(); syncDurationQuestion(); }
+  if (mode === 'live') { buildDurationQuestion(); syncDurationQuestion(); buildNamesField(); $('liveVocab').value = ''; }
+  if ($('cfgNames')) $('cfgNames').hidden = mode !== 'live';
+  if (mode === 'live') $('cfgStackNote').textContent = 'Para streams: la cámara del streamer arriba y el juego o la reacción abajo. Si el directo no tiene cámara, se usa Zoom.';
   const note = $('cfgPrefsNote') || h('p', { id: 'cfgPrefsNote', class: 'prefs-note', hidden: true });
   if (!note.parentElement) $('configIntro').after(note);
   note.hidden = true;
@@ -1467,7 +1482,7 @@ window.openConfig = (mode) => {
   api('/api/streamers/prefs?url=' + encodeURIComponent(url)).then((p) => {
     if (!p || !p.clip_settings) return;
     showConfig({ ...NEW_DEFAULTS, ...p.clip_settings });
-    for (const [id, k] of [['liveMin', 'minimum'], ['liveMax', 'maximum'], ['liveHeight', 'height'], ['liveBuffer', 'buffer_minutes'], ['liveLanguage', 'language']]) if (p[k] != null) $(id).value = String(p[k]);
+    for (const [id, k] of [['liveMin', 'minimum'], ['liveMax', 'maximum'], ['liveHeight', 'height'], ['liveBuffer', 'buffer_minutes'], ['liveLanguage', 'language'], ['liveVocab', 'vocabulary']]) if (p[k] != null && $(id)) $(id).value = String(p[k]);
     note.textContent = `Usando la configuración que elegiste la última vez para ${p.name}. Puedes cambiarla.`; note.hidden = false; syncDurationQuestion();
   }).catch(() => {});
 };
