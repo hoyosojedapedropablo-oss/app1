@@ -182,3 +182,21 @@ class YoutubeLiveTests(unittest.TestCase):
         self.assertEqual([r['name'] for r in rows], ['HotSpanish Vlogs', 'Alfre Games'])
         self.assertEqual(rows[0]['url'], 'https://www.youtube.com/@hotspanishvlogs/live')
         self.assertEqual(rows[0]['video_id'], 'a1'); self.assertTrue(rows[0]['thumb'].endswith('/a1/hqdefault_live.jpg'))
+
+
+class YoutubeLivePageTests(unittest.TestCase):
+    def test_the_live_page_redirect_is_followed_to_the_live_video(self):
+        """YouTube answers @canal/live with a redirect to the video (no live fields): it used to read as «not live»."""
+        class YDL(FakeYDL):
+            def extract_info(self, url, **kw):
+                if url.endswith('@hotspanishvlogs/live'): return dict(_type='url', url='https://www.youtube.com/watch?v=DxgDeW-gIcU', id='DxgDeW-gIcU')
+                if 'watch?v=DxgDeW-gIcU' in url: return dict(id='DxgDeW-gIcU', live_status='is_live', title='LA MANSIÓN VIP TEMPORADA 2 | DÍA 2', concurrent_view_count=795000)
+                raise RuntimeError('The channel is not currently live')
+        with tempfile.TemporaryDirectory() as tmp:
+            s = streamers.Streamers(tmp, ydl_factory=YDL)
+            on = s._youtube_live('@hotspanishvlogs')
+            self.assertTrue(on['live']); self.assertEqual(on['viewers'], 795000); self.assertEqual(on['video_id'], 'DxgDeW-gIcU')
+            self.assertFalse(s._youtube_live('@otro')['live'])
+            rows = [dict(key='youtube:@otro', slug='@otro', live=False), dict(key='youtube:@hotspanishvlogs', slug='@hotspanishvlogs', live=False)]
+            s._youtube_live_status(rows)
+            self.assertEqual([r['live'] for r in rows], [False, True])
