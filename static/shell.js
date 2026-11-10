@@ -83,6 +83,24 @@ async function openLibraryClip(item) {
 // --- Sound: one thing plays with sound at a time ------------------------------------------------------------------
 // Videos with sound (editor, big previews, the live preview, the official Kick/YouTube player) used to keep playing
 // when another started or when you changed screen, with nothing to stop them. Now the newest one wins.
+// A video that is no longer on the page can never play: it would be heard with nothing on screen to stop it (that was
+// the sound left playing «por toda la app» after a preview). Stopping one also cancels its download.
+function stopMedia(m) { try { m.pause(); m.removeAttribute('src'); m.load(); } catch {} }
+{
+  const realPlay = HTMLMediaElement.prototype.play;
+  HTMLMediaElement.prototype.play = function (...args) {
+    if (!this.isConnected) { try { this.pause(); } catch {} return Promise.resolve(); }
+    return realPlay.apply(this, args);
+  };
+  // Removed while playing (a panel closed, a list repainted): stop it at once.
+  new MutationObserver((changes) => {
+    for (const c of changes) for (const n of c.removedNodes) {
+      if (n.nodeType !== 1) continue;
+      const media = n.matches?.('video,audio') ? [n] : [...(n.querySelectorAll?.('video,audio') || [])];
+      for (const m of media) if (!m.isConnected && !m.paused) m.pause();
+    }
+  }).observe(document.body, { childList: true, subtree: true });
+}
 function muteLivePlayer() {
   livePlayer.muted = true;
   for (const v of document.querySelectorAll('.live-vid')) v.muted = true;
@@ -153,13 +171,14 @@ function showBigPreview(c, card) {
   const left = r.right + 16 + w < innerWidth ? r.right + 16 : Math.max(16, r.left - 16 - w);
   panel.style.left = left + 'px'; panel.style.top = Math.max(16, Math.min(innerHeight - hgt - 16, r.top + r.height / 2 - hgt / 2)) + 'px';
   video.addEventListener('canplay', () => {
+    if (!panel.isConnected) { stopMedia(video); return; }      // the cursor left before it was ready: never play it
     wait.remove(); panel.classList.add('ready');
     video.play().catch(() => { video.muted = true; panel.querySelector('.bp-sound').textContent = '🔊 Con sonido'; video.play().catch(() => {}); });
   }, { once: true });
   video.addEventListener('error', () => { wait.querySelector('span:last-child').textContent = 'No se pudo preparar la vista previa'; });
   video.src = `/api/library/${encodeURIComponent(c.id)}/preview.mp4`;
 }
-function hideBigPreview() { clearTimeout(hoverTimer); hoverFor = null; const p = $('bigPreview'); if (p) { p.querySelector('video')?.pause(); p.remove(); } }
+function hideBigPreview() { clearTimeout(hoverTimer); hoverFor = null; document.querySelectorAll('#bigPreview').forEach((p) => { p.querySelectorAll('video').forEach(stopMedia); p.remove(); }); }
 async function downloadClip(c, button) {
   button.disabled = true; const label = button.textContent; button.textContent = '…';
   toast('Preparando la descarga', `«${c.title}» en alta calidad (1080 × 1920). Puede tardar unos segundos.`);
