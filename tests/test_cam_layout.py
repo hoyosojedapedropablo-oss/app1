@@ -67,6 +67,53 @@ class DetectionTests(unittest.TestCase):
         self.assertFalse(o['found']); self.assertEqual(o['kind'], 'fullcam')
 
 
+class SmallCornerCameraTests(unittest.TestCase):
+    """Westcol (Cuphead, Nov 2026): a small camera in the top-left corner whose two people were too small for the face
+    detector on the whole frame, so the clips came out without the camera even with «Cámara + juego» chosen."""
+    CORNER = dict(x=0, y=0, w=384, h=216)
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(); cls.source = Path(cls.tmp.name) / 'corner.mp4'; c = cls.CORNER
+        draw = (f",drawbox=x={c['x']}:y={c['y']}:w={c['w']}:h={c['h']}:color=0xC01010:t=fill"
+                f",drawbox=x={c['x']}:y={c['y']}:w={c['w']}:h={c['h']}:color=white:t=4")
+        backend.command(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'gradients=s=1280x720:c0=0x1a3d5c:c1=0x5c8a3d:nb_colors=2:seed=7:speed=0.08:rate=30',
+                         '-vf', f"drawbox=x='mod(t*160\\,1100)':y=420:w=90:h=90:color=0x10C010:t=fill{draw}", '-t', '6', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(cls.source)])
+
+    @classmethod
+    def tearDownClass(cls): cls.tmp.cleanup()
+
+    def test_found_by_its_edges_and_confirmed_by_a_face_inside_at_full_resolution(self):
+        crop_only = lambda width, height: (lambda frame: [(420, 160, 70, 80, .9)] if width == 960 else [])   # face only in the crop
+        with patch('tracking.make_detector', crop_only):
+            o = layout.detect_overlay(self.source, 6, samples=16)
+        self.assertTrue(o['found']); self.assertEqual(o['kind'], 'overlay')
+        for k in ('x', 'y', 'w', 'h'): self.assertAlmostEqual(o[k], self.CORNER[k], delta=12, msg=k)
+        self.assertEqual(o['content'], dict(x=0, y=0, w=1280, h=720))        # the game is the whole frame under the camera
+        self.assertTrue(0 <= o['face']['x'] <= o['w'] and 0 <= o['face']['y'] <= o['h'])
+
+    def test_without_any_face_only_when_the_user_chose_camera_plus_game(self):
+        with patch('tracking.make_detector', fake_detector(None)):
+            self.assertFalse(layout.detect_overlay(self.source, 6, samples=12)['found'])
+            o = layout.detect_overlay(self.source, 6, samples=12, prefer=True)
+        self.assertTrue(o['found']); self.assertAlmostEqual(o['w'], self.CORNER['w'], delta=12)
+
+    def test_a_still_room_with_people_seen_outside_the_corner_is_not_a_camera(self):
+        """NaimDarrechi in a restaurant (tripod): table and wall lines close a corner, but the people are big and outside it."""
+        person = (430, 120, 70, 80, .9)                       # seen on the whole frame, outside the corner box
+        with patch('tracking.make_detector', fake_detector(person)):
+            self.assertFalse(layout.detect_overlay(self.source, 6, samples=12)['found'])
+        big = lambda width, height: (lambda frame: [(300, 60, 260, 300, .9)] if width == 960 else [])   # huge face in the crop
+        with patch('tracking.make_detector', big):
+            self.assertFalse(layout.detect_overlay(self.source, 6, samples=12)['found'])
+
+    def test_a_stream_without_a_camera_box_stays_normal_even_when_chosen(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'irl.mp4'; make_stream(source, cam=False)
+            with patch('tracking.make_detector', fake_detector(None)):
+                self.assertFalse(layout.detect_overlay(source, 6, samples=12, prefer=True)['found'])
+
+
 class WideCameraTests(unittest.TestCase):
     def test_static_room_edges_inside_a_wide_camera_are_not_its_border(self):
         """Spreen (Minecraft, Nov 2026): the shelf behind the streamer never moves either; the old search took it

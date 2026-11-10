@@ -576,11 +576,24 @@ class LiveSession:
             target = self.clips / f'{moment["id"]}.mp4'
             base = moment.get('file_start', moment['start'] - PAD_S)
             start, end = max(0.0, moment['start'] - base), moment['end'] - base
-            overlay = layout.detect_overlay(target, end + PAD_S, samples=24)
+            overlay = layout.detect_overlay(target, end + PAD_S, samples=24, prefer=settings.get('framing') == 'stack')
             result = layout.analyze(target, round(start, 3), round(end, 3), overlay)
             (self.clips / f'{moment["id"]}.layout.json').write_text(json.dumps(result), encoding='utf-8')
         except Exception:
             pass        # the editor computes it when the moment is opened
+
+    def refresh_layouts(self):
+        """Moments prepared by an older camera detector that found no camera are prepared again (newer detector)."""
+        import layout
+        redone = 0
+        for m in list(self.moments):
+            f = self.clips / f'{m["id"]}.layout.json'
+            if not f.exists() or not (self.clips / f'{m["id"]}.mp4').exists(): continue
+            try: ov = json.loads(f.read_text(encoding='utf-8')).get('overlay') or {}
+            except (OSError, ValueError): continue
+            if ov.get('found') or ov.get('detector', 1) >= layout.DETECTOR_VERSION: continue
+            self._prepare_layout(m); redone += 1
+        return redone
 
     def moment(self, mid):
         found = next((m for m in self.moments if m['id'] == mid), None)

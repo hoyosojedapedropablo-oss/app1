@@ -89,6 +89,26 @@ class FeaturedTests(unittest.TestCase):
             s.follow('https://kick.com/spreen')                                # already one of the user's: shown once, above
             self.assertEqual(s.featured_listing(), [])
 
+    def test_follow_and_unfollow_keep_the_saved_setup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s = streamers.Streamers(tmp, ydl_factory=FakeYDL)
+            key = s.follow('https://kick.com/spreen', explicit=True); s.set_prefs('https://kick.com/spreen', dict(language='es'))
+            self.assertTrue(s.items[key]['followed']); self.assertEqual([v['key'] for v in s.listing()], [key])
+            self.assertTrue(s.unfollow(key)); self.assertEqual(s.listing(), [])
+            s.sync_from([dict(url='https://kick.com/spreen', channel='Spreen')], {})            # a later live session does not bring it back
+            self.assertEqual(s.listing(), []); self.assertEqual(s.get_prefs('https://kick.com/spreen')['language'], 'es')
+            FakeIE.calls = []; s.check_all(); self.assertNotIn('spreen', FakeIE.calls)                            # no longer checked
+            s.follow('https://kick.com/spreen', explicit=True); self.assertEqual(len(s.listing()), 1)
+            self.assertFalse(s.unfollow('kick:nobody'))
+
+    def test_recommended_offline_channels_can_be_listed_to_follow(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s = streamers.Streamers(tmp, ydl_factory=FakeYDL)
+            s.check_featured([('juanferlamata', 'es')])
+            s.featured['kick:westcol'] = dict(platform='kick', slug='westcol', name='Westcol', live=False, checked=time.time())
+            self.assertEqual(s.featured_listing(), [])
+            self.assertEqual([r['name'] for r in s.featured_listing(include_offline=True)], ['Westcol'])   # only channels of the list
+
     def test_the_featured_list_is_real_kick_channels_spanish_first(self):
         slugs = [x for x, _ in streamers.FEATURED_KICK]
         self.assertEqual(len(slugs), len(set(slugs)))

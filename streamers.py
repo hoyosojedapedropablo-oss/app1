@@ -19,6 +19,15 @@ FEATURED_KICK = (
                          'mernuel', 'coscu', 'zeko', 'juansguarnizo', 'benjaz', 'elded', 'shadoune666')]
     + [(s, 'other') for s in ('absi', 'maherco', 'korekore_ch', 'deenthegreat', 'jonvlogs', 'adinross', 'xqc', 'clavicular',
                               '3mr', 'trainwreckstv', 'nickmercs')])
+# Spanish-speaking YouTube channels that stream live on YouTube often (checked: a public «Directos» tab with recent
+# streams of 100k+ views). YouTube is checked less often (every 10 minutes) and only its /live page once a photo exists.
+FEATURED_YOUTUBE = [(s, 'es') for s in ('@auronplay', '@thegrefg', '@vegetta777', '@willyrex', '@mikecrack', '@fernanfloo',
+                                        '@djmariio', '@xfarganx', '@rivers_gg')]
+YOUTUBE_TTL = 600
+
+
+def featured_all():
+    return [('kick', s, l) for s, l in FEATURED_KICK] + [('youtube', s, l) for s, l in FEATURED_YOUTUBE]
 
 
 def slug_from_url(url):
@@ -126,14 +135,23 @@ class Streamers:
         return p if p.exists() else None
 
     # --- the user's streamers ------------------------------------------------------------------------------------------
-    def follow(self, url, clips=0, name=None):
+    def follow(self, url, clips=0, name=None, explicit=False):
         platform, slug = slug_from_url(url)
         if not platform: raise ValueError('Usa un enlace de Kick (kick.com/canal) o de YouTube (youtube.com/@canal).')
         key = f'{platform}:{slug}'
         with _lock:
             item = self.items.setdefault(key, dict(platform=platform, slug=slug, url=url_for(platform, slug), name=name or slug, checked=0))
             item['clips'] = max(item.get('clips', 0), clips)
+            if explicit: item['followed'] = True; item.pop('hidden', None)     # «Seguir»: shown on Inicio again
         self.save(); return key
+
+    def unfollow(self, key):
+        """«Dejar de seguir»: hidden from Inicio and the search, but its saved setup and clip count stay."""
+        with _lock:
+            item = self.items.get(key)
+            if not item: return False
+            item['hidden'] = True; item['followed'] = False
+        self.save(); return True
 
     # --- preferences per streamer: the last «Configura tus clips» used for that channel ---------------------------------
     PREF_KEYS = ('clip_settings', 'language', 'minimum', 'maximum', 'height', 'buffer_minutes')
@@ -165,8 +183,8 @@ class Streamers:
         if self._checking: return
         self._checking = True
         try:
-            for key, _ in sorted(self.items.items(), key=lambda kv: -kv[1].get('clips', 0)):
-                self.refresh(key)
+            for key, item in sorted(self.items.items(), key=lambda kv: -kv[1].get('clips', 0)):
+                if not item.get('hidden'): self.refresh(key)
         finally:
             self._checking = False
 
@@ -174,6 +192,7 @@ class Streamers:
         with _lock:
             out = []
             for k, v in self.items.items():
+                if v.get('hidden'): continue
                 row = {x: y for x, y in v.items() if x != 'playback'}          # the stream address stays on the server
                 row.update(key=k, avatar=f'/api/streamers/{k}/avatar' if self.avatar_path(k) else '')
                 still = self.live_still(k)
@@ -182,35 +201,51 @@ class Streamers:
         return sorted(out, key=lambda v: (not v.get('live'), -v.get('clips', 0), v.get('name', '').lower()))
 
     # --- featured Kick streamers: recommended on Inicio as soon as they go live (kept apart from the user's own) -------
-    def check_featured(self, channels=FEATURED_KICK):
-        """Background pass: one public request per channel, at most every 5 minutes; a frame of the ones live."""
-        for slug, lang in channels:
-            key = f'kick:{slug}'; item = self.featured.get(key) or {}
-            if time.time() - item.get('checked', 0) < LIVE_TTL: continue
+    def _youtube_live(self, slug):
+        with self._ydl() as ydl:
+            try: live = ydl.extract_info(f'https://www.youtube.com/{slug}/live', download=False, process=False) or {}
+            except Exception: live = {}
+        on = bool(live.get('is_live') or live.get('live_status') == 'is_live')
+        return dict(live=on, title=(live.get('title') or '') if on else '', viewers=live.get('concurrent_view_count') if on else None,
+                    thumb=(live.get('thumbnail') or '') if on else '', video_id=live.get('id') if on else '')
+
+    def check_featured(self, channels=None):
+        """Background pass: one public request per channel (Kick every 5 minutes, YouTube every 10), a frame of the
+        Kick ones live. Entries are (slug, lang) for Kick or (platform, slug, lang)."""
+        for entry in (channels if channels is not None else featured_all()):
+            platform, slug, lang = entry if len(entry) == 3 else ('kick', *entry)
+            key = f'{platform}:{slug}'; item = self.featured.get(key) or {}
+            if time.time() - item.get('checked', 0) < (LIVE_TTL if platform == 'kick' else YOUTUBE_TTL): continue
             try:
-                info = self.lookup('kick', slug)
-                item.update(info, lang=lang, checked=time.time(), error='')
-                self._avatar(key, info.get('photo'))
-                self._live_still(key, item)
+                if platform == 'youtube' and item.get('name') and self.avatar_path(key):
+                    info = self._youtube_live(slug)                  # photo and name already known
+                else:
+                    info = self.lookup(platform, slug); self._avatar(key, info.get('photo'))
+                item.update(info, platform=platform, slug=slug, url=url_for(platform, slug), lang=lang, checked=time.time(), error='')
+                if platform == 'kick': self._live_still(key, item)
             except Exception as e:
-                item.update(platform='kick', slug=slug, url=url_for('kick', slug), name=item.get('name') or slug, lang=lang, checked=time.time(), error=type(e).__name__, live=False)
+                item.update(platform=platform, slug=slug, url=url_for(platform, slug), name=item.get('name') or slug, lang=lang, checked=time.time(), error=type(e).__name__, live=False)
             with _lock: self.featured[key] = item
             with _lock:
                 tmp = self.featured_file.with_suffix('.tmp'); tmp.write_text(json.dumps(self.featured, ensure_ascii=False), encoding='utf-8'); tmp.replace(self.featured_file)
 
-    def featured_listing(self):
-        """Featured channels live right now that the user does not already follow; Spanish first, then by viewers."""
-        known = {slug for slug, _ in FEATURED_KICK}
+    def featured_listing(self, include_offline=False):
+        """Recommended channels the user does not follow: the ones live now (Spanish first, then by viewers), or with
+        include_offline also the others, to follow them."""
+        known = {f'{p}:{s}' for p, s, _ in featured_all()}
         with _lock:
             out = []
             for k, v in self.featured.items():
-                if not v.get('live') or k in self.items or v.get('slug') not in known: continue
+                followed = k in self.items and not self.items[k].get('hidden')
+                if k not in known or followed or (not v.get('live') and not include_offline) or not v.get('name'): continue
                 row = {x: y for x, y in v.items() if x != 'playback'}
-                still = self.live_still(k)
-                row.update(key=k, avatar=f'/api/streamers/{k}/avatar' if self.avatar_path(k) else '',
-                           thumb=f'/api/streamers/{k}/live.jpg?t={int(still.stat().st_mtime)}' if still else '')
+                row.update(key=k, avatar=f'/api/streamers/{k}/avatar' if self.avatar_path(k) else '')
+                if v.get('platform', 'kick') == 'kick':
+                    still = self.live_still(k)
+                    row['thumb'] = f'/api/streamers/{k}/live.jpg?t={int(still.stat().st_mtime)}' if still and v.get('live') else ''
                 out.append(row)
-        return sorted(out, key=lambda v: (v.get('lang') != 'es', -(v.get('viewers') or 0)))
+        num = lambda v: float(v) if str(v or '').replace('.', '', 1).isdigit() else 0.0      # counts can arrive as text
+        return sorted(out, key=lambda v: (not v.get('live'), v.get('lang') != 'es', -num(v.get('viewers')), -num(v.get('followers'))))
 
     def _json(self, url):
         import yt_dlp
