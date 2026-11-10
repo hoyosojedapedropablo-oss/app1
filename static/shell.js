@@ -827,7 +827,7 @@ function paintTimeline() {
     put(box, cues.map((c) => h('span', { class: 'cue', title: c.text, text: c.text, style: `left:${(c.start / d) * 100}%;width:${Math.max(.8, ((c.end - c.start) / d) * 100)}%` })), h('span', { class: 'playhead' }));
   }
   const t = Math.max(0, Math.min(d, $('video').currentTime - Number($('start').value)));
-  box.querySelector('.playhead').style.left = (t / d * 100) + '%';
+  box.querySelector('.playhead').style.left = (t / d * 100) + '%'; box.style.setProperty('--pos', (t / d * 100) + '%');
 }
 function paintEditorHeader() {
   if (!job || !selected) return;
@@ -1007,6 +1007,78 @@ buildEditorV4();
 // The editor's own preview is moved into the overlay (so title, captions and logo keep the export's proportions) and
 // put back exactly where it was when it closes. Before, it opened inside the editor column and could not be closed.
 let theaterHost = null, theaterSpot = null;
+// --- Vista ampliada: one scrubbable timeline and a floating control dock (parte 7) ---------------------------------
+// Every button drives the editor's own control (same behaviour, same shortcuts); the dock only presents them.
+const ICON = {
+  prev: '<path d="M6 5v14M18 6l-9 6 9 6z" fill="currentColor"></path>',
+  next: '<path d="M18 5v14M6 6l9 6-9 6z" fill="currentColor"></path>',
+  back: '<path d="M11 7l-5 5 5 5M18 7l-5 5 5 5"></path>',
+  fwd: '<path d="M13 7l5 5-5 5M6 7l5 5-5 5"></path>',
+  play: '<path d="M8 5.5v13l11-6.5z" fill="currentColor" stroke="none"></path>',
+  pause: '<rect x="6.5" y="5" width="4" height="14" rx="1.2" fill="currentColor" stroke="none"></rect><rect x="13.5" y="5" width="4" height="14" rx="1.2" fill="currentColor" stroke="none"></rect>',
+  vol: '<path d="M4 10v4h4l5 4V6L8 10z" fill="currentColor"></path><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11"></path>',
+  mute: '<path d="M4 10v4h4l5 4V6L8 10z" fill="currentColor"></path><path d="M17 9l5 6M22 9l-5 6"></path>',
+  full: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"></path>',
+  check: '<path d="M4 12.5l5 5L20 6.5"></path>',
+};
+function dockButton(cls, icon, label, onclick, size = 18) {
+  const b = h('button', { class: 'dk-btn ' + cls, type: 'button', title: label, 'aria-label': label, onclick }, svg(ICON[icon], size));
+  return b;
+}
+function buildTheaterDock(panel) {
+  if (panel.querySelector('.th-dock')) return;
+  const v = $('video');
+  // timeline: current time · scrubber · duration
+  const tNow = h('span', { class: 'tl-time', text: '0:00' }), tEnd = h('span', { class: 'tl-time', text: '0:00' });
+  const timeline = h('div', { class: 'th-timeline' }, tNow, h('div', { class: 'tl-slot' }), tEnd);
+  // dock
+  const play = dockButton('dk-play', 'play', 'Reproducir (Espacio)', () => $('play').click(), 22);
+  const prev = dockButton('', 'prev', 'Clip anterior ( [ )', () => $('prevClip').click());
+  const next = dockButton('', 'next', 'Clip siguiente ( ] )', () => $('nextClip').click());
+  const back = dockButton('dk-skip', 'back', 'Retroceder 5 s ( ← )', () => $('back5').click()); back.append(h('small', { text: '5' }));
+  const fwd = dockButton('dk-skip', 'fwd', 'Adelantar 5 s ( → )', () => $('fwd5').click()); fwd.prepend(h('small', { text: '5' }));
+  const volRange = h('input', { type: 'range', min: '0', max: '1', step: '.05', value: $('volume').value, 'aria-label': 'Volumen', class: 'dk-vol-range' });
+  const volBtn = dockButton('', 'vol', 'Silenciar', () => { v.muted = !v.muted; paintVol(); });
+  const paintVol = () => { const off = v.muted || Number(volRange.value) === 0; volBtn.replaceChildren(svg(ICON[off ? 'mute' : 'vol'], 18)); volBtn.title = off ? 'Activar sonido' : 'Silenciar'; volRange.style.setProperty('--p', `${(v.muted ? 0 : Number(volRange.value)) * 100}%`); };
+  volRange.addEventListener('input', () => { $('volume').value = volRange.value; $('volume').dispatchEvent(new Event('input')); if (v.muted && Number(volRange.value) > 0) v.muted = false; paintVol(); });
+  const index = h('span', { class: 'dk-index' });
+  const full = dockButton('', 'full', 'Pantalla completa', () => $('fullscreenPreview').click());
+  const render = h('button', { class: 'dk-pill', type: 'button', title: 'Renderiza el MP4 exacto que se exportará', onclick: () => $('renderCheck').click() }, svg(ICON.check, 16), h('span', { text: 'Comprobar MP4' }));
+  const dock = h('div', { class: 'th-dock', role: 'toolbar', 'aria-label': 'Controles de la vista ampliada' },
+    h('div', { class: 'dk-group' }, prev, back), play, h('div', { class: 'dk-group' }, fwd, next),
+    h('span', { class: 'dk-sep' }), h('div', { class: 'dk-vol' }, volBtn, volRange),
+    h('span', { class: 'dk-sep' }), index, full, render);
+  panel.querySelector('.theater-foot').before(timeline, dock);
+  // mirror the editor's state
+  const paintPlay = () => { const on = !v.paused; play.replaceChildren(svg(ICON[on ? 'pause' : 'play'], 22)); play.title = on ? 'Pausar (Espacio)' : 'Reproducir (Espacio)'; play.classList.toggle('on', on); };
+  v.addEventListener('play', paintPlay); v.addEventListener('pause', paintPlay); v.addEventListener('volumechange', paintVol);
+  const mirror = () => {
+    prev.disabled = $('prevClip').disabled; next.disabled = $('nextClip').disabled; index.textContent = $('theaterIndex').textContent;
+    const r = $('renderCheck'); render.disabled = r.disabled; render.querySelector('span').textContent = /Volver/.test(r.textContent) ? 'Vista en vivo' : /Renderizando/.test(r.textContent) ? 'Renderizando…' : 'Comprobar MP4';
+    render.classList.toggle('on', /Volver/.test(r.textContent));
+    full.replaceChildren(svg(ICON.full, 18)); full.classList.toggle('on', !!document.fullscreenElement);
+  };
+  for (const id of ['prevClip', 'nextClip', 'theaterIndex', 'renderCheck']) new MutationObserver(mirror).observe($(id), { attributes: true, childList: true, characterData: true, subtree: true });
+  document.addEventListener('fullscreenchange', mirror);
+  const paintTimes = () => { const s = Number($('start').value), d = Math.max(0, Number($('end').value) - s); tNow.textContent = fmtClock(Math.max(0, Math.min(d, v.currentTime - s))); tEnd.textContent = fmtClock(d); };
+  v.addEventListener('timeupdate', paintTimes); v.addEventListener('loadedmetadata', paintTimes);
+  paintPlay(); paintVol(); mirror(); paintTimes();
+}
+// The subtitle timeline becomes the scrubber while enlarged: drag along it to move through the clip.
+function placeTimelineInTheater(on) {
+  const cue = $('cueTimeline'); if (!cue) return;
+  const slot = document.querySelector('.th-timeline .tl-slot');
+  if (on && slot) { if (!cue._home) { cue._home = document.createComment('cues'); cue.before(cue._home); } slot.append(cue); }
+  else if (!on && cue._home) cue._home.replaceWith(cue), cue._home = null;
+}
+{
+  let dragging = false;
+  const seekAt = (e) => { const box = $('cueTimeline'); const r = box.getBoundingClientRect(); const d = Number($('end').value) - Number($('start').value);
+    $('video').currentTime = Number($('start').value) + d * Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)); };
+  document.addEventListener('pointerdown', (e) => { if (e.target.closest?.('.th-timeline #cueTimeline')) { dragging = true; seekAt(e); e.preventDefault(); } });
+  document.addEventListener('pointermove', (e) => { if (dragging) seekAt(e); });
+  document.addEventListener('pointerup', () => { dragging = false; });
+}
 function theaterChrome(panel) {
   if (panel.querySelector('.theater-x')) return;
   panel.prepend(h('button', { class: 'theater-x', type: 'button', title: 'Cerrar (Esc)', 'aria-label': 'Cerrar la vista ampliada', text: '×', onclick: () => setTheater(false) }));
@@ -1014,6 +1086,7 @@ function theaterChrome(panel) {
     h('span', { class: 'tf-text' }, h('b', { id: 'theaterTitle' }), h('span', { id: 'theaterMeta', class: 'muted' })),
     h('button', { class: 'btn ghost', type: 'button', text: 'Volver al editor', onclick: () => setTheater(false) }),
     h('button', { class: 'btn primary', type: 'button', text: '↓ Exportar', onclick: () => { setTheater(false); $('export').click(); } })));
+  buildTheaterDock(panel);
 }
 {
   const baseSetTheater = setTheater;
@@ -1023,7 +1096,7 @@ function theaterChrome(panel) {
       theaterChrome(panel);
       theaterSpot = document.createComment('preview'); panel.before(theaterSpot);
       theaterHost = h('div', { class: 'theater-host', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Vista ampliada del clip', onclick: (e) => { if (e.target === theaterHost) setTheater(false); } });
-      theaterHost.append(panel); document.body.append(theaterHost);
+      theaterHost.append(panel); document.body.append(theaterHost); placeTimelineInTheater(true);
       $('theaterTitle').textContent = $('title').value || selected?.title || 'Clip';
       $('theaterMeta').textContent = `${(Number($('end').value) - Number($('start').value)).toFixed(1).replace('.', ',')} s · ${({ stack: 'Cámara + juego', zoom: 'Zoom', crop: 'Pantalla completa', fit: 'Ajustado' })[$('framing').value] || ''}`;
       requestAnimationFrame(() => requestAnimationFrame(() => theaterHost?.classList.add('in')));
@@ -1032,7 +1105,7 @@ function theaterChrome(panel) {
     if (!on && theaterHost) {
       const host = theaterHost; theaterHost = null;
       host.classList.remove('in'); host.classList.add('out');
-      setTimeout(() => { theaterSpot.replaceWith(panel); host.remove(); requestAnimationFrame(paint); }, 220);
+      setTimeout(() => { placeTimelineInTheater(false); theaterSpot.replaceWith(panel); host.remove(); requestAnimationFrame(paint); }, 220);
     }
   };
   setTheater = window.setTheater;
