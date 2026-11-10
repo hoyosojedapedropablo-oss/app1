@@ -1233,6 +1233,8 @@ def streamers_loop():
   except Exception as e:logging.getLogger('uvicorn.error').warning('Streamer check failed: %s',e)
   try:STREAMERS.check_featured()
   except Exception as e:logging.getLogger('uvicorn.error').warning('Featured streamer check failed: %s',e)
+  try:STREAMERS.youtube_live_now()          # cached 10 min: ready for Inicio before anyone asks
+  except Exception as e:logging.getLogger('uvicorn.error').warning('YouTube live search failed: %s',e)
   time.sleep(60)
 
 def refresh_live_layouts():
@@ -1254,6 +1256,16 @@ def start_streamer_checks():
 @app.get('/api/streamers')
 def streamers_list():
  return STREAMERS.listing()
+
+@app.get('/api/streamers/youtube-live')
+def streamers_youtube_live():
+ """Spanish-speaking YouTube live streams with the biggest audience now (cached 10 min; refreshed in the background)."""
+ cached=getattr(STREAMERS,'_yt_live',None)
+ if cached is None:
+  try:return STREAMERS.youtube_live_now()
+  except Exception as e:logging.getLogger('uvicorn.error').warning('YouTube live search failed: %s',e);return []
+ if time.time()-cached[0]>streamers_mod.YOUTUBE_TTL:threading.Thread(target=lambda:STREAMERS.youtube_live_now(force=True),daemon=True).start()
+ return cached[1]
 
 @app.get('/api/streamers/featured')
 def streamers_featured(all:bool=False):
@@ -1412,10 +1424,14 @@ def default_title_y(framing,zoom,panels):
  if framing=='zoom':return round((1920-tracking.band_height('zoom',zoom))/2/19.2,1)
  return 12
 
-def title_position(framing,zoom,panels,saved):
- """The saved position, unless it is a default left by another format (12 %, or a camera/game line 40-50 % on a clip
- that is no longer «Cámara + juego»: seen on live clips that had been set to stack by mistake)."""
- if saved is None:return default_title_y(framing,zoom,panels)
+def title_position(framing,zoom,panels,saved,manual=None):
+ """The saved position when it was set by hand («title_manual»); otherwise the format's own place (the camera/game
+ line, the band line, near the top). Edits saved before that flag existed keep the old rules, except on «Cámara +
+ juego», where the line can have moved since (MrStivenTc: his banner was taken for the camera, the title stayed on
+ the old line)."""
+ if saved is None or manual=='' or manual is False:return default_title_y(framing,zoom,panels)
+ if manual in ('1',True):return float(saved)
+ if framing=='stack':return default_title_y(framing,zoom,panels)
  v=float(saved)
  if v==12 or (framing!='stack' and 40<=v<=50.3) or any(abs(v-default_title_y('zoom',z,None))<.6 for z in ('soft','balanced','close')):
   return default_title_y(framing,zoom,panels)
@@ -1439,7 +1455,7 @@ def clip_thumb(cid,render=True):
  spec=thumb_spec(r)
  if spec is None:return None
  ov=spec['overlay'];panels=layout.panels(ov) if ov else None
- title_y=title_position(spec['framing'],spec['zoom'],panels,spec['edits'].get('title_y'))
+ title_y=title_position(spec['framing'],spec['zoom'],panels,spec['edits'].get('title_y'),spec['edits'].get('title_manual'))
  sig=hashlib.sha256(json.dumps([3,spec['title'],spec['framing'],spec['zoom'],title_y,spec['corners'],ov and [ov[k] for k in 'xywh'],round(spec['t'],1)]).encode()).hexdigest()[:10]
  target=DATA/'thumbs'/f"{cid.replace(':','_')}-{sig}.jpg"
  if target.exists() or not render:return target if target.exists() else None
@@ -1473,7 +1489,7 @@ def clip_look(cid):
  spec=thumb_spec(r)
  if spec is None:raise HTTPException(404,'El video de este clip no está disponible.')
  ov=spec['overlay'];panels=layout.panels(ov) if ov else None
- return r,spec,ov,panels,title_position(spec['framing'],spec['zoom'],panels,spec['edits'].get('title_y'))
+ return r,spec,ov,panels,title_position(spec['framing'],spec['zoom'],panels,spec['edits'].get('title_y'),spec['edits'].get('title_manual'))
 
 _previews=threading.Lock()
 @app.get('/api/library/{cid}/preview.mp4')

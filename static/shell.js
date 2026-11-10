@@ -207,6 +207,35 @@ function showBigPreview(c, card) {
 }
 function hideBigPreview() { clearTimeout(hoverTimer); hoverFor = null; document.querySelectorAll('#bigPreview').forEach((p) => { p.querySelectorAll('video').forEach(stopMedia); p.remove(); }); }
 // --- Clip preview, centred: the clip comes to the middle, everything behind it blurs (Biblioteca, Inicio, directo) ---
+// Hover to preview, robust to lists that repaint (the live moments repaint every 3 s and used to lose the hover):
+// cards only register what they show; one listener follows the pointer and opens what is under it after a short
+// pause, with a ring on the card that fills while it waits.
+const previewCards = new Map();
+function hoverPreview(box, c, onEdit) { box.dataset.preview = c.id; previewCards.set(c.id, { c, onEdit }); }
+{
+  let armed = null, pointer = { x: 0, y: 0 };
+  const cardAt = () => document.elementFromPoint(pointer.x, pointer.y)?.closest?.('[data-preview]');
+  const disarm = () => { clearTimeout(hoverTimer); armed?.classList.remove('arming'); armed = null; };
+  document.addEventListener('pointermove', (e) => {
+    pointer = { x: e.clientX, y: e.clientY };
+    if (document.querySelector('.clip-modal')) return;
+    const card = e.target.closest?.('[data-preview]');
+    if (card && armed && card.dataset.preview === armed.dataset.preview) {     // the same clip, maybe repainted: keep waiting
+      if (card !== armed) { armed.classList.remove('arming'); card.classList.add('arming'); armed = card; }
+      return;
+    }
+    if (!card && !armed) return;
+    disarm(); if (!card || Date.now() - modalClosedAt < 900) return;
+    armed = card; card.classList.add('arming');
+    hoverTimer = setTimeout(() => {
+      const now = cardAt(); const id = armed?.dataset.preview; disarm();
+      if (!now || now.dataset.preview !== id || document.querySelector('.clip-modal')) return;   // the cursor moved away
+      const entry = previewCards.get(id); if (entry) openClipModal(entry.c, entry.onEdit);
+    }, 450);
+  }, { passive: true });
+  document.addEventListener('pointerdown', disarm, true);
+  document.addEventListener('scroll', disarm, { passive: true, capture: true });
+}
 // After closing, a clip under the cursor does not open it again by itself (move to another clip, or click).
 let modalClosedAt = 0;
 function openClipModal(c, onEdit) {
@@ -260,8 +289,7 @@ function clipCard(c, onChange) {
   const thumbImg = box.querySelector('img'); if (thumbImg) retryThumb(thumbImg, c.thumb_url);
   box.addEventListener('click', () => { clearTimeout(hoverTimer); hideBigPreview(); openLibraryClip(c); });
   if (!c.missing) {
-    box.addEventListener('mouseenter', () => { clearTimeout(hoverTimer); hoverTimer = setTimeout(() => { if (box.isConnected && box.matches(':hover') && Date.now() - modalClosedAt > 1200) openClipModal(c); }, 650); });
-    box.addEventListener('mouseleave', () => clearTimeout(hoverTimer));
+    hoverPreview(box, c);
   }
   const star = h('button', { class: 'star', type: 'button', 'aria-label': c.favorite ? 'Quitar de favoritos' : 'Añadir a favoritos', 'aria-pressed': String(c.favorite),
     onclick: async (e) => { e.stopPropagation(); await api(`/api/library/${encodeURIComponent(c.id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ favorite: !c.favorite }) }); c.favorite = !c.favorite; onChange?.(); } });
@@ -304,6 +332,7 @@ async function renderHome() {
   const [lib, jobs, sessions, people, featured] = await Promise.all([api('/api/library?sort=recent').catch(() => ({ items: [], channels: [], activity: [], total: 0 })), api('/api/jobs').catch(() => []), api('/api/live').catch(() => []), loadStreamers(), api('/api/streamers/featured').catch(() => [])]);
   const discover = (people || []).length < 4 ? await api('/api/streamers/featured?all=true').catch(() => []) : [];
   clearInterval(homeTimer); homeTimer = setInterval(refreshHomeLive, 60000);
+  setTimeout(() => fillYoutubeLive(featured || []), 0);      // after the page is drawn: its search can take a few seconds
   const hour = new Date().getHours();
   const hello = hour < 12 ? 'Buenos días' : hour < 19 ? 'Buenas tardes' : 'Buenas noches';
   const search = h('input', { 'aria-label': 'Buscar clips, streamers o proyectos', placeholder: 'Buscar clips, streamers o proyectos' });
@@ -336,7 +365,7 @@ async function refreshHomeLive() {
   if (current !== 'home' || document.hidden || !$('homeLive')) return;
   const [people, featured] = await Promise.all([loadStreamers(), api('/api/streamers/featured').catch(() => [])]);
   const discover = people.length < 4 ? await api('/api/streamers/featured?all=true').catch(() => []) : [];
-  if (current === 'home' && $('homeLive')) put($('homeLive'), homeLiveSections(people, featured, discover));
+  if (current === 'home' && $('homeLive')) { put($('homeLive'), homeLiveSections(people, featured, discover)); fillYoutubeLive(featured); }
 }
 const followUrl = (url) => api('/api/streamers/follow', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
 async function followStreamer(s, button) {
@@ -351,6 +380,19 @@ async function unfollowStreamer(s) {
   if (!confirm(`¿Dejar de seguir a ${s.name}? Sus clips y tu configuración para este canal se conservan.`)) return;
   try { await api(`/api/streamers/${encodeURIComponent(s.key)}`, { method: 'DELETE' }); toast(`Ya no sigues a ${s.name}`, 'Sus clips siguen en la biblioteca.'); refreshHomeLive(); }
   catch (e) { toast('No se pudo cambiar', e.message); }
+}
+// «En vivo en YouTube»: the Spanish-speaking live streams with the biggest audience now, plus recommended channels live.
+async function fillYoutubeLive(featured) {
+  const box = $('homeYoutube'); if (!box) return;
+  const found = await api('/api/streamers/youtube-live').catch(() => []);
+  if (!$('homeYoutube')) return;
+  const seen = new Set(streamersCache.map((s) => s.key)), rows = [];
+  for (const s of [...found, ...featured.filter((x) => x.platform === 'youtube')]) if (!seen.has(s.key)) { seen.add(s.key); rows.push(s); }
+  rows.sort((a, b) => (Number(b.viewers) || 0) - (Number(a.viewers) || 0));
+  box.hidden = !rows.length;
+  put(box, h('div', { class: 'section-head' }, h('span', { class: 'pulse-dot' }), h('h2', { text: 'En vivo en YouTube' }),
+      h('span', { class: 'muted', text: 'Los directos en español con más audiencia ahora mismo en YouTube. Clipéalos o síguelos.' }), platformLogo('youtube')),
+    h('div', { class: 'rail' }, rows.map((s, i) => streamCard(s, i === 0 && Number(s.viewers) > 10000 ? '🔥 El más visto ahora' : 'En vivo · YouTube', true))));
 }
 const compact = (n) => Number(n) >= 1e6 ? `${(Number(n) / 1e6).toLocaleString('es', { maximumFractionDigits: 1 })} M` : Number(n) >= 1e3 ? `${Math.round(Number(n) / 1e3)} mil` : String(n);
 const SEARCH_ICON = '<circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path>';
@@ -393,9 +435,10 @@ function homeLiveSections(people, featured, discover) {
     // Live now among the people you follow
     live.length ? h('div', {}, head('En vivo ahora', 'Tus streamers en directo. Los que más clipeas van primero.', h('button', { class: 'btn ghost', type: 'button', text: 'Abrir clipping en vivo', onclick: () => navigate('live') }), true),
       h('div', { class: 'rail' }, live.map((s, i) => streamCard(s, i === 0 && s.clips ? '★ El que más clipeas' : '')))) : null,
-    // Recommended streams live right now (Kick and YouTube)
-    featured.length ? h('div', {}, head(live.length ? 'Recomendados en directo' : 'En directo ahora · recomendados', 'Streamers de Kick y YouTube con más audiencia que están en directo ahora. Síguelos para tenerlos siempre aquí.', null, true),
-      h('div', { class: 'rail' }, featured.map((s) => streamCard(s, s.lang === 'es' ? 'Recomendado · Español' : 'Recomendado', true)))) : null,
+    // Recommended streams live right now: Kick, and next to it YouTube (filled as soon as its search answers)
+    featured.some((s) => s.platform !== 'youtube') ? h('div', {}, head('Recomendados en Kick', 'Los streamers de Kick con más audiencia que están en directo ahora. Síguelos para tenerlos siempre aquí.', platformLogo('kick'), true),
+      h('div', { class: 'rail' }, featured.filter((s) => s.platform !== 'youtube').map((s) => streamCard(s, s.lang === 'es' ? 'Recomendado · Español' : 'Recomendado', true)))) : null,
+    h('div', { id: 'homeYoutube', hidden: true }),
     // To follow, while you follow few
     offline.length ? h('div', {}, head('Descubre streamers', 'Los más vistos de Kick y YouTube. Síguelos y aparecerán aquí en cuanto estén en directo.'),
       h('div', { class: 'discover' }, offline.slice(0, 12).map((s) => h('div', { class: 'disc-card' }, avatarImg(s, 64), h('b', { text: s.name }),
@@ -691,8 +734,7 @@ function momentCard(s, m) {
   const img = box.querySelector('img'); if (img) retryThumb(img, thumb);
   // Same big preview with sound as in the library: the moment as it will look, without opening the editor.
   const look = { id, title: m.title, channel: s.channel || 'Directo', duration: m.duration, thumb_url: thumb };
-  box.addEventListener('mouseenter', () => { clearTimeout(hoverTimer); hoverTimer = setTimeout(() => { if (box.isConnected && box.matches(':hover') && Date.now() - modalClosedAt > 1200) openClipModal(look, () => openMoment(s, m)); }, 650); });
-  box.addEventListener('mouseleave', () => clearTimeout(hoverTimer));
+  hoverPreview(box, look, () => openMoment(s, m));
   if (m.score != null) box.append(h('span', { class: 'chip score', text: String(Math.round(m.score)) }));
   box.append(h('span', { class: 'chip glass dur', text: fmtDur(m.duration) }));
   const card = h('div', { class: 'card mcard' + (picked ? ' sel' : ''), role: 'button', tabindex: '0', 'aria-pressed': String(picked),
@@ -795,7 +837,7 @@ function paintEditorHeader() {
   $('exportWhere').textContent = `Destino: exportados › ${channel}`;
 }
 const baseChoose = choose;
-window.choose = (c) => { buildEditorLayout(); baseChoose(c); if (overlayInfo && !overlayInfo.found) dropStack(); placeTitle(); cueSignature = ''; paintEditorHeader(); paintTimeline(); };
+window.choose = (c) => { buildEditorLayout(); titleManual.value = ''; baseChoose(c); if (overlayInfo && !overlayInfo.found) dropStack(); placeTitle(); cueSignature = ''; paintEditorHeader(); paintTimeline(); };
 choose = window.choose;
 // Title position by format: on the camera/game line (Cámara + juego), on the line between the top black band and the
 // video (zoom), near the top (full screen). Only a position that is still a default moves; one set by hand stays.
@@ -808,9 +850,28 @@ function isAutoTitle(v, framing) {
   v = Number(v);
   return v === 12 || (framing !== 'stack' && v >= 40 && v <= 50.3) || Object.keys(ZOOM).some((z) => Math.abs(v - titleDefault('zoom', z)) < .6) || (framing === 'stack' && Math.abs(v - seamY()) < 1.5);
 }
+// Whether the title was moved by hand (dragged, or its «Posición vertical» slider): saved with the clip's edits.
+// Without that, the title always sits on its format's line, also when that line moves (a new camera detection).
+const titleManual = h('input', { type: 'hidden', id: 'title_manual', value: '' });
+$('title_y').after(titleManual);
+{
+  const baseSettings = settings;
+  window.settings = () => ({ ...baseSettings(), title_manual: titleManual.value });
+  settings = window.settings;
+  const markManual = () => { titleManual.value = '1'; };
+  $('title_y').addEventListener('input', (e) => { if (e.isTrusted) markManual(); });
+  $('previewTitle').addEventListener('pointerdown', (e) => { if (e.isTrusted) markManual(); });
+  // the camera/game line is known once «Cámara + juego» is prepared: put an automatic title on it then
+  const baseLoadStack = loadStackPath;
+  window.loadStackPath = async (...a) => { const out = await baseLoadStack(...a); placeTitle(); return out; };
+  loadStackPath = window.loadStackPath;
+}
 function placeTitle() {
-  const f = $('framing').value;
-  if (!selected || !isAutoTitle($('title_y').value, f)) return;
+  if (!selected) return;
+  if (titleManual.value === '1') return;                                  // moved by hand: it stays
+  const f = $('framing').value, saved = job?.clip_edits?.[selected.id];
+  // Edits saved before the flag existed: outside «Cámara + juego» keep the old rule (only defaults move).
+  if (saved && !('title_manual' in saved) && f !== 'stack' && !isAutoTitle($('title_y').value, f)) return;
   const t = titleDefault(f, $('zoom').value);
   if (Math.abs(Number($('title_y').value) - t) >= .5) { $('title_y').value = t; saveCurrent(); paint(); }
 }
@@ -1233,9 +1294,44 @@ async function renderStorage() {
 }
 
 // «Configura tus clips» for a live stream starts with what was used last time for that streamer.
+// «¿De cuántos segundos quieres los clips?» first thing before a live session starts (the min/max fields were easy to miss).
+const CLIP_LENGTHS = [['short', 'Cortos', 15, 30, 'Reacciones rápidas para TikTok y Shorts'], ['medium', 'Medios', 20, 60, 'Recomendado: el momento con su contexto'], ['long', 'Largos', 45, 90, 'Historias completas y conversaciones']];
+function buildDurationQuestion() {
+  const box = $('cfgLiveDuration'); if (!box || box.dataset.q) return; box.dataset.q = '1';
+  const inputs = [...box.children];
+  const custom = h('div', { class: 'dur-custom', hidden: true }, inputs);
+  const pick = (key) => {
+    for (const b of box.querySelectorAll('.dur-opt')) b.classList.toggle('on', b.dataset.key === key);
+    custom.hidden = key !== 'custom';
+    const preset = CLIP_LENGTHS.find((x) => x[0] === key);
+    if (preset) { $('liveMin').value = preset[2]; $('liveMax').value = preset[3]; }
+    paintDurationNote();
+  };
+  box.replaceChildren(
+    h('div', { class: 'dur-head' }, h('b', { text: '¿De cuántos segundos quieres los clips?' }), h('span', { class: 'muted', id: 'durNote' })),
+    h('div', { class: 'dur-options' }, CLIP_LENGTHS.map(([key, name, a, b, why]) => h('button', { type: 'button', class: 'dur-opt', 'data-key': key, onclick: () => pick(key) },
+        h('b', { text: name }), h('span', { class: 'dur-range', text: `${a}–${b} s` }), h('small', { text: why }))),
+      h('button', { type: 'button', class: 'dur-opt', 'data-key': 'custom', onclick: () => pick('custom') }, h('b', { text: 'Personalizado' }), h('span', { class: 'dur-range', text: 'Tú eliges' }), h('small', { text: 'Mínimo y máximo exactos, de 5 a 180 s' }))),
+    custom);
+  for (const id of ['liveMin', 'liveMax']) $(id).addEventListener('input', paintDurationNote);
+  box.classList.add('dur-question');
+}
+function paintDurationNote() {
+  const a = Number($('liveMin').value), b = Number($('liveMax').value), note = $('durNote'); if (!note) return;
+  note.textContent = a >= b ? '⚠ El máximo tiene que ser mayor que el mínimo.' : `Cada clip durará entre ${a} y ${b} segundos.`;
+  note.classList.toggle('warn', a >= b);
+}
+function syncDurationQuestion() {
+  const a = Number($('liveMin').value), b = Number($('liveMax').value);
+  const key = (CLIP_LENGTHS.find((x) => x[2] === a && x[3] === b) || ['custom'])[0];
+  for (const btn of document.querySelectorAll('#cfgLiveDuration .dur-opt')) btn.classList.toggle('on', btn.dataset.key === key);
+  const custom = document.querySelector('#cfgLiveDuration .dur-custom'); if (custom) custom.hidden = key !== 'custom';
+  paintDurationNote();
+}
 const baseOpenConfig = openConfig;
 window.openConfig = (mode) => {
   baseOpenConfig(mode);
+  if (mode === 'live') { buildDurationQuestion(); syncDurationQuestion(); }
   const note = $('cfgPrefsNote') || h('p', { id: 'cfgPrefsNote', class: 'prefs-note', hidden: true });
   if (!note.parentElement) $('configIntro').after(note);
   note.hidden = true;
@@ -1245,10 +1341,16 @@ window.openConfig = (mode) => {
     if (!p || !p.clip_settings) return;
     showConfig({ ...NEW_DEFAULTS, ...p.clip_settings });
     for (const [id, k] of [['liveMin', 'minimum'], ['liveMax', 'maximum'], ['liveHeight', 'height'], ['liveBuffer', 'buffer_minutes'], ['liveLanguage', 'language']]) if (p[k] != null) $(id).value = String(p[k]);
-    note.textContent = `Usando la configuración que elegiste la última vez para ${p.name}. Puedes cambiarla.`; note.hidden = false;
+    note.textContent = `Usando la configuración que elegiste la última vez para ${p.name}. Puedes cambiarla.`; note.hidden = false; syncDurationQuestion();
   }).catch(() => {});
 };
 openConfig = window.openConfig;
+// A live session never starts with a minimum longer than the maximum.
+$('cfgStart').addEventListener('click', (e) => {
+  if ($('cfgLiveDuration')?.offsetParent && Number($('liveMin').value) >= Number($('liveMax').value)) {
+    e.stopImmediatePropagation(); e.preventDefault(); paintDurationNote(); toast('Revisa la duración', 'El máximo tiene que ser mayor que el mínimo.');
+  }
+}, true);
 
 // --- side panel: GPU status -----------------------------------------------------------------------------------------
 api('/api/capabilities').then((c) => { const gpu = c?.gpu?.name || c?.gpu_name || ''; $('sideEquipText').textContent = gpu ? `${gpu} · IA local` : 'Procesamiento local'; }).catch(() => {});

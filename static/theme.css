@@ -560,3 +560,33 @@ input,select,textarea{font-family:var(--ui)!important}
 #preview .title,#preview .caption,#preview #previewLogo{z-index:6}
 #preview>.pv-play{z-index:3;pointer-events:none;width:68px;height:68px;opacity:.92}
 #preview>.pv-time,#preview>.pv-flash{z-index:7}
+/* hover preview: a ring fills on the card while the preview is about to open */
+[data-preview]{position:relative}
+[data-preview]::after{content:"";position:absolute;right:10px;top:10px;z-index:4;width:26px;height:26px;border-radius:50%;pointer-events:none;opacity:0;
+  background:conic-gradient(var(--green) var(--ring,0deg),rgba(255,255,255,.15) 0);-webkit-mask:radial-gradient(circle,transparent 8px,#000 9px);mask:radial-gradient(circle,transparent 8px,#000 9px);transition:opacity .15s ease}
+@property --ring{syntax:"<angle>";inherits:false;initial-value:0deg}
+@keyframes ringFill{from{--ring:0deg}to{--ring:360deg}}
+[data-preview].arming::after{opacity:1;animation:ringFill .45s linear forwards}
+[data-preview].arming{box-shadow:0 0 0 2px var(--green-line)}
+/* «¿De cuántos segundos quieres los clips?» */
+.dur-question{display:flex;flex-direction:column;gap:12px}
+.dur-head{display:flex;flex-direction:column;gap:2px}
+.dur-head b{font:700 17px var(--head)}
+.dur-head .muted.warn{color:var(--amber)}
+.dur-options{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.dur-opt{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:14px;min-height:0!important;border-radius:14px;border:1px solid var(--line);background:var(--panel2);color:var(--text);text-align:left;cursor:pointer;
+  transition:transform .18s ease,border-color .18s ease,background .18s ease}
+.dur-opt:hover{transform:translateY(-2px);border-color:#3a3a42;box-shadow:none!important}
+.dur-opt b{font:700 15px var(--head)}
+.dur-opt .dur-range{font:700 20px var(--head);color:var(--green)}
+.dur-opt small{font-size:11.5px;color:var(--dim);line-height:1.35}
+.dur-opt.on{border-color:var(--green-line);background:linear-gradient(180deg,var(--green-tint),var(--panel2));box-shadow:0 0 0 1px var(--green-line)!important}
+.dur-custom{display:flex;gap:12px}
+.dur-custom label{flex:1}
+@media (max-width:760px){.dur-options{grid-template-columns:repeat(2,minmax(0,1fr))}}
+/* slim, dark scrollbars for the rows of streams and clips */
+.rail,.follow-strip{scrollbar-width:thin;scrollbar-color:#2c2c33 transparent}
+.rail::-webkit-scrollbar,.follow-strip::-webkit-scrollbar{height:8px}
+.rail::-webkit-scrollbar-track,.follow-strip::-webkit-scrollbar-track{background:transparent}
+.rail::-webkit-scrollbar-thumb,.follow-strip::-webkit-scrollbar-thumb{background:#2c2c33;border-radius:8px}
+.rail::-webkit-scrollbar-thumb:hover,.follow-strip::-webkit-scrollbar-thumb:hover{background:#3d5c1c}

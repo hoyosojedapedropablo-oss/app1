@@ -247,6 +247,42 @@ class Streamers:
         num = lambda v: float(v) if str(v or '').replace('.', '', 1).isdigit() else 0.0      # counts can arrive as text
         return sorted(out, key=lambda v: (not v.get('live'), v.get('lang') != 'es', -num(v.get('viewers')), -num(v.get('followers'))))
 
+    # --- YouTube live right now: the Spanish-speaking streams with the biggest audience (HotSpanish «La Mansión VIP»:
+    # 733 754 people). Found with YouTube's own search filtered to live videos; cached 10 minutes. --------------------
+    # Streamer content (reality, IRL, games, reactions); TV, radio, news, church services and 24 h re-runs are left out.
+    YT_LIVE_QUERIES = ('en vivo', 'reality en vivo', 'en vivo jugando', 'en vivo free fire', 'en vivo minecraft',
+                       'reaccionando en vivo')
+    YT_LIVE_SKIP = re.compile(r'noticias|news|24/7|24 ?horas|24h|marat[oó]n|radio|m[uú]sica|music|lofi|chill|relax|se[ñn]al|'
+                              r'\btv\b|televisi|\bcanal\b|onda cero|cadena|gobierno|alcald|congreso|senado|\bpapa\b|\bmisa\b|iglesia|hillsong|'
+                              r'worship|oraci[oó]n|culto|poker|casino|boomerang|cartoon|disney|telemundo|univision|caracol|\brcn\b|\bdw\b|\brai\b|\bcnn\b|'
+                              r'episodios completos|full episodes', re.I)
+    YT_SPANISH = re.compile(r'[áéíóúñ¿¡]|\b(en vivo|directo|jugando|con|los|las|del|para|que|reality|temporada|d[ií]a|vamos|hoy|nuevo|partida)\b', re.I)
+
+    def youtube_live_now(self, force=False):
+        cached = getattr(self, '_yt_live', None)
+        if cached and not force and time.time() - cached[0] < YOUTUBE_TTL: return cached[1]
+        import urllib.parse
+        found = {}
+        with self._ydl() as ydl:
+            ydl.params['playlistend'] = 20
+            for q in self.YT_LIVE_QUERIES:
+                url = 'https://www.youtube.com/results?search_query=' + urllib.parse.quote(q) + '&sp=EgJAAQ%253D%253D&hl=es&gl=MX'
+                try: info = ydl.extract_info(url, download=False) or {}
+                except Exception: continue
+                for e in info.get('entries') or []:
+                    handle = (e.get('uploader_id') or '').lower(); vid = e.get('id'); viewers = e.get('concurrent_view_count') or 0
+                    title = (e.get('title') or '').strip()
+                    if e.get('live_status') != 'is_live' or not handle.startswith('@') or not vid or viewers < 500: continue
+                    if self.YT_LIVE_SKIP.search(title) or self.YT_LIVE_SKIP.search(e.get('channel') or '') or not self.YT_SPANISH.search(title): continue
+                    key = f'youtube:{handle}'
+                    if key in found and found[key]['viewers'] >= viewers: continue
+                    found[key] = dict(key=key, platform='youtube', slug=handle, url=url_for('youtube', handle), name=e.get('channel') or handle,
+                                      title=title, viewers=viewers, live=True, video_id=vid, lang='es',
+                                      thumb=f'https://i.ytimg.com/vi/{vid}/hqdefault_live.jpg', avatar=self.featured.get(key, {}).get('photo', ''))
+        rows = sorted(found.values(), key=lambda r: -r['viewers'])[:12]
+        self._yt_live = (time.time(), rows)
+        return rows
+
     def _json(self, url):
         import yt_dlp
         with self._ydl() as ydl:
