@@ -1410,9 +1410,48 @@ function syncDurationQuestion() {
   const custom = document.querySelector('#cfgLiveDuration .dur-custom'); if (custom) custom.hidden = key !== 'custom';
   paintDurationNote();
 }
+// «Configura tus clips», ordered by what matters (parte 8): a fixed header, the essentials first (how long, which
+// format, subtitles), the rest folded in «Opciones avanzadas» with a summary of what is set, and the buttons always
+// in view. It used to be one long column that opened scrolled to the bottom (the start button took the focus), so
+// the clip length — the first question — was hidden above.
+function structureConfig() {
+  const modal = $('configModal'), card = modal?.querySelector('.modal-card');
+  if (!card || card.classList.contains('cfg-structured')) return;
+  const groups = [...card.querySelectorAll(':scope > .cfg-group, :scope > div > .cfg-group')];
+  const byLabel = (re) => groups.find((g) => re.test(g.querySelector(':scope > .cfg-label')?.textContent || ''));
+  const duration = byLabel(/Duraci/), framing = byLabel(/Encuadre/), zoom = $('cfgZoomGroup'), subtitles = byLabel(/Subt/);
+  const advanced = [byLabel(/Captura/), byLabel(/Idioma/), byLabel(/Seguimiento/), byLabel(/Calidad de exp/), byLabel(/Fondo del t/)].filter(Boolean);
+  const head = h('div', { class: 'cfg-head' }), body = h('div', { class: 'cfg-body' });
+  const actions = card.querySelector('.modal-actions');
+  head.append($('configTitle'), $('configIntro'));
+  if ($('cfgPrefsNote')) head.append($('cfgPrefsNote'));
+  if ($('cfgNote') && subtitles) subtitles.append($('cfgNote'));          // the subtitles note belongs to subtitles
+  const summary = h('span', { class: 'adv-summary' });
+  const details = h('details', { class: 'cfg-advanced' },
+    h('summary', {}, h('span', { class: 'adv-title' }, h('b', { text: 'Opciones avanzadas' }), summary), h('span', { class: 'adv-chev', 'aria-hidden': 'true', text: '⌄' })),
+    h('div', { class: 'adv-body' }, advanced));
+  body.append(...[duration, framing, zoom, subtitles].filter(Boolean), details);
+  card.replaceChildren(head, body, actions);
+  card.classList.add('cfg-structured'); card.tabIndex = -1;
+  // what the advanced options are set to, without opening them
+  const paintSummary = () => {
+    const pick = (g) => { const i = g?.querySelector('.segmented input:checked'); return (i?.closest('label')?.textContent || i?.nextElementSibling?.textContent || '').trim(); };
+    const sel = (id) => $(id)?.selectedOptions?.[0]?.textContent?.split('·')[0].trim() || '';
+    const parts = modal.classList.contains('live-mode') ? [sel('liveHeight'), sel('liveBuffer'), sel('liveLanguage')] : [];
+    parts.push($('cfgTracking')?.checked ? `seguimiento ${pick(byLabel(/Seguimiento/)).toLowerCase()}` : 'sin seguimiento', pick(byLabel(/Calidad de exp/))?.split('·')[0].trim(), pick(byLabel(/Fondo del t/))?.toLowerCase());
+    summary.textContent = parts.filter(Boolean).join(' · ');
+  };
+  card.addEventListener('click', () => setTimeout(paintSummary, 0)); card.addEventListener('change', paintSummary);
+  card._paintSummary = paintSummary;
+}
 const baseOpenConfig = openConfig;
 window.openConfig = (mode) => {
+  structureConfig();
   baseOpenConfig(mode);
+  // always opens at the top, on the first question (the app's own code gave the focus to the start button)
+  const card = $('configModal').querySelector('.modal-card');
+  $('cfgStart').blur(); card.focus({ preventScroll: true }); card.querySelector('.cfg-body').scrollTop = 0;
+  setTimeout(() => card._paintSummary?.(), 0);
   if (mode === 'live') { buildDurationQuestion(); syncDurationQuestion(); }
   const note = $('cfgPrefsNote') || h('p', { id: 'cfgPrefsNote', class: 'prefs-note', hidden: true });
   if (!note.parentElement) $('configIntro').after(note);
