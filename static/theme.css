@@ -681,7 +681,7 @@ input,select,textarea{font-family:var(--ui)!important}
 .cfg-head h2{margin:0;font:700 20px var(--head)}
 .cfg-head #configIntro{margin:6px 0 0;font-size:13px;color:var(--muted)}
 .cfg-head .prefs-note{margin:12px 0 0}
-.cfg-body{flex:1;min-height:0;overflow-y:auto;padding:6px 26px 18px;scrollbar-width:thin;scrollbar-color:#2c2c33 transparent;overscroll-behavior:contain}
+.cfg-body{flex:1 1 auto;min-height:0;overflow-y:auto;padding:6px 26px 18px;scrollbar-width:thin;scrollbar-color:#2c2c33 transparent;overscroll-behavior:contain}
 .cfg-body::-webkit-scrollbar{width:8px}.cfg-body::-webkit-scrollbar-thumb{background:#2c2c33;border-radius:8px}
 #configModal .cfg-structured .modal-actions{flex:none;display:flex;justify-content:flex-end;gap:10px;margin:0;padding:14px 26px;border-top:1px solid var(--line2);background:rgba(12,12,14,.92)}
 #configModal .cfg-structured .modal-actions button{min-height:46px;padding:0 20px;border-radius:12px;font:700 14px var(--head)}
@@ -708,3 +708,10 @@ input,select,textarea{font-family:var(--ui)!important}
 .names-input input{background:transparent;border:0;min-height:44px;font:500 14px var(--ui)!important}
 .names-input:focus-within{border-color:var(--green-line)!important;box-shadow:0 0 0 3px rgba(198,255,94,.12)}
 .cfg-names small{line-height:1.45}
+/* The dialog is as tall as its content (up to the window): the body takes its real height and only shrinks to fit.
+   With «flex:1» (a 0 basis) some Chrome versions sized the body far below its content and left an empty black area
+   under the buttons. Nothing but the header, body and buttons is ever shown in the card. */
+#configModal .modal-card.cfg-structured{height:auto!important;min-height:0!important}
+#configModal .modal-card.cfg-structured>:not(.cfg-head):not(.cfg-body):not(.modal-actions){display:none!important}
+#configModal .cfg-structured .cfg-head,#configModal .cfg-structured .modal-actions{flex:0 0 auto}
+#configModal{overflow:hidden!important}
