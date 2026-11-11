@@ -639,7 +639,7 @@ function buildLiveLayout() {
       h('div', { class: 'live-tiles' }, tile('clapper', 'liveStatMoments', 'momentos'), tile('check', 'liveStatReady', 'listos'), tile('fire', 'liveStatFire', 'en llamas'), tile('stopwatch', 'liveStatBuffer', 'de búfer')),
       h('div', { class: 'card live-ai' },
         h('div', { class: 'ai-head' }, h('span', { class: 'lbl-s', text: 'Así trabaja la IA ahora' }), h('span', { class: 'bars', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'), h('i'))),
-        h('div', { id: 'livePipe', class: 'pipe' }, [['mic', 'Escucha'], ['brain', 'Transcribe'], ['scale', 'Juzga'], ['clapper', 'Corta']].map(([e, t], i) => h('div', { class: 'pipe-step', 'data-step': String(i) }, h('span', { class: 'pipe-ic' }, emo(e)), h('span', { text: t })))),
+        h('div', { id: 'livePipe', class: 'pipe' }, [['mic', 'Escucha'], ['brain', 'Transcribe'], ['scale', 'Juzga'], ['clapper', 'Corta']].map(([e, t], i) => h('div', { class: 'pipe-step', 'data-step': String(i) }, h('span', { class: 'pipe-ic' }, emo(e), h('i', { class: 'pipe-check', 'aria-hidden': 'true' })), h('span', { class: 'pipe-lbl', text: t })))),
         h('span', { id: 'liveAiDevice', class: 'ai-device' }),
         h('div', { class: 'ai-quote' }, emo('speech', 'em q'), h('span', { id: 'liveAiText', class: 'live-quote' })),
         h('ul', { id: 'liveFeed', class: 'ai-feed' }),
@@ -704,6 +704,7 @@ function paintPipe(s, running) {
   const msg = s.message || '';
   const step = !running ? -1 : s.moments.some((m) => m.status === 'rendering') ? 3 : /ronda|analiz|propuso|descart|juez/i.test(msg) ? 2 : s.transcription_device ? 1 : 0;
   for (const el of document.querySelectorAll('#livePipe .pipe-step')) { const i = +el.dataset.step; el.classList.toggle('done', i < step); el.classList.toggle('on', i === step); }
+  $('livePipe').style.setProperty('--fill', String(Math.max(0, step) / 3));
   document.querySelector('.live-ai .bars').classList.toggle('paused', !running);
   $('liveAiDevice').textContent = !running ? 'Sin actividad: la sesión no está en curso' : s.transcription_device ? `Transcribiendo con ${s.transcription_device} · IA local, sin pagar API` : 'Preparando la transcripción…';
   $('liveAiMessage').textContent = msg; $('liveAiText').textContent = s.recent_text ? `«…${s.recent_text}»` : 'Aquí verás lo último que se dijo en el directo.';
@@ -859,8 +860,8 @@ function momentCard(s, m) {
     onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); card.click(); } } }, box,
     h('b', { class: 't', text: m.title }), m.score != null ? scoreBadge(m.score, m.viral_kind) : '', h('span', { class: 'muted', text: `${m.detected_at} · ${m.status === 'opened' ? 'Abierto en el editor' : 'Listo'}` }),
     m.analysis?.motivo ? h('span', { class: 'why', text: m.analysis.motivo }) : '',
-    h('div', { class: 'acts' }, h('button', { class: 'btn primary', type: 'button', text: 'Editar', onclick: (e) => { e.stopPropagation(); openMoment(s, m); } }),
-      h('button', { class: 'btn ghost', type: 'button', text: 'Descartar', onclick: (e) => { e.stopPropagation(); discardMoment(s, m); } })));
+    h('div', { class: 'acts' }, h('button', { class: 'btn primary', type: 'button', onclick: (e) => { e.stopPropagation(); openMoment(s, m); } }, svg(ICON_EDIT, 16), 'Editar'),
+      h('button', { class: 'btn ghost discard', type: 'button', onclick: (e) => { e.stopPropagation(); discardMoment(s, m); } }, svg(ICON_X, 15), 'Descartar')));
   return card;
 }
 function momentRow(s, m) {
@@ -1283,15 +1284,47 @@ document.querySelectorAll('#editorView input[type=range]').forEach(fillSlider);
 
 // --- Videos largos a clips (parte 4): hero, steps, drag & drop, recent videos -----------------------------------------
 // Only presentation: every control of the existing screen stays the same element with the same behaviour (app.js).
+const ICON_EDIT = '<path d="M4 20h4.2L19.4 8.8a2 2 0 0 0 0-2.8l-1.4-1.4a2 2 0 0 0-2.8 0L4 15.8z"></path><path d="M13.5 6.5l4 4"></path>';
+const ICON_X = '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"></path>';
+const ICON_CHEVRON = '<path d="M9.5 5.5L16 12l-6.5 6.5"></path>';
+// The pill behind the selected tab glides to it (measured, so it fits any label).
+function slideThumb(group) {
+  const thumb = group?.querySelector('.seg-thumb'), on = group?.querySelector('button.on'); if (!thumb || !on) return;
+  const place = () => { thumb.style.setProperty('--x', `${on.offsetLeft}px`); thumb.style.setProperty('--w', `${on.offsetWidth}px`); group.classList.add('ready'); };
+  place(); requestAnimationFrame(place); setTimeout(place, 300);
+}
+// Rows that scroll sideways get two animated arrows instead of a scroll bar. They show only when there is more to
+// see on that side, and the row's edges fade out. Trackpad, Shift + rueda and the keyboard keep working.
+const ARROW_ROWS = '.rail,.people,.follow-strip,.disc-row';
+function arrowize(row) {
+  if (row.dataset.arrows || !row.parentNode) return; row.dataset.arrows = '1';
+  const wrap = h('div', { class: 'hs-wrap' }); row.before(wrap); wrap.append(row);
+  const arrow = (dir) => h('button', { type: 'button', class: `hs-arrow ${dir}`, 'aria-label': dir === 'prev' ? 'Ver anteriores' : 'Ver más', tabindex: '-1',
+    onclick: () => { const by = (dir === 'prev' ? -1 : 1) * Math.max(240, row.clientWidth * .85), from = row.scrollLeft;
+      row.scrollBy({ left: by, behavior: 'smooth' });
+      setTimeout(() => { if (row.scrollLeft === from) { row.style.scrollBehavior = 'auto'; row.scrollLeft = from + by; row.style.scrollBehavior = ''; } }, 350); } }, h('span', { class: 'hs-ring', 'aria-hidden': 'true' }), svg(ICON_CHEVRON, 22));
+  const prev = arrow('prev'), next = arrow('next'); wrap.append(prev, next);
+  const update = () => {
+    const max = row.scrollWidth - row.clientWidth - 2;
+    wrap.classList.toggle('can-prev', row.scrollLeft > 2); wrap.classList.toggle('can-next', row.scrollLeft < max && max > 0);
+  };
+  row.addEventListener('scroll', update, { passive: true });
+  new ResizeObserver(update).observe(row); new MutationObserver(update).observe(row, { childList: true });
+  update(); setTimeout(update, 500);
+}
+const arrowizeAll = () => document.querySelectorAll(ARROW_ROWS).forEach((r) => { if (!r.dataset.arrows) arrowize(r); });
+new MutationObserver(() => { clearTimeout(arrowizeAll.t); arrowizeAll.t = setTimeout(arrowizeAll, 60); }).observe(document.body, { childList: true, subtree: true });
+setTimeout(arrowizeAll, 0);
 // Popular long videos to clip (games, podcasts, entertainment), most viewed first. One click imports it from YouTube.
-const DISCOVER_TABS = [['juegos', 'Juegos', '🎮'], ['podcasts', 'Podcasts', '🎙️'], ['entretenimiento', 'Entretenimiento', '🎬']];
+const DISCOVER_TABS = [['juegos', 'Juegos', 'game'], ['podcasts', 'Podcasts', 'mic'], ['entretenimiento', 'Entretenimiento', 'clapper']];
 const discoverUI = { cat: 'juegos', cache: {} };
 const viewsText = (n) => n >= 1e6 ? `${(n / 1e6).toLocaleString('es', { maximumFractionDigits: 1 })} M vistas` : n >= 1e3 ? `${Math.round(n / 1e3)} mil vistas` : `${n} vistas`;
 function buildDiscover() {
   const box = h('section', { id: 'discoverBox', class: 'discover-box' },
     h('div', { class: 'disc-head' },
       h('div', {}, h('h2', {}, emo('fire'), 'Videos populares para clipear'), h('span', { class: 'muted', text: 'Los videos largos más vistos de grandes canales en español. Elige uno y la IA encuentra sus mejores momentos.' })),
-      h('div', { id: 'discoverTabs', class: 'disc-tabs', role: 'tablist' }, DISCOVER_TABS.map(([k, t, e]) => h('button', { type: 'button', role: 'tab', 'data-cat': k, onclick: () => { discoverUI.cat = k; paintDiscover(); } }, h('span', { 'aria-hidden': 'true', text: e }), t)))),
+      h('div', { id: 'discoverTabs', class: 'disc-tabs', role: 'tablist' }, h('span', { class: 'seg-thumb', 'aria-hidden': 'true' }),
+        DISCOVER_TABS.map(([k, t, e]) => h('button', { type: 'button', role: 'tab', 'data-cat': k, onclick: () => { discoverUI.cat = k; paintDiscover(); } }, emo(e), h('span', { text: t }))))),
     h('div', { id: 'discoverRow', class: 'disc-row' }));
   setTimeout(paintDiscover, 0);
   return box;
@@ -1299,6 +1332,7 @@ function buildDiscover() {
 async function paintDiscover() {
   const cat = discoverUI.cat, row = $('discoverRow'); if (!row) return;
   for (const b of document.querySelectorAll('#discoverTabs button')) { const on = b.dataset.cat === cat; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); }
+  slideThumb($('discoverTabs'));
   if (!discoverUI.cache[cat]) {
     put(row, [0, 1, 2, 3, 4].map(() => h('div', { class: 'disc-card skeleton' }, h('span', { class: 'disc-thumb' }), h('i'), h('i'))));
     const data = await api(`/api/discover/videos?category=${cat}`).catch(() => ({ videos: [] }));
