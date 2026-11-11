@@ -87,7 +87,7 @@ function goBack() {
 function paintBack() {
   const b = $('navBack'); if (!b) return;
   const prev = navTrail[navTrail.length - 1];
-  b.hidden = !prev;
+  b.hidden = !prev; document.body.classList.toggle('has-back', !!prev);
   if (!prev) return;
   if ($('navBackTo').textContent !== VIEW_LABEL[prev]) { $('navBackTo').textContent = VIEW_LABEL[prev]; b.classList.remove('swap'); void b.offsetWidth; b.classList.add('swap'); }
   b.title = `Volver a ${VIEW_LABEL[prev]} (Alt + ←)`; b.setAttribute('aria-label', `Atrás: volver a ${VIEW_LABEL[prev]}`);
@@ -97,7 +97,8 @@ function paintBack() {
     h('span', { class: 'nb-orb', 'aria-hidden': 'true' }, h('span', { class: 'nb-ring' }), svg('<path d="M14.5 5.5L8 12l6.5 6.5"></path><path class="nb-tail" d="M8.5 12H19"></path>', 20)),
     h('span', { class: 'nb-text' }, h('b', { text: 'Atrás' }), h('small', {}, 'a ', h('span', { id: 'navBackTo' }))),
     h('span', { class: 'nb-sheen', 'aria-hidden': 'true' }));
-  $('perfToggle').closest('header').prepend(back);
+  // Top-left corner of the page content, pinned while scrolling (a zero-height sticky dock: it takes no room itself).
+  document.querySelector('main').prepend(h('div', { class: 'back-dock' }, back));
   document.addEventListener('keydown', (e) => {
     if (e.altKey && e.key === 'ArrowLeft' && !e.ctrlKey && !e.metaKey && !document.querySelector('.cs-modal:not([hidden]), .modal:not(.hidden)')) { e.preventDefault(); goBack(); }
   });
