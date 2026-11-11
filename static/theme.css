@@ -1069,3 +1069,7 @@ body.has-back main>.view:not(#editorView){padding-top:62px}
 /* While the clip plays, the big play button stays hidden whether or not the cursor is over the video
    (#preview>.pv-play above is more specific than .is-playing>.pv-play, so it used to come back on mouse leave). */
 #preview.is-playing>.pv-play{opacity:0;transform:translate(-50%,-50%) scale(.6);pointer-events:none;animation:none}
+/* The play button is drawn above the clip's title, captions and logo (layer 6); it lets clicks through (pointer-events
+   none), so they can still be dragged under it. While «Comprobar MP4» shows the rendered file, it stays hidden. */
+#preview>.pv-play{z-index:8}
+#preview:has(#renderVideo:not([hidden]))>.pv-play{display:none}
