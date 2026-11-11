@@ -47,10 +47,18 @@ async function openLastClip() {
     if (current !== 'editor' && job) navigate('editor');
   } catch (e) { toast('No se pudo abrir el editor', e.message); navigate('library'); }
 }
+// «Atrás»: the sections you came through, newest last. Going to the section on top of the trail counts as going back.
+const VIEW_LABEL = { home: 'Inicio', analysis: 'Videos largos', live: 'Clips en vivo', library: 'Biblioteca', editor: 'Editor', projects: 'Proyectos', settings: 'Configuración' };
+const navTrail = []; let navReady = false, navBacking = false;
 function navigate(name) {
   if (!VIEWS.includes(name)) name = 'home';
   if (name === 'editor' && !job) { openLastClip(); return; }      // «Editor» with nothing open: continue with the last clip
+  if (navReady && !navBacking && name !== current) {
+    if (navTrail[navTrail.length - 1] === name) navTrail.pop(); else { navTrail.push(current); if (navTrail.length > 40) navTrail.shift(); }
+  }
+  navReady = true;
   current = name;
+  try { paintBack(); } catch {}
   if (name !== 'live') { try { stopLivePlayer(); } catch {} }
   try { silenceOutside(name); } catch {}
   for (const v of VIEWS) $(v + 'View')?.classList.toggle('hidden', v !== name);
@@ -69,6 +77,33 @@ for (const b of document.querySelectorAll('#sideNav button')) b.addEventListener
 const livePanel = $('livePanel');
 if (livePanel) { livePanel.open = true; livePanel.querySelector('summary').style.display = 'none'; livePanel.classList.add('card'); $('liveHost').append(livePanel); }
 $('perfToggle').onclick = () => navigate('settings');
+// The «Atrás» button, at the left of the top bar: back to the section you were in before (also Alt + ← and the mouse's
+// back button). Hidden when there is nowhere to go back to.
+function goBack() {
+  const prev = navTrail.pop(); if (!prev) { paintBack(); return; }
+  const b = $('navBack'); if (b) { b.classList.remove('pressed'); void b.offsetWidth; b.classList.add('pressed'); }
+  navBacking = true; try { navigate(prev); } finally { navBacking = false; }
+}
+function paintBack() {
+  const b = $('navBack'); if (!b) return;
+  const prev = navTrail[navTrail.length - 1];
+  b.hidden = !prev;
+  if (!prev) return;
+  if ($('navBackTo').textContent !== VIEW_LABEL[prev]) { $('navBackTo').textContent = VIEW_LABEL[prev]; b.classList.remove('swap'); void b.offsetWidth; b.classList.add('swap'); }
+  b.title = `Volver a ${VIEW_LABEL[prev]} (Alt + ←)`; b.setAttribute('aria-label', `Atrás: volver a ${VIEW_LABEL[prev]}`);
+}
+{
+  const back = h('button', { id: 'navBack', class: 'nav-back', type: 'button', hidden: true, onclick: goBack },
+    h('span', { class: 'nb-orb', 'aria-hidden': 'true' }, h('span', { class: 'nb-ring' }), svg('<path d="M14.5 5.5L8 12l6.5 6.5"></path><path class="nb-tail" d="M8.5 12H19"></path>', 20)),
+    h('span', { class: 'nb-text' }, h('b', { text: 'Atrás' }), h('small', {}, 'a ', h('span', { id: 'navBackTo' }))),
+    h('span', { class: 'nb-sheen', 'aria-hidden': 'true' }));
+  $('perfToggle').closest('header').prepend(back);
+  document.addEventListener('keydown', (e) => {
+    if (e.altKey && e.key === 'ArrowLeft' && !e.ctrlKey && !e.metaKey && !document.querySelector('.cs-modal:not([hidden]), .modal:not(.hidden)')) { e.preventDefault(); goBack(); }
+  });
+  // The mouse's back button: stay in the app and go back one section (instead of leaving the page).
+  window.addEventListener('mouseup', (e) => { if (e.button === 3 && navTrail.length) { e.preventDefault(); goBack(); } });
+}
 
 // --- opening projects and clips -----------------------------------------------------------------------------------
 async function openProject(id, clipRef, view) {
