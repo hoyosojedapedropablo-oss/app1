@@ -1366,7 +1366,7 @@ function buildAnalysisLayout() {
   const thumbs = h('div', { class: 'lv-phones', 'aria-hidden': 'true' }, [0, 1, 2].map((i) => h('span', { class: 'lv-phone p' + i }, h('i'))));
   intro.replaceChildren(
     h('div', { class: 'lv-text' }, h('span', { class: 'eyebrow', text: 'ENCUENTRA UNA HISTORIA, NO SOLO UN CORTE' }),
-      h('h1', {}, 'De un video largo a ', h('span', { class: 'grad', text: 'clips que conectan.' })),
+      h('h1', {}, 'De un video largo a ', h('span', { class: 'grad', text: 'clips virales.' })),
       h('p', { text: 'Sube tu video o pega un enlace de YouTube. La IA local lo transcribe, entiende las historias y te propone los mejores momentos en vertical, con título y subtítulos.' }),
       h('div', { class: 'lv-feats' }, ['Transcripción local', 'IA sin pagar API', 'Clips 9:16 con título', 'Hasta 200 min'].map((t) => h('span', { class: 'lv-feat', text: t })))),
     h('div', { class: 'lv-visual', 'aria-hidden': 'true' },
