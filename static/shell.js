@@ -56,7 +56,7 @@ function navigate(name) {
   for (const v of VIEWS) $(v + 'View')?.classList.toggle('hidden', v !== name);
   for (const b of document.querySelectorAll('#sideNav button')) b.classList.toggle('on', b.dataset.view === name);
   window.scrollTo({ top: 0 });
-  ({ home: renderHome, library: renderLibrary, projects: renderProjects, live: () => { buildLiveLayout(); renderLiveHistory(); if (liveId) followLive(); }, settings: renderSettings })[name]?.();
+  ({ home: renderHome, library: renderLibrary, projects: renderProjects, live: () => { buildLiveLayout(); renderLiveHistory(); if (liveId && !liveDismissed(liveId)) followLive(); else showLiveRecs(); }, settings: renderSettings })[name]?.();
   if (name === 'editor') requestAnimationFrame(() => { try { paint(); } catch {} });
   try { localStorage.setItem('cs.view', name); } catch {}
 }
@@ -383,10 +383,10 @@ async function unfollowStreamer(s) {
   catch (e) { toast('No se pudo cambiar', e.message); }
 }
 // «En vivo en YouTube»: the Spanish-speaking live streams with the biggest audience now, plus recommended channels live.
-async function fillYoutubeLive(featured) {
-  const box = $('homeYoutube'); if (!box) return;
+async function fillYoutubeLive(featured, boxId = 'homeYoutube') {
+  const box = $(boxId); if (!box) return;
   const found = await api('/api/streamers/youtube-live').catch(() => []);
-  if (!$('homeYoutube')) return;
+  if (!$(boxId)) return;
   const seen = new Set(streamersCache.map((s) => s.key)), rows = [];
   for (const s of [...found, ...featured.filter((x) => x.platform === 'youtube')]) if (!seen.has(s.key)) { seen.add(s.key); rows.push(s); }
   rows.sort((a, b) => (Number(b.viewers) || 0) - (Number(a.viewers) || 0));
@@ -587,7 +587,7 @@ async function renderLiveHistory() {
       return h('div', { class: 'card', style: 'padding:16px;display:flex;flex-direction:column;gap:10px' },
         h('div', { style: 'display:flex;align-items:center;gap:10px' }, h('b', { text: name, style: 'font:600 17px var(--head);flex:1' }), platformLogo(list[0].platform), active ? h('span', { class: 'chip live', text: 'EN VIVO' }) : null),
         h('span', { class: 'muted', text: `${list.length} sesiones · ${total} momentos` }),
-        list.slice(0, 4).map((s) => h('button', { class: 'list-row', type: 'button', style: 'padding:8px 10px', onclick: () => { liveId = s.id; followLive(); window.scrollTo({ top: 0, behavior: 'smooth' }); } },
+        list.slice(0, 4).map((s) => h('button', { class: 'list-row', type: 'button', style: 'padding:8px 10px', onclick: () => { undismissLive(s.id); liveId = s.id; followLive(); window.scrollTo({ top: 0, behavior: 'smooth' }); } },
           h('span', { style: 'display:flex;flex-direction:column;gap:2px' }, h('span', { text: s.title || 'Directo', style: 'font-size:13px;font-weight:600' }), h('span', { class: 'muted', text: `${fmtDate(s.created)} · ${(s.moments || []).length} momentos · ${({ live: 'en vivo', stopped: 'detenida', interrupted: 'interrumpida', ended: 'terminada' })[s.status] || s.status}` })))),
         h('button', { class: 'btn ghost', type: 'button', text: 'Ver sus clips en la biblioteca', onclick: () => { libState.channel = list[0].channel || ''; navigate('library'); } }));
     })) : h('div', { class: 'empty', text: 'Todavía no has hecho clipping en vivo.' }));
@@ -613,7 +613,13 @@ function buildLiveLayout() {
   // «Detener sesión» sits in the on air bar, red, with a stop icon: the one button that ends the live session.
   $('liveStop').replaceChildren(h('span', { class: 'stop-ic', 'aria-hidden': 'true' }, h('i')), 'Detener sesión'); $('liveStop').title = 'Deja de grabar el directo. Los momentos ya encontrados se conservan.';
   $('liveResume').textContent = '↻ Reanudar';
-  const ring = h('div', { id: 'liveHeat', class: 'heat-ring' }); ring.innerHTML = HEAT_RING;
+  // Once the session is stopped: × takes it off the screen (it stays saved) and the recommended streams appear.
+  const close = h('button', { id: 'liveClose', class: 'live-close', type: 'button', hidden: true, title: 'Quitar esta transmisión de la pantalla',
+      'aria-label': 'Quitar esta transmisión de la pantalla. Sus momentos se conservan.', onclick: dismissLive },
+    h('span', { class: 'lc-ring', 'aria-hidden': 'true' }), h('span', { class: 'lc-core' }, svg('<path d="M7 7l10 10M17 7L7 17"></path>', 18)),
+    h('span', { class: 'lc-tip', 'aria-hidden': 'true', text: 'Quitar de la pantalla' }));
+  const recs = h('section', { id: 'liveRecs', class: 'live-recs', hidden: true, 'aria-label': 'Directos recomendados' });
+  const ring =h('div', { id: 'liveHeat', class: 'heat-ring' }); ring.innerHTML = HEAT_RING;
   ring.append(h('div', { class: 'heat-core' }, h('img', { id: 'liveHeatEmoji', class: 'em', alt: '' }), h('b', { id: 'liveHeatNum', text: '—' })));
   const tile = (icon, id, label) => h('div', { class: 'ltile' }, emo(icon), h('b', { id, text: '0' }), h('span', { text: label }));
   const now = h('div', { id: 'liveNow', class: 'live-now', hidden: true },
@@ -624,7 +630,7 @@ function buildLiveLayout() {
         h('span', { class: 'onair-clock' }, h('small', { id: 'liveClockLabel', text: 'En directo' }), h('b', { id: 'liveClock', text: '0:00' })),
         h('span', { id: 'liveBadge', class: 'onair-pill' }),
         h('span', { id: 'liveConn', class: 'live-conn' })),
-      h('div', { class: 'onair-actions' }, $('liveStop'), $('liveResume'))),
+      h('div', { class: 'onair-actions' }, $('liveStop'), $('liveResume'), close)),
     h('div', { class: 'card live-stage' },
       h('div', { class: 'live-frame' }, h('img', { id: 'liveFrame', alt: 'Imagen actual del directo' }), h('span', { class: 'scan', 'aria-hidden': 'true' }), h('span', { class: 'vignette', 'aria-hidden': 'true' }),
         h('div', { class: 'live-chips' }, h('span', { id: 'liveRec', class: 'chip glass rec' }, h('i'), 'REC'), h('span', { id: 'liveDelay', class: 'chip glass', text: 'Unos segundos de retraso' })),
@@ -655,15 +661,61 @@ function buildLiveLayout() {
       h('button', { class: 'btn ghost', type: 'button', text: 'Añadir etiqueta', onclick: () => batchLive('tag') }), h('button', { class: 'btn ghost', type: 'button', text: 'Favoritos', onclick: () => batchLive('fav') }),
       h('button', { class: 'btn danger', type: 'button', text: 'Descartar', onclick: () => batchLive('discard') }), h('button', { class: 'btn ghost', type: 'button', text: 'Cancelar', onclick: () => { liveUI.picked.clear(); paintLiveMoments(); } })),
     h('div', { id: 'liveMomentGrid' }));
-  host.prepend(connect, now, moments);
+  host.prepend(connect, recs, now, moments);
   setupStreamerSearch();
+}
+// Sessions taken off the screen with ×: remembered in this browser only (the session and its moments are untouched).
+const DISMISS_KEY = 'cs.liveDismissed';
+function dismissedLive() { try { return new Set(JSON.parse(localStorage.getItem(DISMISS_KEY) || '[]')); } catch { return new Set(); } }
+function saveDismissed(ids) { try { localStorage.setItem(DISMISS_KEY, JSON.stringify([...ids].slice(-200))); } catch {} }
+const liveDismissed = (id) => dismissedLive().has(id);
+function undismissLive(id) { const ids = dismissedLive(); if (ids.delete(id)) saveDismissed(ids); }
+function hideLiveNow() {
+  for (const id of ['liveNow', 'liveMomentsBox']) { const el = $(id); if (el) { el.hidden = true; el.classList.remove('closing'); } }
+  liveUI.session = null;
+}
+function dismissLive() {
+  const s = liveUI.session; if (!s || LIVE_RUNNING.includes(s.status) || s.status === 'stopping') return;
+  const ids = dismissedLive(); ids.add(s.id); saveDismissed(ids);
+  clearTimeout(liveTimer); clearTimeout(liveUI.frameTimer); try { stopLivePlayer(); } catch {}
+  liveId = null;
+  $('liveClose').classList.add('boom');
+  for (const id of ['liveNow', 'liveMomentsBox']) $(id)?.classList.add('closing');
+  setTimeout(() => { hideLiveNow(); showLiveRecs(); window.scrollTo({ top: 0, behavior: 'smooth' }); }, 380);
+  toast('Transmisión quitada de la pantalla', 'Sus momentos siguen en tu biblioteca y en «Tus streamers y sesiones».');
+}
+// The recommended streams, as on the home: your streamers live now, Kick recommendations and YouTube, each with
+// «Clipear este directo». Refreshed every minute while visible.
+let recsToken = 0, recsTimer = null;
+async function showLiveRecs() {
+  const box = $('liveRecs'); if (!box) return;
+  box.hidden = false; const mine = ++recsToken; clearTimeout(recsTimer);
+  if (!box.childElementCount) put(box, h('div', { class: 'recs-head' }, h('span', { class: 'recs-eyebrow', text: 'SIGUE CLIPEANDO' }), h('h2', { text: 'Buscando directos para ti…' })));
+  const [people, featured] = await Promise.all([loadStreamers(), api('/api/streamers/featured').catch(() => [])]);
+  if (mine !== recsToken || box.hidden) return;
+  const live = (people || []).filter((s) => s.live), kick = (featured || []).filter((s) => s.platform !== 'youtube');
+  const head = (title, note, extra) => h('div', { class: 'section-head' }, h('span', { class: 'pulse-dot' }), h('h2', { text: title }), h('span', { class: 'muted', text: note }), extra || null);
+  put(box,
+    h('div', { class: 'recs-head' }, h('span', { class: 'recs-eyebrow', text: 'SIGUE CLIPEANDO' }), h('h2', {}, '¿Qué directo ', h('span', { class: 'grad', text: 'clipeamos' }), ' ahora?'),
+      h('p', { class: 'muted', text: 'Elige un directo y empieza con un clic. Las sesiones anteriores siguen guardadas en tu biblioteca.' })),
+    live.length ? h('div', {}, head('En vivo ahora', 'Tus streamers en directo. Los que más clipeas van primero.'),
+      h('div', { class: 'rail' }, live.map((s, i) => streamCard(s, i === 0 && s.clips ? '★ El que más clipeas' : '')))) : null,
+    kick.length ? h('div', {}, head('Recomendados en Kick', 'Los streamers de Kick con más audiencia que están en directo ahora.', platformLogo('kick')),
+      h('div', { class: 'rail' }, kick.map((s) => streamCard(s, s.lang === 'es' ? 'Recomendado · Español' : 'Recomendado', true)))) : null,
+    h('div', { id: 'liveRecsYoutube', hidden: true }),
+    !live.length && !kick.length ? h('p', { class: 'muted recs-empty', text: 'Buscando también en YouTube… Si no aparece nada, pega arriba el enlace de un directo o busca a un streamer por su nombre.' }) : null);
+  fillYoutubeLive(featured || [], 'liveRecsYoutube').then(() => { if (mine === recsToken && $('liveRecsYoutube') && !$('liveRecsYoutube').hidden) box.querySelector('.recs-empty')?.remove(); });
+  recsTimer = setTimeout(() => { if (current === 'live' && !box.hidden && !document.hidden) showLiveRecs(); }, 60000);
 }
 const momentId = (sid, mid) => `live:${sid}:${mid}`;
 const liveShown = (s) => s.moments.filter((m) => m.status !== 'discarded');
 const HEAT_TEXT = { fire: 'En llamas: hay clips para subir ya', great: 'Caliente: buenos momentos', good: 'Templado', weak: 'Tranquilo por ahora' };
 function paintLiveView(s) {
-  buildLiveLayout(); liveUI.session = s;
+  buildLiveLayout();
   const running = LIVE_RUNNING.includes(s.status);
+  if (!running && s.status !== 'stopping' && liveDismissed(s.id)) { hideLiveNow(); showLiveRecs(); return; }   // taken off the screen with ×
+  liveUI.session = s; $('liveRecs').hidden = true; ++recsToken; clearTimeout(recsTimer);
+  $('liveClose').hidden = running || s.status === 'stopping'; $('liveClose').classList.remove('boom');
   $('liveNow').hidden = false; $('liveNow').classList.toggle('is-live', running); $('liveMomentsBox').hidden = !s.moments.length;
   $('liveBadge').textContent = running ? (s.status === 'reconnecting' ? 'RECONECTANDO' : 'EN EL AIRE') : ({ stopped: 'DETENIDA', ended: 'TERMINADO', interrupted: 'INTERRUMPIDA', error: 'ERROR', stopping: 'DETENIENDO' })[s.status] || s.status.toUpperCase();
   $('liveBadge').className = 'onair-pill' + (running ? ' on' : '');
