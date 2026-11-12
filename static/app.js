@@ -541,7 +541,7 @@ function seamY(){const top=stackPath?.top||Math.min(960,Math.max(768,overlayInfo
 // «Cámara + juego» defaults: the title sits on the line; subtitles go low in the game, clear of the centre where the action is.
 // Only values still at their defaults move, so a position chosen by hand is kept.
 const STACK_CAPTION_Y=85,OLD_SEAM=v=>Math.abs(v-seamY())<1.5;
-function stackEdit(e){const t=Number(e.title_y??12),c=Number(e.caption_y??81);return {...e,title_y:t===12?seamY():t,caption_y:c===81||OLD_SEAM(c)?STACK_CAPTION_Y:c};}
+function stackEdit(e){const t=Number(e.title_y??12),c=Number(e.caption_y??81);return {...e,title_y:t===12||t===21?seamY():t,caption_y:c===81||OLD_SEAM(c)?STACK_CAPTION_Y:c};}
 function stackDom(){const e=stackEdit({title_y:$('title_y').value,caption_y:$('caption_y').value});$('title_y').value=e.title_y;$('caption_y').value=e.caption_y;}
 function stackCaptionY(){return STACK_CAPTION_Y;}
 async function watchOverlay(j,t){

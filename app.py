@@ -1448,7 +1448,11 @@ def default_title_y(framing,zoom,panels):
  import layout,tracking
  if framing=='stack' and panels:return round((panels['top']+layout.SEAM/2)/19.2,1)
  if framing=='zoom':return round((1920-tracking.band_height('zoom',zoom))/2/19.2,1)
+ if framing=='crop':return FULL_TITLE_Y
  return 12
+
+# «Pantalla completa»: the title a little lower than the top, clear of TikTok's and Instagram's top bar (user's mark).
+FULL_TITLE_Y=21
 
 def title_position(framing,zoom,panels,saved,manual=None):
  """The saved position when it was set by hand («title_manual»); otherwise the format's own place (the camera/game
@@ -1459,7 +1463,7 @@ def title_position(framing,zoom,panels,saved,manual=None):
  if manual in ('1',True):return float(saved)
  if framing=='stack':return default_title_y(framing,zoom,panels)
  v=float(saved)
- if v==12 or (framing!='stack' and 40<=v<=50.3) or any(abs(v-default_title_y('zoom',z,None))<.6 for z in ('soft','balanced','close')):
+ if v in (12,FULL_TITLE_Y) or (framing!='stack' and 40<=v<=50.3) or any(abs(v-default_title_y('zoom',z,None))<.6 for z in ('soft','balanced','close')):
   return default_title_y(framing,zoom,panels)
  return v
 
