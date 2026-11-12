@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 
 VERSION = 1
-DETECTOR_VERSION = 5          # 2: seam (Spreen) · 3: fixed edges (IRL) · 4: small corner camera (Westcol) · 5: banner faces are not the camera (MrStivenTc)
+DETECTOR_VERSION = 6          # 2: seam (Spreen) · 3: fixed edges (IRL) · 4: small corner camera (Westcol) · 5: banner faces are not the camera (MrStivenTc) · 6: screen reactions: the video player is the game area (Westcol watching a music video)
 CANVAS_W, CANVAS_H = 1080, 1920
 TOP_MIN, TOP_MAX = 768, 960        # camera panel: 40-50 % of the height
 SEAM = 6                           # dark line between camera and game (px)
@@ -252,12 +252,31 @@ def _boxed_camera(source, times, ex, ey, sw, sh, W, H, ratio, prefer, frame_face
 def detect_overlay(source, duration=None, samples=40, progress=lambda v: None, start=0.0, prefer=False):
     """Return the facecam overlay {'found', 'x','y','w','h' (source px), 'face', 'presence', 'kind'}.
     `prefer`: the user chose «Cámara + juego», so a camera box with fixed edges is accepted even without a face seen."""
-    result = _detect_overlay(source, duration, samples, progress, start, prefer)
+    maps = {}
+    result = _detect_overlay(source, duration, samples, progress, start, prefer, maps)
+    if result.get('found') and maps:
+        # A reaction on a screen capture (a browser with a video, the chat beside it, the taskbar): the game area is the
+        # video player only, so the bottom panel never shows the desktop around it.
+        r = maps['ratio']; cam = (result['x'] / r, result['y'] / r, (result['x'] + result['w']) / r, (result['y'] + result['h']) / r)
+        W_, H_ = result['width'], result['height']
+        # A streamer's camera on a screen capture sits in a corner; a «camera» found inside the page (a face in a
+        # thumbnail or in the video) is not trusted for this.
+        corner = (result['x'] <= .03 * W_ or result['x'] + result['w'] >= .97 * W_) and (result['y'] <= .03 * H_ or result['y'] + result['h'] >= .97 * H_)
+        screen = _screen_region(maps['var'], maps['texty'], cam) if corner else None
+        result['screen'] = bool(screen)
+        if screen:
+            even = lambda v: int(round(v * r / 2)) * 2
+            right = _border_end(maps['ey'], cam)
+            if right:      # the camera's own border says it is wider than the face search found (Westcol: 414 -> 576 px)
+                result['w'] = min(result['width'] - result['x'], even(right) - result['x'])
+            x0, y0, x1, y1 = (v * SCREEN_CELL for v in screen)
+            inset = .05 * (y1 - y0); y0, y1 = y0 + inset, y1 - inset       # the page bar or the title touching the player
+            result['content'] = dict(x=even(x0), y=even(y0), w=min(result['width'], even(x1)) - even(x0), h=min(result['height'], even(y1)) - even(y0))
     progress(100)
     return result
 
 
-def _detect_overlay(source, duration, samples, progress, start, prefer):
+def _detect_overlay(source, duration, samples, progress, start, prefer, maps=None):
     import cv2
     from tracking import make_detector
     W, H, probed = _probe(source)
@@ -266,7 +285,7 @@ def _detect_overlay(source, duration, samples, progress, start, prefer):
     detect = make_detector(sw, sh)
     # The whole video by default; a clip's own range when the camera moved there (start > 0 or a short duration).
     times = (np.linspace(start + duration * .03, start + duration * .97, samples) if duration > 4 else [start + duration / 2])
-    faces = []; edges_x = np.zeros((sh, sw), np.float32); edges_y = np.zeros((sh, sw), np.float32); used = 0; grays = []
+    faces = []; edges_x = np.zeros((sh, sw), np.float32); edges_y = np.zeros((sh, sw), np.float32); texty = np.zeros((sh, sw), np.float32); used = 0; grays = []
     for i, t in enumerate(times):
         frame = _frame(source, float(t), sw, sh)
         progress(round(80 * (i + 1) / len(times)))
@@ -276,13 +295,16 @@ def _detect_overlay(source, duration, samples, progress, start, prefer):
             if h >= MIN_FACE * sh and .55 <= w / max(1, h) <= 1.6: faces.append((x + w / 2, y + h / 2, w, h, i))
         gray = cv2.GaussianBlur(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (3, 3), 0).astype(np.float32)
         grays.append(gray.astype(np.uint8))
-        edges_x += np.abs(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)) > 40
-        edges_y += np.abs(cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)) > 40
+        gx, gy = np.abs(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)), np.abs(cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3))
+        edges_x += gx > 40
+        edges_y += gy > 40
+        texty += (gx + gy) > 60
     none = dict(found=False, kind='none', detector=DETECTOR_VERSION, width=W, height=H, presence=0)
     if not used: return none
     ex, ey = edges_x / used, edges_y / used
     # How much each pixel changes across the samples: high in the game, low in the streamer's room.
     var = np.stack(grays).astype(np.float32).std(axis=0)
+    if maps is not None: maps.update(var=var, texty=texty / used, ratio=ratio, ex=edges_x / used, ey=edges_y / used)
     boxed = lambda fallback: _boxed_camera(source, times, ex, ey, sw, sh, W, H, ratio, prefer, faces, used, var, around) or fallback
 
     def around(fx, fy, fw, fh):
@@ -379,6 +401,63 @@ def _detect_overlay(source, duration, samples, progress, start, prefer):
     progress(100)
     return dict(found=True, kind='overlay', detector=DETECTOR_VERSION, width=W, height=H, presence=round(presence, 2), content=content, **box,
                 face=dict(x=round(fx * ratio, 1), y=round(fy * ratio, 1), w=round(fw * ratio, 1), h=round(fh * ratio, 1)))
+
+
+SCREEN_CELL = 8          # px of the 640-wide analysis frame per cell of the screen-capture test
+
+
+def _runs(ok):
+    """[start, end) of each run of True values."""
+    out, start = [], None
+    for i, v in enumerate(list(ok) + [False]):
+        if v and start is None: start = i
+        if not v and start is not None: out.append((start, i)); start = None
+    return out
+
+
+def _screen_region(var, texty, cam, cell=SCREEN_CELL):
+    """The video player (x0, y0, x1, y1 in cells) when the stream is a screen capture with a camera on it, else None.
+
+    Two measured signs of a screen capture (11 clips, 3 Westcol reactions and 8 games / IRL / talk shows): much of the
+    frame never changes (browser bar, page, taskbar: 21-79 % of the cells vs 0-15 % in games), and a column band full of
+    moving text (the chat). The player is what is left: the columns that are not text, then the rows that are not text
+    (title, description, taskbar). A dark music video is fine: it is found by having no text, not by its motion."""
+    import cv2
+    sh, sw = var.shape; cw, ch = sw // cell, sh // cell
+    S = cv2.resize(var, (cw, ch), interpolation=cv2.INTER_AREA); E = cv2.resize(texty, (cw, ch), interpolation=cv2.INTER_AREA)
+    valid = np.ones((ch, cw), bool)
+    l, t, r, b = cam; valid[max(0, int(t // cell)):int(b // cell) + 1, max(0, int(l // cell)):int(r // cell) + 1] = False
+    text = E > .12
+    still = float(((S < 2.0) & valid).sum() / max(1, valid.sum()))
+    col = np.array([text[valid[:, x], x].mean() if valid[:, x].any() else 0 for x in range(cw)])
+    chat = [c for c in _runs(col >= .75) if c[1] - c[0] >= .06 * cw]
+    if still < .18 or (not chat and still < .3): return None
+    free = _runs(col < .75)
+    if not free: return None
+    x0, x1 = max(free, key=lambda c: c[1] - c[0])
+    row = np.array([text[y, x0:x1][valid[y, x0:x1]].mean() if valid[y, x0:x1].any() else 1 for y in range(ch)])
+    row = np.convolve(row, np.ones(3) / 3, mode='same')
+    rows = _runs(row < .55)
+    if not rows: return None
+    y0, y1 = max(rows, key=lambda c: c[1] - c[0])
+    w, h = x1 - x0, y1 - y0
+    if w * h < .15 * cw * ch or not 1.0 <= w / max(1, h) <= 2.8 or (w >= cw - 1 and h >= ch - 1): return None
+    if float((S[y0:y1, x0:x1] > 3).mean()) < .03: return None      # nothing moves there: not a video
+    return x0, y0, x1, y1
+
+
+def _border_end(ey, cam):
+    """Right end (analysis px) of the camera's bottom border line, when it reaches past the camera found: a line seen in
+    most frames along the camera's bottom edge, starting at its left side (gaps of up to 3 px allowed)."""
+    l, t, r, b = (int(round(v)) for v in cam); sh, sw = ey.shape; w = max(1, r - l)
+    best = None
+    for y in range(max(0, b - 10), min(sh, b + 11)):
+        x, gap = l, 0
+        while x < min(sw, r + w) and gap <= 3:
+            gap = 0 if ey[y, x] > .5 else gap + 1; x += 1
+        end = x - gap
+        if end - l >= .9 * w and (best is None or end > best): best = end
+    return best if best and best > r + 4 else None
 
 
 def panels(overlay):
