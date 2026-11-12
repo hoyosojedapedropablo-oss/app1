@@ -170,7 +170,11 @@ function useImportedVideo(videoJob){
  if(videoJob.youtube)paintYoutube({...videoJob.youtube,status:'ready',progress:100});else $('youtubeCard').classList.add('hidden');
  ++pollToken;++cueVersion;clearTimeout(captionTimer);job=videoJob;selected=null;cues=[];captionPending=false;edits.clear();$('clips').replaceChildren();$('all').classList.add('hidden');$('video').src=`/api/jobs/${job.id}/video`;$('filename').textContent=job.name;$('end').value=Math.min(30,job.duration);$('analyze').disabled=false;$('manual').disabled=false;$('goEditor').disabled=false;loadProject(job);paint();say(`Video listo · ${(job.duration/60).toFixed(1)} minutos`);
 }
-$('downloadYoutube').onclick=()=>followImport(async()=>(await(await request('/api/youtube',jsonOptions({url:$('youtubeUrl').value,quality:$('youtubeQuality').value,browser:$('youtubeBrowser').value}))).json()).id);
+$('downloadYoutube').onclick=()=>followImport(async()=>(await(await request('/api/youtube',jsonOptions({url:$('youtubeUrl').value,quality:$('youtubeQuality').value,browser:$('youtubeBrowser').value,start:clockSeconds($('kickStart').value)}))).json()).id);
+// Kick VODs: «Desde» (h:mm:ss) chooses where the imported part (up to 8 h) starts.
+const isKickVod=u=>/^https?:\/\/(www\.)?kick\.com\/([A-Za-z0-9_-]+\/videos|video)\/[0-9a-f-]{36}/i.test((u||'').trim());
+function clockSeconds(v){const p=String(v||'').trim().split(':').map(x=>Number(x)||0);return p.length===3?p[0]*3600+p[1]*60+p[2]:p.length===2?p[0]*60+p[1]:p[0]||0;}
+$('youtubeUrl').addEventListener('input',()=>{const k=isKickVod($('youtubeUrl').value);$('kickStartRow').hidden=!k;$('downloadYoutube').textContent=k?'Importar VOD de Kick':'Importar video de YouTube';});
 // A download the server resumed after a restart continues in the page that is reloaded.
 request('/api/youtube').then(r=>r.json()).then(list=>{if(list.length)followImport(async()=>list[0].id);}).catch(()=>{});
 async function followImport(start){
@@ -195,8 +199,9 @@ async function followImport(start){
 $('video').addEventListener('error',()=>{if($('video').getAttribute('src'))say('No se pudo cargar el video. Si ClipStudio se cerró, abre INICIAR_WINDOWS.bat y recarga la página.');});
 
 function paintYoutube(state){
- if(!state.thumbnail)return;
- $('youtubeCard').classList.remove('hidden');$('youtubeThumbnail').src=state.thumbnail;
+ $('importEyebrow').textContent=state.platform==='kick'?'KICK · VOD':'YOUTUBE';
+ if(!state.thumbnail&&state.platform!=='kick')return;
+ $('youtubeCard').classList.remove('hidden');if(state.thumbnail)$('youtubeThumbnail').src=state.thumbnail;else $('youtubeThumbnail').removeAttribute('src');
  $('youtubeTitle').textContent=state.status==='error'&&state.title?.startsWith('Preparando video')?'No se pudo descargar este video':state.title||'Video de YouTube';
  const duration=state.duration?`${Math.floor(state.duration/60)}:${String(Math.floor(state.duration%60)).padStart(2,'0')} min`:'';
  $('youtubeMeta').textContent=[state.channel,duration,state.quality].filter(Boolean).join(' · ');
