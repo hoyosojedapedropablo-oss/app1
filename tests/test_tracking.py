@@ -7,6 +7,53 @@ import app as backend
 import tracking
 from styling import title_layout
 
+def face(ident,cx,h,act=0.0,front=.9,y=300):
+ return dict(id=ident,x=cx-h/2,y=y,w=h,h=h,act=act,front=front)
+
+class SpeakerChoiceTests(unittest.TestCase):
+ """v3: who the camera follows (1920x1080 source, 8 samples/s)."""
+ def choose(self,frames,cuts=()):
+  samples=[dict(t=i/8,active=None,speech=True,faces=f) for i,f in enumerate(frames)]
+  changes=tracking.choose_speakers(samples,list(cuts),1920,1080)
+  return [s['active'] for s in samples],changes
+ def test_clip_starts_on_the_speaker_not_on_the_biggest_face(self):
+  # Real case: a bigger face at the bottom right edge, looking down and silent; the speaker is in the middle.
+  frames=[[face(0,1800,210,act=.01,front=0,y=850),face(1,1130,200,act=.0 if i<6 else .2,front=.8)] for i in range(40)]
+  active,changes=self.choose(frames)
+  self.assertEqual(active[0],1);self.assertEqual(changes,0)
+ def test_without_speech_the_central_frontal_face_near_the_camera_is_chosen(self):
+  frames=[[face(0,300,200),face(1,980,190),face(2,1500,90)] for i in range(24)]
+  active,_=self.choose(frames)
+  self.assertEqual(set(active),{1})
+ def test_background_talkers_never_take_the_camera(self):
+  frames=[[face(0,800,200,act=.05),face(1,1150,195,act=.04),face(2,1600,80,act=.4,front=1)] for i in range(64)]
+  active,_=self.choose(frames)
+  self.assertNotIn(2,active)
+ def test_moving_without_talking_does_not_pull_the_camera(self):
+  frames=[[face(0,900,200,act=.12),face(1,300+40*i,200,act=0,front=1)] for i in range(32)]
+  active,changes=self.choose(frames)
+  self.assertEqual(set(active),{0});self.assertEqual(changes,0)
+ def test_conversation_side_by_side_switches_when_the_other_starts_talking(self):
+  talk=lambda i,who:.25 if (i//24)%2==who else .01      # 3 s each: 0, 1, 0, 1
+  frames=[[face(0,750,190,act=talk(i,0)),face(1,1150,190,act=talk(i,1))] for i in range(96)]
+  active,changes=self.choose(frames)
+  self.assertEqual(active[0],0);self.assertEqual(changes,3)
+  for onset in (24,48,72):                                # each switch lands within 0.5 s of the new speaker starting
+   switch=next(i for i in range(onset-8,96) if active[i]!=active[onset-9])
+   self.assertLessEqual(abs(switch-onset),4)
+ def test_each_shot_is_decided_on_its_own(self):
+  frames=[[face(0,500,200,act=.2)] for i in range(16)]+[[face(5,1400,200,act=.2)] for i in range(16)]
+  active,_=self.choose(frames,cuts=[2.0])
+  self.assertEqual(active[0],0);self.assertEqual(active[-1],5)
+ def test_followed_face_stays_near_the_centre(self):
+  # Two people 0.5 of the visible width apart taking turns: the camera centres each speaker instead of a fixed middle.
+  samples=[dict(t=i/8,active=0 if i<40 else 1,faces=[dict(id=0,x=700,y=300,w=150,h=150),dict(id=1,x=1000,y=300,w=150,h=150)]) for i in range(80)]
+  r=dict(width=1920,height=1080,samples=samples,cuts=[])
+  path=tracking.build_path(r,framing='crop');g=tracking.geometry(1920,1080,'crop');extra=g['sw']-1080
+  centre=lambda k:(path['x'][k]*extra/100+540)/g['scale']
+  self.assertAlmostEqual(centre(int(3*tracking.PATH_FPS)),775,delta=20)
+  self.assertAlmostEqual(centre(len(path['x'])-1),1075,delta=20)
+
 class EmptyDetector:
  def empty(self):return False
  def detectMultiScale(self,*args,**kwargs):return []
@@ -81,7 +128,7 @@ class TrackingTests(unittest.TestCase):
    self.assertGreater(spoken['speaker_changes'],0)
    self.assertGreater(tracking.build_path(spoken,motion='fast')['x'][-1],80)
    self.assertEqual(silent['speaker_changes'],0)
-   self.assertEqual(tracking.build_path(silent)['x'][-1],0)
+   silent_x=tracking.build_path(silent)['x'];self.assertEqual(len(set(silent_x)),1)   # nobody speaks: one person, camera still
    self.assertEqual([p['label'].split(' · ')[1] for p in spoken['persons']],['izquierda','derecha'])
    # Choosing a person follows that person even while the other one speaks.
    self.assertEqual(tracking.build_path(spoken,person=str(spoken['persons'][0]['id']))['x'][-1],0)
