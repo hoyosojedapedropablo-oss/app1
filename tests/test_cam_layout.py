@@ -344,3 +344,10 @@ class ScreenReactionTests(unittest.TestCase):
         self.assertFalse(backend.reaction_stack(ov, dict(framing='crop', auto_stack=False)))
         self.assertFalse(backend.reaction_stack(dict(found=True, screen=False), dict(framing='crop', auto_stack=True)))
         self.assertFalse(backend.reaction_stack(None, dict(framing='crop')))
+
+
+class FullScreenTitleTests(unittest.TestCase):
+    def test_full_screen_title_sits_below_the_top_bar(self):
+        self.assertEqual(backend.default_title_y('crop', 'balanced', None), backend.FULL_TITLE_Y)
+        self.assertEqual(backend.title_position('crop', 'balanced', None, 12, None), backend.FULL_TITLE_Y)   # old automatic place moves
+        self.assertEqual(backend.title_position('crop', 'balanced', None, 30, '1'), 30)                    # moved by hand: stays

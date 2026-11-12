@@ -1051,11 +1051,13 @@ choose = window.choose;
 function titleDefault(framing, zoom) {
   if (framing === 'stack') return seamY();
   if (framing === 'zoom') { const band = Math.round(1920 * (ZOOM[zoom] || ZOOM.balanced) / 2) * 2; return Math.round((1920 - band) / 2 / 19.2 * 10) / 10; }
+  if (framing === 'crop') return FULL_TITLE_Y;      // «Pantalla completa»: below TikTok's / Instagram's top bar
   return 12;
 }
+const FULL_TITLE_Y = 21;
 function isAutoTitle(v, framing) {
   v = Number(v);
-  return v === 12 || (framing !== 'stack' && v >= 40 && v <= 50.3) || Object.keys(ZOOM).some((z) => Math.abs(v - titleDefault('zoom', z)) < .6) || (framing === 'stack' && Math.abs(v - seamY()) < 1.5);
+  return v === 12 || v === FULL_TITLE_Y || (framing !== 'stack' && v >= 40 && v <= 50.3) || Object.keys(ZOOM).some((z) => Math.abs(v - titleDefault('zoom', z)) < .6) || (framing === 'stack' && Math.abs(v - seamY()) < 1.5);
 }
 // Whether the title was moved by hand (dragged, or its «Posición vertical» slider): saved with the clip's edits.
 // Without that, the title always sits on its format's line, also when that line moves (a new camera detection).
