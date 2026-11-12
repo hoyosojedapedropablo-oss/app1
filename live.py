@@ -656,7 +656,8 @@ class LiveSession:
     def _prepare_layout(self, moment):
         """«Cámara + juego»: find the camera and the game motion now, so the moment opens ready in the editor."""
         settings = self.clip_settings or {}
-        if settings.get('framing') != 'stack': return     # only when «Cámara + juego» was chosen
+        # «Cámara + juego» chosen, or the automatic switch on: a screen reaction (camera over a browser video) uses it too.
+        if settings.get('framing') != 'stack' and settings.get('auto_stack', True) is False: return
         try:
             import layout
             target = self.clips / f'{moment["id"]}.mp4'
@@ -668,13 +669,17 @@ class LiveSession:
         except Exception:
             pass        # the editor computes it when the moment is opened
 
-    def refresh_layouts(self):
-        """Moments prepared by an older camera detector are prepared again with the current one."""
+    def refresh_layouts(self, missing=False):
+        """Moments prepared by an older camera detector are prepared again with the current one (and, with `missing`,
+        the ones never prepared: the newest session's reactions, so they open and export with the camera)."""
         import layout
         redone = 0
         for m in list(self.moments):
             f = self.clips / f'{m["id"]}.layout.json'
-            if not f.exists() or not (self.clips / f'{m["id"]}.mp4').exists(): continue
+            if not (self.clips / f'{m["id"]}.mp4').exists(): continue
+            if not f.exists():
+                if missing and m.get('status') != 'discarded': self._prepare_layout(m); redone += 1
+                continue
             try: ov = json.loads(f.read_text(encoding='utf-8')).get('overlay') or {}
             except (OSError, ValueError): continue
             if ov.get('manual') or ov.get('detector', 1) >= layout.DETECTOR_VERSION: continue

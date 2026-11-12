@@ -304,3 +304,43 @@ class QualityTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ScreenReactionTests(unittest.TestCase):
+    """A reaction on a screen capture: camera in the corner, a video player, the chat (moving text) and still UI."""
+    def maps(self):
+        sh, sw = 360, 640
+        var = np.zeros((sh, sw), np.float32); texty = np.zeros((sh, sw), np.float32)
+        var[0:108, 0:192] = 30                       # the streamer's camera (moving room)
+        var[60:260, 0:440] = 1.0                     # the player: dark, mostly still...
+        var[120:220, 160:300] = 25                   # ...with someone moving in it, and no text
+        var[20:330, 450:590] = 20; texty[20:330, 450:590] = .9      # the chat: moving text
+        texty[0:20, :] = .5; texty[280:360, :450] = .6               # browser bar, title, description, taskbar (still text)
+        return var, texty
+
+    def test_player_found_and_chat_left_out(self):
+        var, texty = self.maps()
+        box = layout._screen_region(var, texty, (0, 0, 192, 108))
+        self.assertIsNotNone(box)
+        x0, y0, x1, y1 = (v * layout.SCREEN_CELL for v in box)
+        self.assertLessEqual(x1, 452)                # stops before the chat
+        self.assertGreaterEqual(y0, 16); self.assertLessEqual(y1, 290)   # no browser bar, no title or taskbar
+
+    def test_game_is_not_a_screen_capture(self):
+        rng = np.random.default_rng(1)
+        var = (8 + 20 * rng.random((360, 640))).astype(np.float32)          # a game: everything moves
+        texty = (.2 * rng.random((360, 640))).astype(np.float32)
+        self.assertIsNone(layout._screen_region(var, texty, (0, 0, 192, 108)))
+
+    def test_camera_border_gives_the_real_width(self):
+        ey = np.zeros((360, 640), np.float32); ey[107, 0:192] = .9
+        self.assertEqual(layout._border_end(ey, (0, 0, 138, 106)), 192)
+        self.assertIsNone(layout._border_end(ey, (0, 0, 192, 106)))      # already right: nothing to change
+
+    def test_reaction_uses_camera_and_video_unless_turned_off(self):
+        ov = dict(found=True, screen=True)
+        self.assertTrue(backend.reaction_stack(ov, dict(framing='crop', auto_stack=True)))
+        self.assertTrue(backend.reaction_stack(ov, dict(framing='zoom')))
+        self.assertFalse(backend.reaction_stack(ov, dict(framing='crop', auto_stack=False)))
+        self.assertFalse(backend.reaction_stack(dict(found=True, screen=False), dict(framing='crop', auto_stack=True)))
+        self.assertFalse(backend.reaction_stack(None, dict(framing='crop')))

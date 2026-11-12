@@ -868,6 +868,12 @@ def wants_stack(job):
  settings=clip_settings(job)
  return settings.get('framing')=='stack'      # the chosen format wins: «auto» never turns another format into camera + game
 
+def reaction_stack(overlay,settings):
+ """The one exception to «the chosen format wins»: a reaction on a screen capture (the streamer's camera over a browser
+ with a video, the chat and the taskbar) goes to «Cámara + juego» with the video player below, unless the automatic
+ switch is turned off. «Pantalla completa» there was a crop of the desktop (user report, Westcol reacting to a video)."""
+ return bool(overlay and overlay.get('found') and overlay.get('screen')) and settings.get('auto_stack',True) is not False and settings.get('framing')!='fit'
+
 def layout_cache(ident,start,end,overlay):
  import layout
  box=':'.join(str(overlay[k]) for k in ('x','y','w','h'))
@@ -1253,10 +1259,11 @@ def refresh_live_layouts():
  """After a camera-detector update: the recent live sessions' moments are checked again with the new detector,
  one at a time in the background, so their clips open (and their thumbnails show) with the camera when there is one."""
  time.sleep(20)   # let the app finish starting first
- for session in sorted(LIVE.values(),key=lambda s:s.created,reverse=True)[:15]:
+ recent=sorted(LIVE.values(),key=lambda s:s.created,reverse=True)[:15];newest=recent[0] if recent else None
+ for session in recent:
   settings=session.clip_settings or {}
-  if settings.get('framing')!='stack':continue
-  try:session.refresh_layouts()
+  if settings.get('framing')!='stack' and settings.get('auto_stack',True) is False:continue
+  try:session.refresh_layouts(missing=session is newest)
   except Exception as e:logging.getLogger('uvicorn.error').warning('Layout refresh failed: %s',e)
 
 @app.on_event('startup')
@@ -1431,7 +1438,7 @@ def thumb_spec(r):
   source=Path(r['file']);start=3.0;end=3.0+float(r['duration'] or 10)
  if not Path(source).exists():return None
  found=bool(overlay and overlay.get('found'))
- framing=edits.get('framing') or ('stack' if found and settings.get('framing')=='stack' else ('zoom' if settings.get('framing')=='stack' else settings.get('framing','zoom')))
+ framing=edits.get('framing') or ('stack' if found and (settings.get('framing')=='stack' or reaction_stack(overlay,settings)) else ('zoom' if settings.get('framing')=='stack' else settings.get('framing','zoom')))
  if framing=='stack' and not found:framing='zoom'
  return dict(source=source,t=start+max(.5,(end-start)*.35),framing=framing,zoom=edits.get('zoom',settings.get('zoom','balanced')),overlay=overlay if framing=='stack' else None,
              title=edits.get('title') or r['user_title'] or r['title'] or '',edits=edits,corners=edits.get('title_corners',settings.get('title_corners','rounded')))

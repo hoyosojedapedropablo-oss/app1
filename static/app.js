@@ -535,7 +535,7 @@ $('cfgStart').onclick=async()=>{
 
 // --- «Cámara + juego»: streamer camera on top, game below ------------------------------------------------------------------
 // The server finds the camera once per video; the preview draws the same two crops the export uses on a canvas.
-function effectiveFraming(c){const cam=!!overlayInfo?.found;if(c.framing==='stack')return cam?'stack':'zoom';return c.framing;}   // the chosen format wins
+function effectiveFraming(c){const cam=!!overlayInfo?.found;if(c.framing==='stack')return cam?'stack':'zoom';if(cam&&overlayInfo.screen&&c.auto_stack!==false&&c.framing!=='fit')return 'stack';return c.framing;}   // the chosen format wins, except a screen reaction (camera over a browser video): camera + the video player
 // Centre of the line between camera and game, in % of the height (title_y centres the title there).
 function seamY(){const top=stackPath?.top||Math.min(960,Math.max(768,overlayInfo?.found?Math.round(1080*overlayInfo.h/overlayInfo.w):864));return Math.round((top+3)/19.2*10)/10;}
 // «Cámara + juego» defaults: the title sits on the line; subtitles go low in the game, clear of the centre where the action is.
