@@ -8,12 +8,24 @@ v2 (Nov 2026), after measuring v1 on real clips (max 156 px jump in one frame, h
 - The camera path is built separately (build_path): a dead zone avoids needless moves, a clip whose subject fits in
   one window stays static, a zero-phase smoothing pass gives eased motion without lag, a speed limit per motion mode
   prevents sudden pans, and FFmpeg receives one position per output frame instead of 12 per second.
+
+v3 (Nov 2026), after a real clip opened on a non-speaking person (the biggest face: someone close to the lens, looking
+down) and only reached the speaker 2.5 s later:
+- Who to follow is decided for the whole shot at once (choose_speakers), so the clip starts on the person who is
+  speaking from its first frame instead of catching up after a delay.
+- Only faces that show speech count: mouth motion while a voice is heard, weighted by how frontal the face is (eye
+  contact with the camera). A person who just moves, without talking, does not pull the camera.
+- People close to the camera win over people in the background: a face clearly smaller than the biggest one in the
+  frame barely counts, and switching to it costs much more. Switching between two people talking side by side (a
+  conversation) is easier than switching to someone far away.
+- With nobody speaking yet, the clip starts on the most central, frontal face near the camera.
+- The camera keeps the followed face closer to the centre (smaller dead zone and still-camera window).
 """
 import hashlib, json, math, subprocess
 from pathlib import Path
 import numpy as np
 
-VERSION = 2
+VERSION = 3
 SAMPLE_FPS = 8
 PATH_FPS = 30
 MODEL = Path(__file__).resolve().parent / 'models' / 'face_detection_yunet_2023mar.onnx'
@@ -21,7 +33,9 @@ MIN_FACE = .06            # faces shorter than 6% of the frame height are ignore
 ZOOM = {'soft': .50, 'balanced': .60, 'close': .72}   # share of the 9:16 height used by the video band
 # tau: smoothing time constant (s); speed: max pan per second as a share of the visible width; dead: half-width of the
 # zone (share of the visible width) the face may move in before the camera follows.
-MOTION = {'smooth': dict(tau=.9, speed=.35, dead=.22), 'balanced': dict(tau=.5, speed=.7, dead=.17), 'fast': dict(tau=.22, speed=1.5, dead=.1)}
+MOTION = {'smooth': dict(tau=.9, speed=.4, dead=.16), 'balanced': dict(tau=.45, speed=.9, dead=.12), 'fast': dict(tau=.22, speed=1.6, dead=.08)}
+STILL = .24               # a subject that always stays within this share of the visible width keeps the camera still
+NEAR = .62                # a face smaller than this share of the biggest face in the frame is background
 
 
 def key(start, end):
@@ -56,6 +70,17 @@ def position(cx, cy, width, height):
     return max(0, min(100, x)), max(0, min(100, y))
 
 
+def face_front(f):
+    """0..1: how much a YuNet face looks at the camera (nose centred between the eyes, eyes level and wide apart)."""
+    w = max(1.0, float(f[2])); rx, ry, lx, ly, nx = (float(v) for v in (f[4], f[5], f[6], f[7], f[8]))
+    eyes = math.hypot(lx - rx, ly - ry)
+    if eyes < 1: return 0.0
+    turn = abs(nx - (rx + lx) / 2) / eyes                    # 0 facing the camera, ~.5 and more in profile
+    tilt = abs(ly - ry) / eyes
+    wide = min(1.0, eyes / w / .38)                            # eyes close together: head turned away
+    return round(max(0.0, 1 - 1.6 * turn) * max(0.0, 1 - tilt) * wide, 3)
+
+
 def make_detector(width, height):
     """Return detect(frame_bgr) -> [(x, y, w, h, score)]."""
     import cv2
@@ -63,7 +88,7 @@ def make_detector(width, height):
         net = cv2.FaceDetectorYN.create(str(MODEL), '', (width, height), .72, .3, 50)
         def detect(frame):
             _, faces = net.detect(frame)
-            return [] if faces is None else [(float(f[0]), float(f[1]), float(f[2]), float(f[3]), float(f[14])) for f in faces]
+            return [] if faces is None else [(float(f[0]), float(f[1]), float(f[2]), float(f[3]), float(f[14]), face_front(f)) for f in faces]
         return detect
     frontal = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_alt2.xml')
     if frontal.empty(): raise ValueError('Falta el detector de rostros. Vuelve a iniciar INICIAR_WINDOWS.')
@@ -103,9 +128,8 @@ def analyze(source, start, end, progress):
     detect = make_detector(sw, shh)
     frames = subprocess.Popen(['ffmpeg', '-v', 'error', '-threads', '2', '-ss', str(start), '-t', str(duration), '-i', str(source), '-an',
                                '-vf', f'fps={SAMPLE_FPS},scale={sw}:{shh}', '-pix_fmt', 'bgr24', '-f', 'rawvideo', '-'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    tracks = {}; next_id = 0; samples = []; face_frames = speaking_frames = changes = 0
+    tracks = {}; next_id = 0; samples = []; face_frames = speaking_frames = 0
     cuts = scene_cuts(source, start, duration); pending_cuts = list(cuts)
-    active = challenger = None; streak = 0
     size = sw * shh * 3
     try:
         for index in range(math.ceil(duration * SAMPLE_FPS)):
@@ -120,7 +144,7 @@ def analyze(source, start, end, progress):
             faces = [f for f in detect(frame) if f[3] >= MIN_FACE * shh and .55 <= f[2] / max(1, f[3]) <= 1.6]
             speaking = any(a <= t <= b for a, b in speech)
             visible = {}; used = set()
-            for x, y, w, h, score in sorted(faces, key=lambda f: f[2] * f[3], reverse=True):
+            for x, y, w, h, score, *rest in sorted(faces, key=lambda f: f[2] * f[3], reverse=True):
                 center = np.array([x + w / 2, y + h / 2])
                 # Link to the nearest recent face of this person; a person may vanish for up to 3 s.
                 near = [(float(np.linalg.norm(center - tr['center'])), ident) for ident, tr in tracks.items()
@@ -136,21 +160,15 @@ def analyze(source, start, end, progress):
                     diff = np.abs(patch - old['patch']); mouth = float(diff[39:58, 12:52].mean()); upper = float(diff[10:30, 12:52].mean())
                     activity = max(0.0, mouth - upper * .8)
                 activity = .55 * activity + .45 * (old['activity'] if old else 0)
-                visible[ident] = dict(center=center, width=w, time=t, patch=patch, activity=activity, box=(x / ratio, y / ratio, w / ratio, h / ratio))
+                visible[ident] = dict(center=center, width=w, time=t, patch=patch, activity=activity, front=rest[0] if rest else 1.0,
+                                      box=(x / ratio, y / ratio, w / ratio, h / ratio))
             tracks = {i: tr for i, tr in tracks.items() if t - tr['time'] <= 3}; tracks.update(visible)
             if visible:
                 face_frames += 1
-                if active not in visible and not (active in tracks and t - tracks[active]['time'] < .75):
-                    active = max(visible, key=lambda i: visible[i]['width']); challenger = None; streak = 0
-                if speaking and active in visible:
-                    speaking_frames += 1
-                    best = max(visible, key=lambda i: visible[i]['activity'])
-                    if best != active and visible[best]['activity'] > .08 and visible[best]['activity'] > visible[active]['activity'] * 1.3 + .025:
-                        streak = streak + 1 if challenger == best else 1; challenger = best
-                        if streak >= 4: active = best; changes += 1; challenger = None; streak = 0   # ~0.5 s lead at 8/s
-                    else: challenger = None; streak = 0
-            samples.append(dict(t=round(t, 3), active=active if active in visible else None,
-                                faces=[dict(id=i, x=round(v['box'][0], 1), y=round(v['box'][1], 1), w=round(v['box'][2], 1), h=round(v['box'][3], 1)) for i, v in visible.items()]))
+                if speaking: speaking_frames += 1
+            samples.append(dict(t=round(t, 3), active=None, speech=speaking,
+                                faces=[dict(id=i, x=round(v['box'][0], 1), y=round(v['box'][1], 1), w=round(v['box'][2], 1), h=round(v['box'][3], 1),
+                                            act=round(float(v['activity']), 4), front=round(float(v['front']), 3)) for i, v in visible.items()]))
             if index % SAMPLE_FPS == 0: progress(round(100 * t / duration))
     finally:
         frames.stdout.close()
@@ -158,10 +176,12 @@ def analyze(source, start, end, progress):
         try: frames.wait(timeout=5)
         except subprocess.TimeoutExpired: frames.kill(); frames.wait()
     if not face_frames: raise ValueError('No se detectaron rostros en este clip. Usa el encuadre manual; prueba un fragmento donde se vean las caras.')
+    merge_tracks(samples)
+    changes = choose_speakers(samples, cuts, width, height)
     persons = summarize_persons(samples, width)
     result = dict(samples=samples, persons=persons, cuts=cuts, width=width, height=height, face_frames=face_frames, speaking_frames=speaking_frames,
                   speaker_changes=changes, detector='YuNet' if MODEL.exists() else 'Haar',
-                  method='Rostros (YuNet), movimiento de boca y detección de voz. Estimación visual; revisa los cambios de hablante.')
+                  method='Rostros (YuNet), movimiento de boca con voz, mirada a cámara y cercanía. Estimación visual; revisa los cambios de hablante.')
     path = build_path(result)
     result['points'] = [dict(time=round(i / PATH_FPS, 3), x=x, y=path['y']) for i, x in enumerate(path['x'])][::max(1, PATH_FPS // SAMPLE_FPS)]
     return result
@@ -189,6 +209,67 @@ def merge_tracks(samples):
         for f in s['faces']: f['id'] = alias.get(f['id'], f['id'])
         if s.get('active') is not None: s['active'] = alias.get(s['active'], s['active'])
     return samples
+
+
+def choose_speakers(samples, cuts, width, height):
+    """Sets samples[i]['active'] to the person to follow and returns the number of speaker changes.
+
+    Each shot (between scene cuts) is solved as a whole with a Viterbi pass over its persons: every sample rewards the
+    person who shows speech (mouth motion while a voice is heard, more when facing the camera) and, much less, the
+    face that is near the camera, frontal and central; changing person has a cost, lower between two people side by
+    side (a conversation) and higher towards the background. Looking at the whole shot means the clip starts on the
+    speaker from its first frame and a switch lands when that person starts talking, not half a second later."""
+    n = len(samples); changes = 0
+    if not n: return 0
+    cut_index = sorted({min(n, max(0, int(round(c * SAMPLE_FPS)))) for c in cuts or []} - {0, n})
+    for a, b in zip([0] + cut_index, cut_index + [n]):
+        shot = samples[a:b]
+        ids = sorted({f['id'] for s in shot for f in s['faces']})
+        if not ids: continue
+        col = {k: j for j, k in enumerate(ids)}; P = len(ids); m = len(shot)
+        act = np.zeros((m, P)); seen = np.zeros((m, P), bool); prior = np.zeros((m, P)); near = np.zeros((m, P))
+        for i, s in enumerate(shot):
+            if not s['faces']: continue
+            hmax = max(f['h'] for f in s['faces'])
+            for f in s['faces']:
+                j = col[f['id']]; seen[i, j] = True
+                prom = f['h'] / max(1.0, hmax); front = f.get('front', 1.0)
+                cx = f['x'] + f['w'] / 2; cy = f['y'] + f['h'] / 2
+                central = 1 - min(1.0, abs(cx - width / 2) / (width / 2))
+                cut_off = f['x'] < 2 or f['x'] + f['w'] > width - 2 or f['y'] + f['h'] > height - 2 or cy > height * .82
+                near[i, j] = 1.0 if prom >= NEAR else .2
+                act[i, j] = f.get('act', 0.0) if s.get('speech') else 0.0
+                prior[i, j] = (.06 * min(1.0, prom) + .05 * front + .07 * central - (.05 if cut_off else 0)) * near[i, j]
+                front_w = .6 + .4 * front
+                act[i, j] *= front_w * near[i, j] * min(1.0, prom) ** 2
+        # Talking is judged over ~1 s (centred), so one noisy sample does not decide anything.
+        k = np.ones(7) / 7
+        talk = np.stack([np.convolve(act[:, j], k, mode='same') for j in range(P)], axis=1) if m >= 7 else act
+        score = np.where(seen, 4 * talk + prior, -.35)
+        # Switch costs between persons: cheap for a neighbour of similar size, expensive towards the background.
+        pos = {}; size = {}; closeness = {}
+        for j, ident in enumerate(ids):
+            xs = [f['x'] + f['w'] / 2 for s in shot for f in s['faces'] if f['id'] == ident]
+            ws = [f['w'] for s in shot for f in s['faces'] if f['id'] == ident]
+            pos[j] = float(np.median(xs)); size[j] = float(np.median(ws)); closeness[j] = float(near[seen[:, j], j].mean())
+        cost = np.zeros((P, P))
+        for i in range(P):
+            for j in range(P):
+                if i == j: continue
+                beside = abs(pos[i] - pos[j]) < 2.6 * max(size[i], size[j]) and min(size[i], size[j]) / max(size[i], size[j]) > .6
+                cost[i, j] = (1.1 if beside else 1.8) + (2.5 if closeness[j] < .5 else 0)
+        total = score[0].copy(); back = np.zeros((m, P), int)
+        for i in range(1, m):
+            options = total[:, None] - cost              # options[from, to]
+            back[i] = options.argmax(axis=0)
+            total = options.max(axis=0) + score[i]
+        state = int(total.argmax()); chosen = [0] * m
+        for i in range(m - 1, -1, -1):
+            chosen[i] = state; state = int(back[i, state])
+        for i, s in enumerate(shot):
+            s['active'] = ids[chosen[i]] if seen[i, chosen[i]] else None
+            if i and chosen[i] != chosen[i - 1]: changes += 1
+    return changes
 
 
 def summarize_persons(samples, width):
@@ -261,7 +342,7 @@ def build_path(result, person='auto', motion='balanced', framing='crop', zoom='b
         if not shot.any(): continue
         xs = centres[samples_in] if samples_in.any() else centres[[min(len(centres) - 1, int(a * SAMPLE_FPS))]]
         # Subject always fits one window in this shot (with margin): keep the camera still.
-        if xs.max() - xs.min() <= visible * (1 - 2 * .14):
+        if xs.max() - xs.min() <= visible * STILL:
             cam[shot] = (xs.max() + xs.min()) / 2
             continue
         static = False
