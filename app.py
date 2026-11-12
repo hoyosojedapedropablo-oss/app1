@@ -499,7 +499,8 @@ def list_jobs():
 @app.get('/api/jobs/{ident}')
 def status(ident:str):
  if ident not in JOBS: raise HTTPException(404)
- return {**{key:value for key,value in JOBS[ident].items() if key!='transcript'},'clip_settings':clip_settings(JOBS[ident])}
+ bars=letterbox(DATA/ident/'source') if JOBS[ident].get('status')=='ready' or (DATA/ident/'source').exists() else dict(top=0.0,bottom=0.0)
+ return {**{key:value for key,value in JOBS[ident].items() if key!='transcript'},'clip_settings':clip_settings(JOBS[ident]),'letterbox':bars}
 
 @app.get('/api/jobs/{ident}/video')
 def video(ident:str):
@@ -1557,28 +1558,59 @@ def follow_path(spec,compute=False):
  if not result:return None
  return result,tracking.build_path(result,spec['person'],spec['motion'],spec['framing'],spec['zoom'],float(spec['edits'].get('focus_y',50)))
 
-def default_title_y(framing,zoom,panels):
- """Where the title goes: on the camera/game line, on the line between the top black band and the video, or near the top."""
+_letterboxes={}
+def letterbox(source):
+ """Black bars that the video itself carries above and below the picture (many stream recordings have them), as
+ shares of its height: {'top','bottom'}. Measured once per file with FFmpeg's cropdetect on three moments; a bar is
+ only trusted when the three agree (a dark scene is not a bar)."""
+ try:st=Path(source).stat()
+ except OSError:return dict(top=0.0,bottom=0.0)
+ memo=(str(source),st.st_size,int(st.st_mtime))
+ if memo in _letterboxes:return _letterboxes[memo]
+ out=dict(top=0.0,bottom=0.0)
+ try:
+  duration=float(subprocess.run(['ffprobe','-v','error','-show_entries','format=duration','-of','csv=p=0',str(source)],capture_output=True,text=True,timeout=20).stdout.strip() or 0)
+  found=[]
+  for t in (duration*.2,duration*.5,duration*.8) if duration>3 else (0,):
+   run=subprocess.run(['ffmpeg','-hide_banner','-ss',f'{t:.2f}','-i',str(source),'-frames:v','6','-an','-vf','cropdetect=limit=24:round=2:reset=0','-f','null','-'],
+                      capture_output=True,text=True,errors='replace',timeout=30,creationflags=0x08000000 if os.name=='nt' else 0)
+   crops=re.findall(r'crop=(\d+):(\d+):(\d+):(\d+)',run.stderr)
+   size=re.search(r'Video:.*?(\d{2,5})x(\d{2,5})',run.stderr)
+   if not crops or not size:found=[];break
+   w,h,x,y=map(int,crops[-1]);W,H=int(size.group(1)),int(size.group(2))
+   found.append((y/H,(H-y-h)/H,w>=W*.97))
+  if len(found)>=1 and all(f[2] for f in found):
+   top=min(f[0] for f in found);bottom=min(f[1] for f in found)
+   if max(f[0] for f in found)-top<.01 and top<.15:out['top']=round(top,4)
+   if max(f[1] for f in found)-bottom<.01 and bottom<.15:out['bottom']=round(bottom,4)
+ except (OSError,ValueError,subprocess.SubprocessError):pass
+ _letterboxes[memo]=out
+ return out
+
+def default_title_y(framing,zoom,panels,bar=0.0):
+ """Where the title goes: on the camera/game line, on the edge of the picture below the top black band (lower when
+ the video itself carries a black bar, `bar` = its share of the height), or near the top."""
  import layout,tracking
  if framing=='stack' and panels:return round((panels['top']+layout.SEAM/2)/19.2,1)
- if framing=='zoom':return round((1920-tracking.band_height('zoom',zoom))/2/19.2,1)
+ if framing=='zoom':band=tracking.band_height('zoom',zoom);return round(((1920-band)/2+float(bar or 0)*band)/19.2,1)
  if framing=='crop':return FULL_TITLE_Y
  return 12
 
 # «Pantalla completa»: the title a little lower than the top, clear of TikTok's and Instagram's top bar (user's mark).
 FULL_TITLE_Y=21
 
-def title_position(framing,zoom,panels,saved,manual=None):
+def title_position(framing,zoom,panels,saved,manual=None,bar=0.0):
  """The saved position when it was set by hand («title_manual»); otherwise the format's own place (the camera/game
  line, the band line, near the top). Edits saved before that flag existed keep the old rules, except on «Cámara +
  juego», where the line can have moved since (MrStivenTc: his banner was taken for the camera, the title stayed on
  the old line)."""
- if saved is None or manual=='' or manual is False:return default_title_y(framing,zoom,panels)
+ auto=lambda:default_title_y(framing,zoom,panels,bar=bar)
+ if saved is None or manual=='' or manual is False:return auto()
  if manual in ('1',True):return float(saved)
- if framing=='stack':return default_title_y(framing,zoom,panels)
+ if framing=='stack':return auto()
  v=float(saved)
- if v in (12,FULL_TITLE_Y) or (framing!='stack' and 40<=v<=50.3) or any(abs(v-default_title_y('zoom',z,None))<.6 for z in ('soft','balanced','close')):
-  return default_title_y(framing,zoom,panels)
+ if v in (12,FULL_TITLE_Y) or (framing!='stack' and 40<=v<=50.3) or any(abs(v-default_title_y('zoom',z,None,bar=b))<.6 for z in ('soft','balanced','close') for b in {0.0,float(bar or 0)}):
+  return auto()
  return v
 
 _thumb_pool=ThreadPoolExecutor(max_workers=1);_thumb_queued=set()
@@ -1599,7 +1631,7 @@ def clip_thumb(cid,render=True):
  spec=thumb_spec(r)
  if spec is None:return None
  ov=spec['overlay'];panels=layout.panels(ov) if ov else None
- title_y=title_position(spec['framing'],spec['zoom'],panels,spec['edits'].get('title_y'),spec['edits'].get('title_manual'))
+ title_y=title_position(spec['framing'],spec['zoom'],panels,spec['edits'].get('title_y'),spec['edits'].get('title_manual'),bar=letterbox(spec['source'])['top'])
  focus_x=float(spec['edits'].get('focus_x',50))
  if not ov:      # with face tracking: the person speaking at that moment (when the tracking is ready)
   try:
@@ -1639,7 +1671,7 @@ def clip_look(cid):
  spec=thumb_spec(r)
  if spec is None:raise HTTPException(404,'El video de este clip no está disponible.')
  ov=spec['overlay'];panels=layout.panels(ov) if ov else None
- return r,spec,ov,panels,title_position(spec['framing'],spec['zoom'],panels,spec['edits'].get('title_y'),spec['edits'].get('title_manual'))
+ return r,spec,ov,panels,title_position(spec['framing'],spec['zoom'],panels,spec['edits'].get('title_y'),spec['edits'].get('title_manual'),bar=letterbox(spec['source'])['top'])
 
 _previews=threading.Lock()
 @app.get('/api/library/{cid}/preview.mp4')

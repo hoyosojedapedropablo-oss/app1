@@ -192,9 +192,37 @@ if __name__ == '__main__':
 class TitlePositionTests(unittest.TestCase):
     def test_title_moved_by_hand_stays_and_an_automatic_one_follows_the_format(self):
         import app as backend
-        with patch.object(backend, 'default_title_y', lambda framing, zoom, panels: {'stack': 44.3, 'zoom': 18.8}.get(framing, 12)):
+        with patch.object(backend, 'default_title_y', lambda framing, zoom, panels, bar=0.0: {'stack': 44.3, 'zoom': 18.8}.get(framing, 12)):
             self.assertEqual(backend.title_position('stack', 'balanced', None, 20, '1'), 20)        # by hand
             self.assertEqual(backend.title_position('stack', 'balanced', None, 20, ''), 44.3)       # automatic: on the line
             self.assertEqual(backend.title_position('stack', 'balanced', None, 20, None), 44.3)     # old edits on «Cámara + juego»
             self.assertEqual(backend.title_position('zoom', 'balanced', None, 33, None), 33)        # old edits elsewhere: kept
             self.assertEqual(backend.title_position('zoom', 'balanced', None, None, None), 18.8)
+
+
+import app as backend
+
+
+class TitleOnPictureEdgeTests(unittest.TestCase):
+    """«Zoom» format: the automatic title sits on the edge of the picture, also when the video carries its own bar."""
+    def make(self, folder, pad):
+        import subprocess
+        out = Path(folder) / f'v{pad}.mp4'
+        vf = f'scale=1920:{1080 - 2 * pad},pad=1920:1080:0:{pad}:color=black' if pad else 'null'
+        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=1920x1080:rate=8', '-t', '6', '-vf', vf, '-c:v', 'libx264', str(out)], check=True)
+        return out
+    def test_bar_inside_the_video_moves_the_title_down_to_the_picture(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            bars = backend.letterbox(self.make(tmp, 34)); plain = backend.letterbox(self.make(tmp, 0))
+        self.assertAlmostEqual(bars['top'], 34 / 1080, delta=.004); self.assertEqual(plain['top'], 0.0)
+        self.assertEqual(backend.default_title_y('zoom', 'balanced', None, bar=bars['top']), 21.9)        # the user's mark: 22 %
+        self.assertEqual(backend.default_title_y('zoom', 'balanced', None, bar=plain['top']), 20.0)
+    def test_old_automatic_place_follows_and_a_hand_placed_title_stays(self):
+        self.assertEqual(backend.title_position('zoom', 'balanced', None, 20.0, None, bar=.0315), 21.9)
+        self.assertEqual(backend.title_position('zoom', 'balanced', None, 21.9, '', bar=.0315), 21.9)
+        self.assertEqual(backend.title_position('zoom', 'balanced', None, 30, '1', bar=.0315), 30)
+        self.assertEqual(backend.title_position('crop', 'balanced', None, None, None, bar=.0315), backend.FULL_TITLE_Y)
+    def test_missing_file_has_no_bars(self):
+        self.assertEqual(backend.letterbox(Path('no-existe.mp4')), dict(top=0.0, bottom=0.0))
+
