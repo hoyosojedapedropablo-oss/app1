@@ -351,3 +351,19 @@ class FullScreenTitleTests(unittest.TestCase):
         self.assertEqual(backend.default_title_y('crop', 'balanced', None), backend.FULL_TITLE_Y)
         self.assertEqual(backend.title_position('crop', 'balanced', None, 12, None), backend.FULL_TITLE_Y)   # old automatic place moves
         self.assertEqual(backend.title_position('crop', 'balanced', None, 30, '1'), 30)                    # moved by hand: stays
+class FollowEverywhereTests(unittest.TestCase):
+    def test_saved_face_tracking_applies_outside_the_editor(self):
+        on = dict(tracking=True)
+        self.assertTrue(backend.wants_follow('crop', {}, on))                      # never opened: the project's setting
+        self.assertTrue(backend.wants_follow('zoom', {}, on))
+        self.assertFalse(backend.wants_follow('crop', {'auto_follow': False}, on)) # turned off for this clip
+        self.assertTrue(backend.wants_follow('crop', {'auto_follow': True}, dict(tracking=False)))
+        self.assertFalse(backend.wants_follow('stack', {}, on))                    # camera + game follows the game instead
+        self.assertFalse(backend.wants_follow('fit', {}, on))
+
+    def test_cached_tracking_is_reused_without_computing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / 'tracking.json'
+            self.assertIsNone(backend.tracking_result(Path(tmp) / 'none.mp4', 0, 5, cache, compute=False))
+            cache.write_text('{"samples": [], "width": 1920, "height": 1080}', encoding='utf-8')
+            self.assertEqual(backend.tracking_result(Path(tmp) / 'none.mp4', 0, 5, cache)['width'], 1920)

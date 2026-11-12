@@ -10,6 +10,7 @@ Pipeline (one session at a time):
             drop old segments. "Open in editor" turns a moment into a normal job with transcript and one clip.
 Nothing here bypasses DRM, sign-in, age or region checks: only streams yt-dlp can read publicly are accepted.
 """
+from concurrent.futures import ThreadPoolExecutor
 import json, math, os, re, shutil, subprocess, threading, time, uuid
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
@@ -632,6 +633,7 @@ class LiveSession:
             self._prepare_layout(moment)
             moment['status'] = 'draft'
             moment['ready_after_s'] = self._ready_after(moment['end'])
+            FOLLOW_POOL.submit(self._prepare_follow, moment)
         except Exception as error:
             moment['status'] = 'error'; moment['reason'] = f'No se pudo preparar el clip ({type(error).__name__}).'
         self.save(force=True)
@@ -669,6 +671,28 @@ class LiveSession:
         except Exception:
             pass        # the editor computes it when the moment is opened
 
+    def _prepare_follow(self, moment):
+        """«Seguimiento facial» on: who is where and who speaks in this moment, computed now (in the background), so its
+        preview, thumbnail, export and editor follow the person speaking from the start, not the centre of the picture."""
+        settings = self.clip_settings or {}
+        if not settings.get('tracking') or settings.get('framing', 'zoom') not in ('crop', 'zoom'): return
+        try:
+            import tracking
+            prepared = self.clips / f'{moment["id"]}.layout.json'
+            if prepared.exists():      # a screen reaction goes to «Cámara + juego»: that layout follows the game instead
+                ov = json.loads(prepared.read_text(encoding='utf-8')).get('overlay') or {}
+                if ov.get('found') and ov.get('screen') and settings.get('auto_stack', True) is not False: return
+            target = self.clips / f'{moment["id"]}.mp4'
+            base = moment.get('file_start', moment['start'] - PAD_S)
+            start, end = round(moment['start'] - base, 3), round(moment['end'] - base, 3)
+            cache = self.clips / f'{moment["id"]}.tracking-{tracking.key(start, end)}.json'
+            if cache.exists() or not target.exists(): return
+            result = tracking.analyze(target, start, end, lambda v: None)
+            result.update(start=start, end=end, status='ready', progress=100)
+            tmp = cache.with_suffix('.tmp'); tmp.write_text(json.dumps(result), encoding='utf-8'); tmp.replace(cache)
+        except Exception:
+            pass        # no faces, or the file is gone: the fixed framing stays
+
     def refresh_layouts(self, missing=False):
         """Moments prepared by an older camera detector are prepared again with the current one (and, with `missing`,
         the ones never prepared: the newest session's reactions, so they open and export with the camera)."""
@@ -704,6 +728,10 @@ class LiveSession:
                 if words:
                     result.append({'start': words[0]['start'], 'end': words[-1]['end'], 'text': ' ' + ' '.join(w['text'].strip() for w in words), 'words': words})
         return result
+
+
+# One at a time and off the capture thread: face tracking of new moments (CPU, a few seconds per clip).
+FOLLOW_POOL = ThreadPoolExecutor(max_workers=1)
 
 
 def probe_duration(path):
