@@ -1072,6 +1072,12 @@ def open_live_moment(sid:str,mid:str):
    prepared=json.loads(ready.read_text(encoding='utf-8'));overlay=dict(prepared['overlay'],status='ready',manual=False)
    write_overlay(ident,overlay)
    if prepared.get('panels'):layout_cache(ident,start,end,overlay).write_text(json.dumps(dict(prepared,start=start,end=end,overlay=overlay)),encoding='utf-8')
+  # The face tracking the live session already computed for this moment: the editor follows the speaker at once.
+  import tracking
+  ls,le=live_clip_range(moment);track=path.with_name(f'{mid}.tracking-{tracking.key(ls,le)}.json')
+  if track.exists():
+   result=json.loads(track.read_text(encoding='utf-8'));result.update(start=start,end=end)
+   (folder/f'tracking-{tracking.key(start,end)}.json').write_text(json.dumps(result),encoding='utf-8')
  except Exception as e:
   JOBS.pop(ident,None);shutil.rmtree(folder,ignore_errors=True)
   raise HTTPException(500,f'No se pudo abrir el momento en el editor: {e}')
@@ -1436,12 +1442,55 @@ def thumb_spec(r):
    try:overlay=json.loads(prepared.read_text(encoding='utf-8')).get('overlay')
    except (OSError,ValueError):overlay=None
   source=Path(r['file']);start=3.0;end=3.0+float(r['duration'] or 10)
+  try:
+   m=session.moment(r['clip_ref']) if session else None
+   if m:start,end=live_clip_range(m)
+  except Exception:pass
  if not Path(source).exists():return None
  found=bool(overlay and overlay.get('found'))
  framing=edits.get('framing') or ('stack' if found and (settings.get('framing')=='stack' or reaction_stack(overlay,settings)) else ('zoom' if settings.get('framing')=='stack' else settings.get('framing','zoom')))
  if framing=='stack' and not found:framing='zoom'
+ import tracking
+ cache=(DATA/r['project_id']/f'tracking-{tracking.key(start,end)}.json') if r['project_id'] and r['project_id'] in JOBS else Path(source).with_name(f"{Path(source).stem}.tracking-{tracking.key(start,end)}.json")
  return dict(source=source,t=start+max(.5,(end-start)*.35),framing=framing,zoom=edits.get('zoom',settings.get('zoom','balanced')),overlay=overlay if framing=='stack' else None,
-             title=edits.get('title') or r['user_title'] or r['title'] or '',edits=edits,corners=edits.get('title_corners',settings.get('title_corners','rounded')))
+             title=edits.get('title') or r['user_title'] or r['title'] or '',edits=edits,corners=edits.get('title_corners',settings.get('title_corners','rounded')),
+             start=start,end=end,follow=wants_follow(framing,edits,settings),person=str(edits.get('tracking_person') or 'auto'),
+             motion=settings.get('tracking_motion','balanced'),tracking_cache=cache)
+
+def wants_follow(framing,edits,settings):
+ '''Face tracking is on for this clip: its own choice in the editor, else the project's «Seguimiento facial».'''
+ return framing in ('crop','zoom') and bool(edits.get('auto_follow',settings.get('tracking',False)))
+
+def live_clip_range(moment):
+ '''The clip's range inside a live moment's own MP4 (the same numbers the editor uses when it is opened).'''
+ base=moment.get('file_start',moment['start']-live.PAD_S)
+ return round(moment['start']-base,3),round(moment['end']-base,3)
+
+_track_lock=threading.Lock()
+def tracking_result(source,start,end,cache,compute=True):
+ '''Who is where and who is speaking in source[start:end] (faces, mouth movement and voice), computed once and kept in
+ `cache` (the file the editor and the export read). None when it is missing and `compute` is off, or there are no faces.'''
+ import tracking
+ def read():
+  try:return json.loads(Path(cache).read_text(encoding='utf-8'))
+  except (OSError,ValueError):return None
+ if Path(cache).exists():return read()
+ if not compute:return None
+ with _track_lock:
+  if Path(cache).exists():return read()
+  try:result=tracking.analyze(source,start,end,lambda v:None)
+  except ValueError:return None          # no faces in the clip: the fixed framing stays
+  result.update(start=start,end=end,status='ready',progress=100)
+  tmp=Path(cache).with_suffix('.tmp');tmp.write_text(json.dumps(result),encoding='utf-8');tmp.replace(cache)
+  return result
+
+def follow_path(spec,compute=False):
+ '''(tracking result, camera path following whoever is speaking: the same one the export uses), or None.'''
+ import tracking
+ if not spec.get('follow'):return None
+ result=tracking_result(spec['source'],spec['start'],spec['end'],spec['tracking_cache'],compute)
+ if not result:return None
+ return result,tracking.build_path(result,spec['person'],spec['motion'],spec['framing'],spec['zoom'],float(spec['edits'].get('focus_y',50)))
 
 def default_title_y(framing,zoom,panels):
  """Where the title goes: on the camera/game line, on the line between the top black band and the video, or near the top."""
@@ -1486,13 +1535,19 @@ def clip_thumb(cid,render=True):
  if spec is None:return None
  ov=spec['overlay'];panels=layout.panels(ov) if ov else None
  title_y=title_position(spec['framing'],spec['zoom'],panels,spec['edits'].get('title_y'),spec['edits'].get('title_manual'))
- sig=hashlib.sha256(json.dumps([3,spec['title'],spec['framing'],spec['zoom'],title_y,spec['corners'],ov and [ov[k] for k in 'xywh'],round(spec['t'],1)]).encode()).hexdigest()[:10]
+ focus_x=float(spec['edits'].get('focus_x',50))
+ if not ov:      # with face tracking: the person speaking at that moment (when the tracking is ready)
+  try:
+   followed=follow_path(spec)
+   if followed:path=followed[1];focus_x=round(float(np.interp(spec['t']-spec['start'],np.arange(len(path['x']))/path['fps'],path['x'])),1)
+  except Exception:pass
+ sig=hashlib.sha256(json.dumps([3,spec['title'],spec['framing'],spec['zoom'],title_y,spec['corners'],ov and [ov[k] for k in 'xywh'],round(spec['t'],1),focus_x]).encode()).hexdigest()[:10]
  target=DATA/'thumbs'/f"{cid.replace(':','_')}-{sig}.jpg"
  if target.exists() or not render:return target if target.exists() else None
  target.parent.mkdir(exist_ok=True)
  with _thumb_gate, tempfile.TemporaryDirectory() as tmp:
   if ov:geometry=layout.filter_graph(dict(overlay=ov,panels=panels,motion=dict(xs=[ov['width']/2])),Path(tmp)/'t.cmd',.04,25,follow=False)
-  else:geometry=tracking.static_filter(spec['framing'],spec['zoom'],50,50)
+  else:geometry=tracking.static_filter(spec['framing'],spec['zoom'],focus_x,float(spec['edits'].get('focus_y',50)))
   args=['ffmpeg','-v','error','-y','-ss',f"{spec['t']:.2f}",'-i',str(spec['source'])]
   graph=f'[0:v]{geometry},setsar=1[b]';last='b'
   try:
@@ -1533,14 +1588,20 @@ def library_preview(cid:str):
   job=JOBS[r['project_id']];ref=job['clips'][0]['id'] if job.get('live') and job.get('clips') else r['clip_ref']
   clip=next((c for c in job.get('clips',[]) if c['id']==ref),None)
   job_start=float(edits.get('start',clip['start'] if clip else 0));job_end=float(edits.get('end',clip['end'] if clip else job_start+30))
- else:job_start,job_end=3.0,3.0+float(r['duration'] or 20)
- sig=hashlib.sha256(json.dumps([2,spec['title'],spec['framing'],spec['zoom'],title_y,spec['corners'],ov and [ov[k] for k in 'xywh'],job_start,job_end]).encode()).hexdigest()[:10]
+ else:job_start,job_end=spec['start'],spec['end']
+ followed=None      # face tracking on: the preview follows whoever is speaking, like the export (computed the first time)
+ if not ov and spec.get('follow') and abs(job_start-spec['start'])<.01 and abs(job_end-spec['end'])<.01:
+  try:followed=follow_path(spec,compute=True)
+  except Exception as e:logging.getLogger('uvicorn.error').warning('Preview tracking failed (%s): %s',cid,e)
+ follow_sig=followed and [followed[1]['person'],followed[1]['motion'],round(float(np.mean(followed[1]['x'])),1)]
+ sig=hashlib.sha256(json.dumps([2,spec['title'],spec['framing'],spec['zoom'],title_y,spec['corners'],ov and [ov[k] for k in 'xywh'],job_start,job_end,follow_sig]).encode()).hexdigest()[:10]
  target=DATA/'previews'/f"{cid.replace(':','_')}-{sig}.mp4";target.parent.mkdir(exist_ok=True)
  if not target.exists():
   with _previews, tempfile.TemporaryDirectory() as tmp:
    if not target.exists():
     if ov:geometry=layout.filter_graph(dict(overlay=ov,panels=panels,motion=dict(xs=[ov['width']/2])),Path(tmp)/'p.cmd',job_end-job_start,24,follow=False)
-    else:geometry=tracking.static_filter(spec['framing'],spec['zoom'],50,50)
+    elif followed:geometry=tracking.commands(followed[1],Path(tmp)/'p.cmd',job_end-job_start,24,followed[0]['width'],followed[0]['height'])
+    else:geometry=tracking.static_filter(spec['framing'],spec['zoom'],float(edits.get('focus_x',50)),float(edits.get('focus_y',50)))
     args=['ffmpeg','-v','error','-y','-ss',f'{job_start:.2f}','-t',f'{job_end-job_start:.2f}','-i',str(spec['source'])]
     graph=f'[0:v]{geometry},setsar=1[b]';last='b'
     try:
@@ -1583,7 +1644,11 @@ def library_export(cid:str,item:LibraryExport):
            caption_y=85 if spec['framing']=='stack' else 81,tracking_motion=settings.get('tracking_motion','balanced'))
  values={**base,**{k:v for k,v in edits.items() if k in Export.model_fields},'title_y':title_y,'resolution':item.resolution,'preview':False}
  if values.get('framing')=='stack' and not ov:values['framing']='zoom'
- values['auto_follow']=bool(values.get('auto_follow')) and values['framing']!='stack' and (DATA/job['id']/f"tracking-{__import__('tracking').key(values['start'],values['end'])}.json").exists()
+ import tracking      # face tracking on unless turned off for the clip; computed now when the editor never did it
+ cache=DATA/job['id']/f"tracking-{tracking.key(values['start'],values['end'])}.json"
+ values['auto_follow']=wants_follow(values['framing'],edits,settings)
+ if values['auto_follow'] and not cache.exists():
+  values['auto_follow']=tracking_result(DATA/job['id']/'source',values['start'],values['end'],cache) is not None   # no faces: fixed framing
  try:opts=Export(**values)
  except Exception as e:raise HTTPException(400,f'No se pudo preparar la exportación: {e}')
  return export(job['id'],opts)
