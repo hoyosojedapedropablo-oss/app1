@@ -1444,6 +1444,46 @@ function discoverCard(v) {
       h('b', { class: 'disc-title', text: v.title, title: v.title }),
       h('button', { class: 'btn primary', type: 'button', text: 'Clipear este video', onclick: () => clipDiscovered(v) })));
 }
+// The latest finished streams of the Kick streamers you follow: one click imports the VOD (up to 8 h).
+const vodAgo = (iso) => { const t = Date.parse((iso || '').replace(' ', 'T') + (/(Z|[+-]\d\d:?\d\d)$/.test(iso || '') ? '' : 'Z')); if (!t) return ''; const d = (Date.now() - t) / 864e5; return d < 1 ? 'hoy' : d < 2 ? 'ayer' : `hace ${Math.round(d)} días`; };
+const vodHours = (s) => s >= 3600 ? `${Math.floor(s / 3600)} h ${String(Math.round(s % 3600 / 60)).padStart(2, '0')} min` : `${Math.round(s / 60)} min`;
+function buildKickVods() {
+  const box = h('section', { id: 'kickVodBox', class: 'discover-box kick-vods', hidden: true },
+    h('div', { class: 'disc-head' },
+      h('div', {}, h('h2', {}, platformLogo('kick'), 'VOD de tus streamers'), h('span', { class: 'muted', text: 'Los últimos directos que terminaron tus streamers de Kick. Clipéalos como un video largo: la IA encuentra sus mejores momentos.' }))),
+    h('div', { id: 'kickVodRow', class: 'disc-row' }, [0, 1, 2, 3].map(() => h('div', { class: 'disc-card skeleton' }, h('span', { class: 'disc-thumb' }), h('i'), h('i')))));
+  setTimeout(paintKickVods, 0);
+  return box;
+}
+async function paintKickVods() {
+  const box = $('kickVodBox'), row = $('kickVodRow'); if (!box) return;
+  const data = await api('/api/kick/vods').catch(() => null);
+  if (!data || !data.followed) { box.hidden = true; return; }       // nobody from Kick followed: the row stays out of the way
+  box.hidden = false;
+  if (!data.vods.length) { put(row, h('div', { class: 'empty', text: 'Tus streamers de Kick no tienen VOD públicos ahora mismo.' })); return; }
+  put(row, data.vods.map((v) => h('article', { class: 'disc-card kick-vod' },
+    h('a', { class: 'disc-thumb', href: v.url, target: '_blank', rel: 'noopener', title: 'Ver en Kick' },
+      v.thumb ? h('img', { src: v.thumb, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer', onerror: (e) => e.target.remove() }) : null,
+      h('span', { class: 'chip glass disc-views', text: vodAgo(v.created) }),
+      h('span', { class: 'chip glass disc-dur', text: vodHours(v.duration) })),
+    h('div', { class: 'disc-body' },
+      h('span', { class: 'disc-who' }, avatarImg({ name: v.channel, avatar: v.avatar }, 28), h('span', { text: v.channel })),
+      h('b', { class: 'disc-title', text: v.title, title: v.title }),
+      v.duration > 8 * 3600 ? h('span', { class: 'muted kick-long', text: `Dura ${vodHours(v.duration)}: se importan 8 h desde el momento que elijas.` }) : null,
+      h('button', { class: 'btn primary', type: 'button', text: 'Clipear este VOD', onclick: () => clipKickVod(v) })))));
+}
+function clipKickVod(v) {
+  const panel = $('youtubePanel'); if (panel) panel.open = true;
+  $('youtubeUrl').value = v.url; $('youtubeUrl').dispatchEvent(new Event('input', { bubbles: true }));
+  $('kickStart').value = '0:00:00';
+  panel?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (v.duration > 8 * 3600) {           // longer than 8 h: the user picks where to start, then imports
+    $('kickStart').focus(); $('kickStart').select();
+    toast('Elige desde dónde', `Este VOD dura ${vodHours(v.duration)}. Escribe el momento de inicio en «Desde» y pulsa «Importar VOD de Kick».`);
+    return;
+  }
+  $('downloadYoutube').click();
+}
 function clipDiscovered(v) {
   const panel = $('youtubePanel'); if (panel) panel.open = true;
   $('youtubeUrl').value = v.url; $('youtubeUrl').dispatchEvent(new Event('input', { bubbles: true }));
@@ -1474,9 +1514,10 @@ function buildAnalysisLayout() {
     best.forEach((c, i) => { const ph = intro.querySelector('.lv-phone.p' + i); if (ph) ph.replaceChildren(h('img', { src: c.thumb_url, alt: '', onerror: (e) => e.target.remove() })); });
   }).catch(() => {});
   // Steps
-  const steps = h('ol', { class: 'lv-steps', 'aria-label': 'Pasos' }, [['Tu video', 'Archivo o YouTube'], ['Contexto', 'Opcional, mejora los títulos'], ['Motor de IA', 'Local, sin pagar'], ['Momentos', 'Revisa y edita']].map(([t, s], i) =>
+  const steps = h('ol', { class: 'lv-steps', 'aria-label': 'Pasos' }, [['Tu video', 'Archivo, YouTube o Kick'], ['Contexto', 'Opcional, mejora los títulos'], ['Motor de IA', 'Local, sin pagar'], ['Momentos', 'Revisa y edita']].map(([t, s], i) =>
     h('li', { 'data-step': String(i + 1) }, h('span', { class: 'n', text: String(i + 1) }), h('span', {}, h('b', { text: t }), h('small', { text: s })))));
   view.querySelector('.setup-grid').before(steps);
+  steps.before(buildKickVods());
   steps.before(buildDiscover());
   const panels = view.querySelectorAll('.setup-grid > .panel');
   [['1', 'Tu video y su contexto'], ['2', 'Qué quieres encontrar']].forEach(([n, t], i) => { const h2 = panels[i]?.querySelector('h2'); if (h2) h2.replaceChildren(h('span', { class: 'lv-num', text: n }), t); });

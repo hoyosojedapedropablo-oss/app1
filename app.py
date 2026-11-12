@@ -64,6 +64,7 @@ class YouTubeInput(BaseModel):
  url:str=Field(min_length=1,max_length=2000)
  quality:Literal['fast','original']='fast'
  browser:Literal['none','managed','firefox','chrome','edge','brave']='none'
+ start:float=Field(default=0,ge=0,le=86400)     # Kick VODs: where the imported part starts (s)
 
 def require_local_youtube(request):
  from urllib.parse import urlsplit
@@ -129,8 +130,67 @@ def import_youtube(ident,url,quality="fast",browser="none"):
   JOBS.pop(ident,None)
   shutil.rmtree(folder,ignore_errors=True)
 
+# --- Kick VODs: a finished stream kept on the channel, imported like a long video (up to 8 h, from a chosen start) ---
+def import_kick(ident,url,start=0.0):
+ import shutil,kick_vod
+ folder=DATA/ident;folder.mkdir(exist_ok=True)
+ (folder/'import.json').write_text(json.dumps(dict(url=url,kind='kick',start=start)),encoding='utf-8')
+ def progress(value,message,**metadata):IMPORTS[ident].update(status='downloading',progress=value,message=message,**metadata)
+ try:
+  progress(0,'Consultando el VOD de Kick…')
+  path,name,meta=kick_vod.download(url,folder,progress,start=start)
+  path.rename(folder/'source')
+  job=register_video(ident,folder/'source',name,max_duration=kick_vod.MAX_SECONDS+120)
+  card={key:IMPORTS[ident][key] for key in ['title','channel','thumbnail','duration','quality','video_width','video_height'] if key in IMPORTS[ident]}
+  job['youtube']=dict(card,platform='kick');job['kick']=dict(card,vod_start=start,vod_duration=meta.get('duration'))
+  job['kick_url']=url;job['kick_start']=start;save_job(job)
+  (folder/'import.json').unlink(missing_ok=True)
+  IMPORTS[ident].update(status='ready',progress=100,message='VOD de Kick listo para analizar.',job=job)
+ except Exception as e:
+  message=str(e) if isinstance(e,ValueError) else 'No se pudo descargar el VOD de Kick. Revisa tu conexión y vuelve a intentarlo.'
+  logging.getLogger('uvicorn.error').info('Kick VOD %s: %s',ident[:8],type(e).__name__)
+  IMPORTS[ident].update(status='error',error_code='KICK',message=f'[KICK] {message}')
+  JOBS.pop(ident,None)
+  shutil.rmtree(folder,ignore_errors=True)
+
+def start_kick(url,start):
+ import kick_vod
+ try:url=kick_vod.canonical_url(url)
+ except ValueError as e:raise HTTPException(400,str(e))
+ if any(v['status'] in ('queued','downloading') for v in IMPORTS.values()):raise HTTPException(409,'Ya hay una descarga en curso. Espera a que termine.')
+ for job in JOBS.values():
+  if job.get('kick_url')==url and abs(float(job.get('kick_start',0))-start)<1 and (DATA/job['id']/'source').exists():
+   ident=uuid.uuid4().hex
+   IMPORTS[ident]=dict(id=ident,status='ready',progress=100,access_mode='cached',platform='kick',message='VOD recuperado: ya estaba descargado.',job=job,**job.get('youtube',{}))
+   return IMPORTS[ident]
+ ident=uuid.uuid4().hex
+ IMPORTS[ident]=dict(id=ident,status='queued',progress=0,platform='kick',message='Consultando título y duración del VOD…',title='Preparando VOD de Kick…')
+ import_pool.submit(import_kick,ident,url,start)
+ return IMPORTS[ident]
+
+_kick_vods={}
+@app.get('/api/kick/vods')
+def kick_vods():
+ """The latest finished streams (VODs) of the Kick streamers you follow, newest first; public data, kept 15 min."""
+ import kick_vod
+ from concurrent.futures import ThreadPoolExecutor as Pool
+ people=[s for s in STREAMERS.listing() if s.get('platform')=='kick' and s.get('slug')]
+ people.sort(key=lambda s:-(s.get('clips') or 0));people=people[:10]
+ key=tuple(s['slug'] for s in people)
+ hit=_kick_vods.get(key)
+ if hit and time.time()-hit[0]<900:return hit[1]
+ def one(person):
+  try:return [dict(v,channel=person.get('name') or person['slug'],avatar=person.get('avatar','')) for v in kick_vod.channel_vods(person['slug'],3)]
+  except Exception:return []
+ with Pool(max_workers=4) as pool:rows=[v for chunk in pool.map(one,people) for v in chunk]
+ rows.sort(key=lambda v:v.get('created') or '',reverse=True)
+ out=dict(vods=rows[:18],followed=len(people));_kick_vods[key]=(time.time(),out)
+ return out
+
 @app.post('/api/youtube')
 def start_youtube(options:YouTubeInput,request:Request):
+ import kick_vod
+ if kick_vod.is_kick_vod(options.url):return start_kick(options.url,options.start)     # same field, same progress card
  if options.browser=='managed':
   require_local_youtube(request)
   from youtube_session import RETIRED
@@ -162,6 +222,11 @@ def resume_imports():
   if not re.fullmatch(r'[a-f0-9]{32}',ident) or (marker.parent/'source').exists() or ident in IMPORTS:continue
   try:
    saved=json.loads(marker.read_text(encoding='utf-8'))
+   if saved.get('kind')=='kick':
+    import kick_vod
+    url=kick_vod.canonical_url(saved['url']);start=float(saved.get('start') or 0)
+    IMPORTS[ident]=dict(id=ident,status='queued',progress=0,platform='kick',resumed=True,message='Reanudando la descarga del VOD de Kick…',title='Reanudando VOD de Kick…')
+    import_pool.submit(import_kick,ident,url,start);continue
    url=canonical_url(saved['url']);quality=saved.get('quality','fast')
    if quality not in ('fast','original'):raise ValueError()
   except (OSError,ValueError,KeyError,TypeError,AttributeError):continue
