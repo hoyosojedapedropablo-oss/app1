@@ -1082,3 +1082,16 @@ body.has-back main>.view:not(#editorView){padding-top:62px}
 .kick-vods[hidden]{display:none}
 .kick-vods .disc-head h2{display:flex;align-items:center;gap:10px}
 .kick-vod .kick-long{font-size:12px;color:#d7f7a0}
+
+/* --- Incidents: a failure is never silent ------------------------------------------------------------------------- */
+.incident-card{position:fixed;right:20px;bottom:20px;z-index:60;width:min(380px,calc(100vw - 32px));padding:14px 16px;border-radius:16px;
+  background:linear-gradient(180deg,rgba(60,22,22,.96),rgba(32,14,14,.96));border:1px solid rgba(255,110,90,.45);box-shadow:0 18px 50px rgba(0,0,0,.5);
+  color:#ffe9e4;animation:incidentIn .35s cubic-bezier(.2,.8,.2,1)}
+.incident-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.incident-x{background:none;border:0;color:inherit;font-size:22px;line-height:1;cursor:pointer;opacity:.8}
+.incident-x:hover{opacity:1}
+.incident-card ul{margin:0 0 8px;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}
+.incident-card li{display:flex;flex-wrap:wrap;gap:2px 0;font-size:13px}
+.incident-card small{flex-basis:100%;opacity:.7;font-family:ui-monospace,monospace;font-size:11px;word-break:break-word}
+.incident-card p{margin:0;font-size:12px}
+@keyframes incidentIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}

@@ -370,7 +370,9 @@ def _detect_overlay(source, duration, samples, progress, start, prefer, maps=Non
     fx, fy, fw, fh = (float(np.median([f[k] for f in group])) for k in range(4))
     if fh > .42 * sh:
         return dict(none, kind='fullcam', presence=round(presence, 2))   # the camera is the whole picture: normal framing
-    if presence < .3: return boxed(dict(none, presence=round(presence, 2)))
+    # The user chose «Cámara + juego» (prefer): a streamer often looks down or away; 20 % of the samples is enough then
+    # (MrStivenTc, Nov 2026: 29-33 % on the same clip, so the camera was found or lost by chance at 30 %).
+    if presence < (.2 if prefer else .3): return boxed(dict(none, presence=round(presence, 2)))
     found = around(fx, fy, fw, fh)
     if found == 'none': return boxed(dict(none, presence=round(presence, 2)))
     if found == 'single': return boxed(dict(none, kind='single', presence=round(presence, 2)))   # e.g. the faces were a cartoon's

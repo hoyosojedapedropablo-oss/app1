@@ -17,6 +17,7 @@ capabilities.enable_cuda_libraries()
 
 ROOT=Path(__file__).parent
 DATA=ROOT/'data'; DATA.mkdir(exist_ok=True)
+import incidents as _incidents; _incidents.FILE=DATA/'incidents.jsonl'
 os.environ.setdefault('HF_HOME',str(DATA/'models'))
 app=FastAPI(title='Clip Studio')
 app.mount('/static',StaticFiles(directory=ROOT/'static'),name='static')
@@ -892,7 +893,7 @@ def detect_job_overlay(ident):
   state.update(status='running',progress=0)
   value=layout.detect_overlay(DATA/ident/'source',JOBS[ident].get('duration'),progress=lambda v:state.update(progress=v),prefer=clip_settings(JOBS[ident]).get('framing')=='stack')
   value.update(status='ready',manual=False);write_overlay(ident,value);state.clear();state.update(value)
- except Exception as e:state.update(status='error',message=str(e))
+ except Exception as e:_incidents.record('layout',e,job=ident);state.update(status='error',message=str(e))
 
 @app.post('/api/jobs/{ident}/overlay')
 def start_overlay(ident:str):
@@ -974,7 +975,7 @@ def prepare_layouts(ident):
  for n,clip in enumerate(clips,1):
   try:
    if not clip_layout(ident,clip['start'],clip['end']).get('panels'):job['layout_ready']=len(clips);return   # no camera: nothing to prepare
-  except Exception as e:logging.getLogger('uvicorn.error').warning('Layout preparation failed: %s',e)
+  except Exception as e:_incidents.record('layout',e,job=ident,clip=clip.get('id'))
   job['layout_ready']=n
 
 class LayoutInput(TrackingInput):
@@ -1328,6 +1329,7 @@ def streamers_loop():
   time.sleep(60)
 
 def refresh_live_layouts():
+ import incidents
  """After a camera-detector update: the recent live sessions' moments are checked again with the new detector,
  one at a time in the background, so their clips open (and their thumbnails show) with the camera when there is one."""
  time.sleep(20)   # let the app finish starting first
@@ -1335,14 +1337,22 @@ def refresh_live_layouts():
  for session in recent:
   settings=session.clip_settings or {}
   if settings.get('framing')!='stack' and settings.get('auto_stack',True) is False:continue
-  try:session.refresh_layouts(missing=session is newest)
-  except Exception as e:logging.getLogger('uvicorn.error').warning('Layout refresh failed: %s',e)
+  # «Cámara + juego» chosen by the user: every moment must have its layout, in every recent session (E-01)
+  try:
+   if session.refresh_layouts(missing=session is newest or settings.get('framing')=='stack'):session.save(force=True)
+  except Exception as e:incidents.record('layout',e,session=session.id)
 
 @app.on_event('startup')
 def start_streamer_checks():
  # Runs when the app really starts (uvicorn), not when tests import the module.
  if os.environ.get('CLIPSTUDIO_NO_STREAMER_CHECKS')!='1':
   threading.Thread(target=streamers_loop,daemon=True).start();threading.Thread(target=refresh_live_layouts,daemon=True).start()
+
+@app.get('/api/incidents')
+def incidents_list(hours:float=24):
+ """Failures of the steps that decide how a clip looks, grouped (the app shows a warning while they keep happening)."""
+ import incidents
+ return dict(groups=incidents.recent(max(1,min(168,hours))))
 
 @app.get('/api/streamers')
 def streamers_list():
@@ -1507,6 +1517,8 @@ def thumb_spec(r):
   if prepared.exists():
    try:overlay=json.loads(prepared.read_text(encoding='utf-8')).get('overlay')
    except (OSError,ValueError):overlay=None
+  elif session and settings.get('framing')=='stack':
+   queue_live_layout(session,r['clip_ref'])      # «Cámara + juego» chosen but never prepared: prepared now, said out loud
   source=Path(r['file']);start=3.0;end=3.0+float(r['duration'] or 10)
   try:
    m=session.moment(r['clip_ref']) if session else None
@@ -1522,6 +1534,20 @@ def thumb_spec(r):
              title=edits.get('title') or r['user_title'] or r['title'] or '',edits=edits,corners=edits.get('title_corners',settings.get('title_corners','rounded')),
              start=start,end=end,follow=wants_follow(framing,edits,settings),person=str(edits.get('tracking_person') or 'auto'),
              motion=settings.get('tracking_motion','balanced'),tracking_cache=cache)
+
+_layout_queued=set()
+def queue_live_layout(session,mid):
+ """A live moment shown without the «Cámara + juego» the user chose (its preparation is missing or failed): prepare it
+ in the background, once, and record it, so a wrong format is never silent (E-01)."""
+ key=(session.id,mid)
+ if key in _layout_queued:return
+ _layout_queued.add(key)
+ _incidents.record('format','Clip en vivo sin «Cámara + juego» preparado: se prepara ahora.',session=session.id,moment=mid)
+ def run():
+  try:
+   m=session.moment(mid);session._prepare_layout(m);session.save(force=True)
+  except Exception as e:_incidents.record('layout',e,session=session.id,moment=mid)
+ layout_pool.submit(run)
 
 def wants_follow(framing,edits,settings):
  '''Face tracking is on for this clip: its own choice in the editor, else the project's «Seguimiento facial».'''
@@ -1637,7 +1663,8 @@ def clip_thumb(cid,render=True):
   try:
    followed=follow_path(spec)
    if followed:path=followed[1];focus_x=round(float(np.interp(spec['t']-spec['start'],np.arange(len(path['x']))/path['fps'],path['x'])),1)
-  except Exception:pass
+  except Exception as e:
+   if not (isinstance(e,ValueError) and 'rostros' in str(e)):_incidents.record('thumb',e,clip=cid)
  sig=hashlib.sha256(json.dumps([3,spec['title'],spec['framing'],spec['zoom'],title_y,spec['corners'],ov and [ov[k] for k in 'xywh'],round(spec['t'],1),focus_x]).encode()).hexdigest()[:10]
  target=DATA/'thumbs'/f"{cid.replace(':','_')}-{sig}.jpg"
  if target.exists() or not render:return target if target.exists() else None
@@ -1763,7 +1790,7 @@ def library_previews_warm(item:WarmInput):
   _preview_queued.add(cid)
   def run(cid=cid):
    try:library_preview(cid)
-   except Exception:pass
+   except Exception as e:_incidents.record('preview',e,clip=cid)
    finally:_preview_queued.discard(cid)
   _preview_pool.submit(run)
  return dict(queued=len(_preview_queued))
