@@ -50,8 +50,13 @@ def complete(payload,transport=None,cancel=None):
     count=len(payload.get('frases',[]))
     if count:
         for name in ['first','last']:schema['$defs']['Moment']['properties'][name].update(minimum=0,maximum=count-1)
+        key=schema['$defs']['Moment']['properties'].get('key')
+        if key is not None:
+            schema['$defs']['Moment']['properties']['key']={'type':'integer','minimum':0,'maximum':count-1}
+            required=schema['$defs']['Moment'].setdefault('required',[])
+            if 'key' not in required:required.append('key')
         for name in ['first','last']:schema['$defs']['Topic']['properties'][name].update(minimum=0,maximum=count-1)
-    body={'model':MODEL,'messages':[{'role':'system','content':SYSTEM+' En este modo first y last son IDs inclusivos de frases. Respeta el rango. Devuelve {"moments": [...]} con hasta tres propuestas; cada una incluye first,last,category,hook,payoff,novelty,emotion,discussion,coherent,reason,evidence,titles. Devuelve también topics: {first,last,label} con los temas de TODAS las frases; no separes pregunta y respuesta del mismo asunto. Un título por momento; reason y evidence deben ser breves. No copies la transcripción como título.'},{'role':'user','content':json.dumps(payload,ensure_ascii=False)}],'format':schema,'stream':True,'keep_alive':'10m','options':{'num_ctx':8192,'num_predict':2200 if payload.get('task')!='coverage_titles' else 1200,'temperature':.2}}
+    body={'model':MODEL,'messages':[{'role':'system','content':SYSTEM+' En este modo first y last son IDs inclusivos de frases. Respeta el rango. Devuelve {"moments": [...]} con hasta tres propuestas; cada una incluye first,last,category,hook,payoff,novelty,emotion,discussion,coherent,reason,evidence,key,titles. Devuelve también topics: {first,last,label} con los temas de TODAS las frases; no separes pregunta y respuesta del mismo asunto. Un título por momento; reason y evidence deben ser breves. No copies la transcripción como título.'},{'role':'user','content':json.dumps(payload,ensure_ascii=False)}],'format':schema,'stream':True,'keep_alive':'10m','options':{'num_ctx':8192,'num_predict':2200 if payload.get('task')!='coverage_titles' else 1200,'temperature':.2}}
     if payload.get('task')=='coverage_titles':body['messages'][0]['content']=SYSTEM+' En esta tarea genera títulos para todos los clips, sin seleccionar ni puntuar. Devuelve clips/id/titles.'
     try:
         parts=[];data={}

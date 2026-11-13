@@ -52,6 +52,33 @@ class RepairTests(unittest.TestCase):
         self.assertIsNone(intelligence.clean_title('¿Dónde está el límite al trabajar con tu pareja?', text))
         self.assertNotIn('pareja', intelligence.TITLE_GUIDE)
 
+    def test_E23_a_described_quote_is_replaced_by_its_key_phrase(self):
+        phrases, transcript = story()
+        data = proposal(18, 24, 'Se menciona que le iban a cobrar una deuda')               # a description, not said
+        self.assertEqual(intelligence.accept_proposals(data, phrases, transcript, 20, 60, repair=True), [])
+        data['moments'][0]['key'] = 22
+        clip = intelligence.accept_proposals(data, phrases, transcript, 20, 60, repair=True)[0]
+        self.assertIn('cobrar la deuda', clip['evidence'])
+        self.assertTrue(20 <= clip['end'] - clip['start'] <= 60)
+
+    def test_E23_a_key_far_from_the_moment_does_not_rescue_it(self):
+        phrases, transcript = story()
+        data = proposal(2, 8, 'Se menciona que le iban a cobrar una deuda'); data['moments'][0]['key'] = 22
+        self.assertEqual(intelligence.accept_proposals(data, phrases, transcript, 20, 60, repair=True), [])
+
+    def test_E23_selector_asks_for_a_copied_quote_and_its_phrase_id(self):
+        self.assertIn('COPIA EXACTA', intelligence.SYSTEM)
+        self.assertIn('key', intelligence.Moment.model_fields)
+        self.assertIn('una broma no es una crítica', intelligence.TITLE_GUIDE)
+
+    def test_E23_a_clip_without_valid_titles_does_not_fail_the_analysis(self):
+        from coverage import complete_coverage
+        def completion(payload, **kwargs):
+            return {'clips': [dict(id=c['id'], titles=['¿Dónde está el límite cuando trabajas con tu pareja?']) for c in payload['clips']]}
+        clips = complete_coverage([], [], 120, 20, 60, completion)
+        self.assertTrue(clips)
+        self.assertTrue(all(c['title_fallback'] and 'ponle título' in c['title'] for c in clips))
+
     def test_quote_too_long_for_the_range_is_still_dropped(self):
         phrases = [{'start': 0., 'end': 70., 'text': 'una sola frase enorme sin cortes que dura setenta segundos'}]
         self.assertIsNone(intelligence.fit_around(phrases, 0, 0, (0, 0), 20, 60))

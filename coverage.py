@@ -98,7 +98,10 @@ def complete_coverage(selected,transcript,duration,minimum,maximum,completion,sp
    if not pending:break
    payload['clips']=[dict(id=c['id'],text=c['text']) for c in pending.values()]
    payload['correccion']='Faltan títulos válidos para estos IDs. No copies el audio; respeta longitud.'
-  if pending:raise ValueError('La IA no generó títulos válidos para todos los clips. La transcripción se conserva para reintentar.')
+  # E-23: a clip whose titles were all rejected gets a plain title to edit, instead of failing the whole analysis.
+  for clip in pending.values():
+   minute=int(clip['start']//60);second=int(clip['start']%60)
+   clip.update(title=f'Momento del {minute}:{second:02d} · ponle título',titles=[],title_fallback=True)
   offset+=len(batch)
   if on_progress:on_progress(offset,len(missing),'titles')
  return clips

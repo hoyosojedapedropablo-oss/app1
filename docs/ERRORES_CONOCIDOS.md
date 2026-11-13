@@ -140,3 +140,14 @@ una prueba automática (entre comillas invertidas) que falla si el error vuelve.
   probó y se descartó: rechazaba títulos creativos válidos («Una habitación idéntica…» para un clip que dice «cuarto»).
 - **Guardas:** `test_E22_example_titles_of_the_guide_are_never_accepted`
 
+## E-23 · La IA describía la cita en vez de copiarla, y un clip sin título tumbaba el análisis (nov 2026)
+- **Síntoma:** en el video de Ibai, con E-21 y E-22, 7 de 9 propuestas de la IA se rechazaron por «cita no respaldada»:
+  la IA escribía «Se menciona que hay un rehén…» en lugar de una frase dicha. Dos títulos cambiaban el tono (una broma
+  como «critica», un disparo accidental como «se pelean»). Y si todos los títulos de un clip se rechazaban dos veces, el
+  análisis entero fallaba.
+- **Solución:** el selector pide una copia exacta con un ejemplo de lo que no vale y el ID de su frase (`key`); con repair,
+  si la cita no está en el fragmento, se usa el texto de esa frase (solo si está en el momento o a 3 frases). La guía de
+  títulos pide respetar el tono real. Un clip sin título válido recibe «Momento del m:ss · ponle título» en vez de fallar.
+- **Guardas:** `test_E23_a_described_quote_is_replaced_by_its_key_phrase`, `test_E23_a_key_far_from_the_moment_does_not_rescue_it`,
+  `test_E23_selector_asks_for_a_copied_quote_and_its_phrase_id`, `test_E23_a_clip_without_valid_titles_does_not_fail_the_analysis`
+
