@@ -162,3 +162,13 @@ una prueba automática (entre comillas invertidas) que falla si el error vuelve.
 - **Guardas:** `test_E24_with_repair_the_judge_decides_moments_the_model_rated_two`, `test_E24_titles_in_spanish_case_and_without_ellipsis`,
   `test_E24_coverage_does_not_repeat_an_ai_clip`
 
+## E-25 · Con E-24 seguían cayendo propuestas por la nota que la IA se ponía, y quedaban títulos vacíos o con nombres ajenos (nov 2026)
+- **Síntoma:** en Ibai, 9 de 13 propuestas cayeron por «interés» (la IA se ponía 1). Quedaba un solapamiento de 4,6 s (22 %
+  de un clip de 21 s) en Ibai y de 10,5 s en el podcast. Títulos: «¡Va, va, va!», «la vida delincuencial de un hablante», y
+  «Westcol reflexiona…» en un clip donde habla el entrevistado.
+- **Solución:** con repair, la nota que la IA se pone ya no descarta (solo `coherent=false`); decide el juez. La cobertura no
+  repite más de 3 s ni más de un cuarto del clip más corto. Se rechazan títulos con menos de dos palabras de contenido, con
+  «hablante», o con un nombre que no suena a nada dicho en el clip (un nombre mal oído, «Uescol» por Westcol, sí pasa).
+- **Guardas:** `test_E24_with_repair_the_judge_decides_moments_the_model_rated_two`, `test_E25_titles_that_say_nothing_or_name_someone_absent_are_rejected`,
+  `test_E25_coverage_never_repeats_more_than_three_seconds`
+

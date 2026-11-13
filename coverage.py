@@ -18,10 +18,11 @@ def covered(clips):
   total+=max(0,c['end']-max(end,c['start']));end=max(end,c['end'])
  return total
 
-def overlaps_a_clip(start,end,clips,share=.25):
+def overlaps_a_clip(start,end,clips,share=.25,most=3.):
  """E-24: a coverage window that repeats more than a quarter of an existing clip is not added. The old check only asked
  for some new second, so a window from 0:00 repeated an AI clip from 0:15 (same sentences, almost the same title)."""
- return any(min(end,c['end'])-max(start,c['start'])>share*min(end-start,c['end']-c['start']) for c in clips)
+ # E-25: and never more than 3 s (4.6 s of a 21 s clip, 22 %, still repeated a whole sentence).
+ return any(min(end,c['end'])-max(start,c['start'])>min(most,share*min(end-start,c['end']-c['start'])) for c in clips)
 
 def topic_windows(transcript,duration,minimum,maximum,topics):
  phrases=timed_sentences(transcript)

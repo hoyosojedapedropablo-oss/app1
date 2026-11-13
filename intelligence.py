@@ -133,7 +133,24 @@ def clean_title(title,text):
     normal=lambda value:re.sub(r'[^\w ]','',value.lower())
     if normal(title) in normal(text):return None
     if copied_example(title):return None
+    # E-25: «¡Va, va, va!» says nothing; «la vida de un hablante» reads like a machine.
+    if len({w for w in re.findall(r'\w{4,}',title.lower())})<2:return None
+    if re.search(r'\bhablantes?\b',title,re.I):return None
+    if text.strip() and unsaid_name(title,text):return None
     return title
+
+
+def unsaid_name(title,text):
+    """E-25: a person's name in the title that nothing in the clip sounds like («Westcol reflexiona…» on a clip where
+    the guest speaks). Misheard names still pass: «Westcol» for a clip that says «Uescol»."""
+    from viral import fold,sounds_said,COMMON_CAPS
+    for m in re.finditer(r'\b([A-ZÁÉÍÓÚÑ][\wáéíóúñ]{3,})',title):
+        before=title[:m.start(1)].rstrip()
+        if not before or before[-1] in '.:!?¿¡«"|»':continue          # first word of a phrase, not necessarily a name
+        word=fold(m.group(1))
+        if word in COMMON_CAPS or word in fold(text):continue
+        if not sounds_said(word,text):return m.group(1)
+    return None
 
 
 def grounded(evidence,text,repair=False):
@@ -233,8 +250,9 @@ def accept_proposals(data,phrases,transcript,minimum,maximum,speaker='',diagnost
         # E-24: with repair (video and live), the viral judge reviews every clip afterwards and the final note decides
         # what reaches «Los mejores»; here only what the model itself calls flat is dropped (2 = «algo»). Measured on a
         # real Ibai video: the 7B model gave 2 in hook or payoff to 8 of 9 proposals that the judge later rated well.
-        gate=2 if repair else 3
-        if m.hook<gate or m.payoff<gate or strength<gate:
+        # E-25: even at 2 the model gave itself 1 on 9 of 13 real proposals, so with repair its own marks no longer drop
+        # a moment: the judge reviews it. Without repair (old CPU path) the strict filter stays.
+        if not repair and (m.hook<3 or m.payoff<3 or strength<3):
             reject('interés o resolución insuficiente');continue
         score=round((.35*m.hook+.30*m.payoff+.35*strength)*20)
         titles=list(dict.fromkeys(t for t in (clean_title(t,text) for t in m.titles) if t))

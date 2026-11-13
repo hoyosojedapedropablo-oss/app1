@@ -85,7 +85,9 @@ class RepairTests(unittest.TestCase):
         data['moments'][0].update(hook=2, payoff=2)
         self.assertEqual(intelligence.accept_proposals(data, phrases, transcript, 20, 60), [])          # strict without repair
         self.assertEqual(len(intelligence.accept_proposals(data, phrases, transcript, 20, 60, repair=True)), 1)
-        data['moments'][0].update(hook=1)
+        data['moments'][0].update(hook=1)            # E-25: even its own 1 no longer drops it with repair
+        self.assertEqual(len(intelligence.accept_proposals(data, phrases, transcript, 20, 60, repair=True)), 1)
+        data['moments'][0].update(coherent=False)    # an idea the model itself finds incomplete still goes
         self.assertEqual(intelligence.accept_proposals(data, phrases, transcript, 20, 60, repair=True), [])
 
     def test_E24_titles_in_spanish_case_and_without_ellipsis(self):
@@ -106,6 +108,21 @@ class RepairTests(unittest.TestCase):
         for c in clips:
             if c['id'] != 'ia':
                 self.assertLessEqual(min(c['end'], 50.) - max(c['start'], 15.), .25 * min(c['end'] - c['start'], 35.) + 1e-6)
+
+    def test_E25_titles_that_say_nothing_or_name_someone_absent_are_rejected(self):
+        ibai = 'Uescol, fuera de disparador. Acabas de disparar, va, va, va'
+        self.assertIsNone(intelligence.clean_title('¡Va, va, va!', ibai))
+        self.assertEqual(intelligence.clean_title('¿Quién controla el disparo de Westcol?', ibai), '¿Quién controla el disparo de Westcol?')
+        guest = 'Juan Camilo cuenta que la vida tiene tres estaciones y que él ya pasó por la cárcel'
+        self.assertIsNone(intelligence.clean_title('La reflexión de Westcol sobre las tres estaciones', guest))
+        self.assertIsNone(intelligence.clean_title('Desde los 13 años: la vida delincuencial de un hablante', guest))
+        self.assertEqual(intelligence.clean_title('Juan Camilo y las tres estaciones de la vida', guest), 'Juan Camilo y las tres estaciones de la vida')
+
+    def test_E25_coverage_never_repeats_more_than_three_seconds(self):
+        from coverage import overlaps_a_clip
+        ai = [{'start': 420., 'end': 441.1}]
+        self.assertTrue(overlaps_a_clip(436.5, 470., ai))          # 4.6 s of a 21 s clip: 22 %, but more than 3 s
+        self.assertFalse(overlaps_a_clip(439., 470., ai))          # 2.1 s at the edge is fine
 
     def test_quote_too_long_for_the_range_is_still_dropped(self):
         phrases = [{'start': 0., 'end': 70., 'text': 'una sola frase enorme sin cortes que dura setenta segundos'}]
