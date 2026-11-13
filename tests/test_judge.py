@@ -86,7 +86,9 @@ class LiveJudgeTests(unittest.TestCase):
     def test_live_keeps_real_note_and_analysis(self):
         s = self.run_detect({'score': 91, 'verdict': 'subir_ya', 'kind': 'polémica', 'analysis': {'a_quien': 'Carrera', 'motivo': 'Acusación.'}, 'marks': {'polemica': 9}})
         self.assertEqual(len(s.moments), 1); m = s.moments[0]
-        self.assertEqual((m['score'], m['verdict'], m['viral_kind']), (91, 'subir_ya', 'polémica'))
+        self.assertEqual((m['judge_score'], m['verdict'], m['viral_kind']), (91, 'subir_ya', 'polémica'))
+        self.assertGreaterEqual(m['score'], 70)          # judge 91 blended with the moment's own signals
+        self.assertTrue(m['reasons'])
         self.assertEqual(m['analysis']['a_quien'], 'Carrera')
 
     def test_live_keeps_moment_when_judge_unavailable(self):

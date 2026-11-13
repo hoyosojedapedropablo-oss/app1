@@ -94,3 +94,17 @@ una prueba automática (entre comillas invertidas) que falla si el error vuelve.
   clip sin video no se cuenta como fallo de vista previa.
 - **Guardas:** `test_E19_resuming_a_stopped_session_marks_a_gap_even_without_reconnections`, `test_E19_detection_only_looks_at_video_still_on_disk`,
   `test_E19_a_moment_whose_video_is_gone_is_discarded_not_left_broken`, `test_E19_a_library_clip_without_video_is_not_reported_as_a_failure`
+
+## E-20 · Casi todos los clips de un video salían con unos 40/100 y como «flojo» (nov 2026)
+- **Síntoma:** la media de un video era de unos 40 puntos; la app parecía mala para los cliperos.
+- **Causa raíz:** el juez tenía la orden de que «la mayoría de momentos son normales, notas de 3 a 6», y un «flojo» quedaba
+  encerrado entre 40 y 64. Además, los tramos de relleno que se agregan para cubrir el 75 % del video salían en la misma
+  lista, y en videos largos solo se juzgaban 15 clips, sin los nombres del video.
+- **Solución:** juez recalibrado («los clips ya están preseleccionados: ¿lo publicaría un clipero?») con el veredicto
+  «publicable» (55-69); nota final = 60 % juez + 25 % señales del clip (arranca al grano, ritmo, pausas) + 15 % posición en
+  su video (`scoring.py`); los mejores primero con «Top N de este video» y motivos en la tarjeta; el relleno va a «Para
+  revisar»; se juzgan hasta 40 clips con los nombres del video.
+- **Guardas:** `test_E20_a_publishable_clip_is_not_boxed_as_weak`, `test_E20_judge_is_told_clips_are_preselected_not_that_most_are_weak`,
+  `test_E20_a_clip_that_starts_talking_scores_above_one_with_dead_air`, `test_E20_best_clips_first_with_rank_and_reasons`,
+  `test_E20_filler_for_coverage_goes_to_review_not_to_the_main_list`, `test_E20_a_typical_video_no_longer_averages_forty`,
+  `test_E20_place_in_the_video_never_turns_a_weak_clip_into_a_great_one`
