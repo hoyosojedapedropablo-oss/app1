@@ -91,6 +91,18 @@ def query_json(user,schema,quality="quality"):
     return json.loads(choice['message']['content'])
 
 
+# E-22: the 7B model copied the guide's old example titles verbatim into unrelated videos («¿Dónde está el límite cuando
+# trabajas con tu pareja?» on an Ibai training video, in at least 7 saved projects). They are never accepted.
+OLD_EXAMPLES=('¿Dónde está el límite cuando trabajas con tu pareja?','Así era su vida antes de caer preso',
+              'Westcol ya se puso la vara más alta con su boxeo')
+
+
+def copied_example(title):
+    from difflib import SequenceMatcher
+    norm=lambda s:' '.join(re.findall(r'\w+',s.lower()))
+    return any(SequenceMatcher(None,norm(title),norm(e)).ratio()>=.8 for e in OLD_EXAMPLES)
+
+
 def clean_title(title,text):
     title=re.sub(r'\s*#[^\s#]+','',title)      # E-20d: titles came with hashtags stuck on («#ConfusiónEnElAsalto»)
     title=re.sub(r'\s+',' ',title).strip(' "«»')
@@ -100,6 +112,7 @@ def clean_title(title,text):
     if re.search(r'cambió de opinión[.!?]?$',title,re.I):return None
     normal=lambda value:re.sub(r'[^\w ]','',value.lower())
     if normal(title) in normal(text):return None
+    if copied_example(title):return None
     return title
 
 

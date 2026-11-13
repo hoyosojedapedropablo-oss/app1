@@ -130,3 +130,13 @@ una prueba automática (entre comillas invertidas) que falla si el error vuelve.
 - **Guardas:** `test_E21_video_analysis_repairs_cuts_instead_of_dropping`, `test_E21_a_long_story_is_cut_around_its_quote`,
   `test_E21_a_short_punchline_grows_to_the_minimum`
 
+## E-22 · Títulos copiados de los ejemplos de la guía en videos sin relación (nov 2026)
+- **Síntoma:** en el video de Ibai con Westcol (un entrenamiento táctico) dos clips salieron con «¿Dónde está el límite cuando
+  trabajas con tu pareja?». El mismo título está en al menos 7 proyectos guardados.
+- **Causa raíz:** `TITLE_GUIDE` daba tres títulos de ejemplo y el modelo de 7B los copiaba tal cual. `clean_title` no rechazaba
+  las copias de esos ejemplos.
+- **Solución:** la guía describe formas, sin títulos para copiar (versión `topics-human-titles-v2`, que invalida los títulos
+  guardados); `clean_title` rechaza los ejemplos antiguos y sus variantes cercanas. Exigir una palabra dicha en el clip se
+  probó y se descartó: rechazaba títulos creativos válidos («Una habitación idéntica…» para un clip que dice «cuarto»).
+- **Guardas:** `test_E22_example_titles_of_the_guide_are_never_accepted`
+

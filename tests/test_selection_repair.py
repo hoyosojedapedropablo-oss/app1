@@ -46,6 +46,12 @@ class RepairTests(unittest.TestCase):
         self.assertTrue(20 <= clip['end'] - clip['start'] <= 60)
         self.assertIn('cobrar la deuda', clip['text'])
 
+    def test_E22_example_titles_of_the_guide_are_never_accepted(self):
+        text = 'Arriba las manos, entramos por la puerta con el ariete y Westcol no encuentra la planta'
+        self.assertIsNone(intelligence.clean_title('¿Dónde está el límite cuando trabajas con tu pareja?', text))
+        self.assertIsNone(intelligence.clean_title('¿Dónde está el límite al trabajar con tu pareja?', text))
+        self.assertNotIn('pareja', intelligence.TITLE_GUIDE)
+
     def test_quote_too_long_for_the_range_is_still_dropped(self):
         phrases = [{'start': 0., 'end': 70., 'text': 'una sola frase enorme sin cortes que dura setenta segundos'}]
         self.assertIsNone(intelligence.fit_around(phrases, 0, 0, (0, 0), 20, 60))
