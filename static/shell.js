@@ -32,6 +32,24 @@ function toast(title, text, action) {
   $('toasts').append(t); setTimeout(() => t.remove(), 7000);
 }
 
+// --- Incidents: a step that decides how a clip looks failed (camera detection, face tracking…). Never silent (E-01):
+// a warning card says what failed and how often; it hides once dismissed until a new failure of that kind happens.
+async function paintIncidents() {
+  let data; try { data = await api('/api/incidents?hours=24'); } catch { return; }
+  const groups = (data?.groups || []).filter((g) => g.step !== 'format' || g.count > 2);
+  let seen = {}; try { seen = JSON.parse(localStorage.getItem('cs.incidents.seen') || '{}'); } catch {}
+  const fresh = groups.filter((g) => (seen[g.step + '|' + g.kind] || 0) < g.last);
+  $('incidentCard')?.remove();
+  if (!fresh.length) return;
+  const close = () => { fresh.forEach((g) => { seen[g.step + '|' + g.kind] = g.last; }); try { localStorage.setItem('cs.incidents.seen', JSON.stringify(seen)); } catch {} card.remove(); };
+  const card = h('aside', { id: 'incidentCard', class: 'incident-card', role: 'alert' },
+    h('div', { class: 'incident-head' }, h('b', { text: 'Algo falló en la app y quedó registrado' }), h('button', { class: 'incident-x', type: 'button', 'aria-label': 'Cerrar aviso', text: '×', onclick: close })),
+    h('ul', {}, fresh.slice(0, 4).map((g) => h('li', {}, h('b', { text: g.label }), h('span', { class: 'muted', text: ` · ${g.count} ${g.count === 1 ? 'vez' : 'veces'} · ${ago(g.last * 1000)}` }), h('small', { text: `${g.kind}: ${g.message}` })))),
+    h('p', { class: 'muted', text: 'Los clips afectados se preparan de nuevo solos. Si se repite, copia este aviso para corregirlo.' }));
+  document.body.append(card);
+}
+setTimeout(paintIncidents, 4000); setInterval(paintIncidents, 5 * 60 * 1000);
+
 // --- navigation ---------------------------------------------------------------------------------------------------
 const VIEWS = ['home', 'analysis', 'live', 'library', 'editor', 'projects', 'settings'];
 let current = 'home';

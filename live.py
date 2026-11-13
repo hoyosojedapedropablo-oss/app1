@@ -635,6 +635,7 @@ class LiveSession:
             moment['ready_after_s'] = self._ready_after(moment['end'])
             FOLLOW_POOL.submit(self._prepare_follow, moment)
         except Exception as error:
+            import incidents; incidents.record('render', error, session=self.id, moment=mid)
             moment['status'] = 'error'; moment['reason'] = f'No se pudo preparar el clip ({type(error).__name__}).'
         self.save(force=True)
 
@@ -668,8 +669,14 @@ class LiveSession:
             overlay = layout.detect_overlay(target, end + PAD_S, samples=24, prefer=settings.get('framing') == 'stack')
             result = layout.analyze(target, round(start, 3), round(end, 3), overlay)
             (self.clips / f'{moment["id"]}.layout.json').write_text(json.dumps(result), encoding='utf-8')
-        except Exception:
-            pass        # the editor computes it when the moment is opened
+            moment.pop('layout_error', None)
+            if settings.get('framing') == 'stack' and not overlay.get('found'):
+                # Chosen «Cámara + juego» but no camera in this moment (an intro, full screen): say so, never silently.
+                moment['layout_note'] = 'No se vio la cámara del streamer en este clip: sale con bandas negras. Puedes marcarla a mano en el editor.'
+        except Exception as error:
+            # Never swallowed again (E-01): recorded, kept on the moment, and retried at the next start.
+            import incidents; incidents.record('layout', error, session=self.id, moment=moment['id'])
+            moment['layout_error'] = f'{type(error).__name__}: {str(error)[:160]}'
 
     def _prepare_follow(self, moment):
         """«Seguimiento facial» on: who is where and who speaks in this moment, computed now (in the background), so its
@@ -690,8 +697,11 @@ class LiveSession:
             result = tracking.analyze(target, start, end, lambda v: None)
             result.update(start=start, end=end, status='ready', progress=100)
             tmp = cache.with_suffix('.tmp'); tmp.write_text(json.dumps(result), encoding='utf-8'); tmp.replace(cache)
-        except Exception:
-            pass        # no faces, or the file is gone: the fixed framing stays
+        except Exception as error:
+            # «no faces in this moment» is an expected answer (the fixed framing stays); anything else is an incident.
+            # Careful: the E-01 crash was a ValueError too («too many values to unpack»), so match the message.
+            if isinstance(error, ValueError) and 'rostros' in str(error): return
+            import incidents; incidents.record('follow', error, session=self.id, moment=moment['id'])
 
     def refresh_layouts(self, missing=False):
         """Moments prepared by an older camera detector are prepared again with the current one (and, with `missing`,
@@ -702,7 +712,8 @@ class LiveSession:
             f = self.clips / f'{m["id"]}.layout.json'
             if not (self.clips / f'{m["id"]}.mp4').exists(): continue
             if not f.exists():
-                if missing and m.get('status') != 'discarded': self._prepare_layout(m); redone += 1
+                # never prepared, or its preparation failed (layout_error): prepared now
+                if (missing or m.get('layout_error')) and m.get('status') != 'discarded': self._prepare_layout(m); redone += 1
                 continue
             try: ov = json.loads(f.read_text(encoding='utf-8')).get('overlay') or {}
             except (OSError, ValueError): continue

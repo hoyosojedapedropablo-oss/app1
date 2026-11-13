@@ -81,20 +81,25 @@ def face_front(f):
     return round(max(0.0, 1 - 1.6 * turn) * max(0.0, 1 - tilt) * wide, 3)
 
 
-def make_detector(width, height):
-    """Return detect(frame_bgr) -> [(x, y, w, h, score)]."""
+def make_detector(width, height, with_front=False):
+    """Return detect(frame_bgr) -> [(x, y, w, h, score)].
+
+    CONTRACT (used by tracking.py and by layout.py in three places): every face is exactly 5 values. With
+    `with_front=True` (face tracking only) a 6th value is added: how much the face looks at the camera. Never change
+    the default shape: in Nov 2026 a 6th value broke «Cámara + juego» for every clip (see docs/ERRORES_CONOCIDOS.md, E-01)."""
     import cv2
     if MODEL.exists() and hasattr(cv2, 'FaceDetectorYN'):
         net = cv2.FaceDetectorYN.create(str(MODEL), '', (width, height), .72, .3, 50)
         def detect(frame):
             _, faces = net.detect(frame)
-            return [] if faces is None else [(float(f[0]), float(f[1]), float(f[2]), float(f[3]), float(f[14]), face_front(f)) for f in faces]
+            if faces is None: return []
+            return [(float(f[0]), float(f[1]), float(f[2]), float(f[3]), float(f[14])) + ((face_front(f),) if with_front else ()) for f in faces]
         return detect
     frontal = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_alt2.xml')
     if frontal.empty(): raise ValueError('Falta el detector de rostros. Vuelve a iniciar INICIAR_WINDOWS.')
     def detect(frame):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        return [(float(x), float(y), float(w), float(h), 1.0) for x, y, w, h in frontal.detectMultiScale(gray, 1.1, 5, minSize=(28, 28))]
+        return [(float(x), float(y), float(w), float(h), 1.0) + ((1.0,) if with_front else ()) for x, y, w, h in frontal.detectMultiScale(gray, 1.1, 5, minSize=(28, 28))]
     return detect
 
 
@@ -125,7 +130,7 @@ def analyze(source, start, end, progress):
     width = cap.get(cv2.CAP_PROP_FRAME_WIDTH); height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT); cap.release()
     if not width or not height: raise ValueError('No se pudieron leer las dimensiones del video.')
     sw = max(2, int(min(640, width) / 2) * 2); shh = max(2, int(height * sw / width / 2) * 2); ratio = sw / width
-    detect = make_detector(sw, shh)
+    detect = make_detector(sw, shh, with_front=True)
     frames = subprocess.Popen(['ffmpeg', '-v', 'error', '-threads', '2', '-ss', str(start), '-t', str(duration), '-i', str(source), '-an',
                                '-vf', f'fps={SAMPLE_FPS},scale={sw}:{shh}', '-pix_fmt', 'bgr24', '-f', 'rawvideo', '-'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     tracks = {}; next_id = 0; samples = []; face_frames = speaking_frames = 0
