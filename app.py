@@ -1845,6 +1845,8 @@ def library_previews_warm(item:WarmInput):
   _preview_queued.add(cid)
   def run(cid=cid):
    try:library_preview(cid)
+   except HTTPException as e:
+    if e.status_code!=404:_incidents.record('preview',e,clip=cid)      # a clip without its video is a state, not a failure
    except Exception as e:_incidents.record('preview',e,clip=cid)
    finally:_preview_queued.discard(cid)
   _preview_pool.submit(run)

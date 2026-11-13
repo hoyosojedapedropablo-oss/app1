@@ -382,7 +382,7 @@ class LiveSession:
             with self.lock:
                 self.title, self.channel = stream['title'], stream['channel']
                 self.stream_words = stream_names(stream['title'], stream.get('description', ''), tags=stream.get('tags') or [])
-                if self.next_index > 0: self.gaps.append(round(self.media_s, 1))
+                self._mark_restart()
                 self.status = 'live'
             self.note('Capturando el directo y buscando momentos.' if self.reconnects == 0 else f'Reconectado (intento {self.reconnects}).')
             started = time.monotonic()
@@ -403,6 +403,12 @@ class LiveSession:
                 self.reconnects += 1; self.status = 'reconnecting'
             if time.monotonic() - started > 60: backoff = 2
             self._wait_retry(backoff, 'Se perdió la señal del directo.'); backoff = min(60, backoff * 2)
+
+    def _mark_restart(self):
+        """A capture that starts after media was already recorded (a reconnection, or a session resumed after being
+        stopped) leaves a gap: detection never looks before it. E-19: it was only marked when FFmpeg had reconnected
+        before (next_index > 0), so a session stopped and resumed looked back at minutes whose video was already gone."""
+        if self.media_s > 0 and not (self.gaps and abs(self.gaps[-1] - self.media_s) < .05): self.gaps.append(round(self.media_s, 1))
 
     def next_segment_number(self):
         """Always after the newest segment on disk. The saved number can be old when ClipStudio was closed while
@@ -516,8 +522,13 @@ class LiveSession:
     def _window(self, until):
         # Always room for the longest clip plus context before and after it.
         span = min(400, max(WINDOW_S, 2 * self.maximum + 30))
-        start = max(0.0, until - span, max([g for g in self.gaps if g < until], default=0.0))
+        start = max(0.0, until - span, max([g for g in self.gaps if g < until], default=0.0), self._oldest_video())
         return start, until
+
+    def _oldest_video(self):
+        """Start (media time) of the oldest segment still on disk: a moment can only be cut from video that exists."""
+        on_disk = [self.segment_times[i][0] for i in self.segment_times if (self.segments / f'seg{i:06d}.ts').exists()]
+        return min(on_disk) if on_disk else 0.0
 
     def _detect(self, until, final=False):
         from timeline import timed_sentences
@@ -634,6 +645,11 @@ class LiveSession:
             moment['status'] = 'draft'
             moment['ready_after_s'] = self._ready_after(moment['end'])
             FOLLOW_POOL.submit(self._prepare_follow, moment)
+        except FileNotFoundError as error:
+            # Its video is no longer in the temporary buffer (E-19): nothing to cut, so it is not offered as a clip.
+            import incidents; incidents.record('render', error, session=self.id, moment=mid)
+            moment['status'] = 'discarded'; moment['reason'] = 'Su video ya no estaba en la memoria temporal del directo.'
+            self.note('Se descartó un momento cuyo video ya no estaba guardado.')
         except Exception as error:
             import incidents; incidents.record('render', error, session=self.id, moment=mid)
             moment['status'] = 'error'; moment['reason'] = f'No se pudo preparar el clip ({type(error).__name__}).'

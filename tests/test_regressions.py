@@ -120,6 +120,45 @@ class E12ScriptNames(unittest.TestCase):
                 seen[m.group(1)] = n
 
 
+class E19ResumedSessionGap(unittest.TestCase):
+    """E-19 (Nov 2026, HotSpanish Vlogs): stopped and resumed without ever losing the signal (next_index still 0), the
+    resume left no gap; the first detection proposed minute 15 whose video was deleted at the stop -> render failed."""
+    def session(self, tmp):
+        import live
+        s = live.LiveSession(Path(tmp), 'https://kick.com/canal'); s.segments.mkdir(parents=True); s.clips.mkdir(parents=True)
+        return s
+
+    def test_E19_resuming_a_stopped_session_marks_a_gap_even_without_reconnections(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s = self.session(tmp); s.next_index = 0; s.media_s = 1005.1
+            s._mark_restart(); s._mark_restart()                     # once per restart point
+            self.assertEqual(s.gaps, [1005.1])
+            self.assertGreaterEqual(s._window(1300)[0], 1005.1)       # detection never looks before the resume
+
+    def test_E19_detection_only_looks_at_video_still_on_disk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s = self.session(tmp)
+            for i in range(100):
+                s.segment_times[i] = [i * 10.0, i * 10.0 + 10]
+                if i >= 90: (s.segments / f'seg{i:06d}.ts').write_bytes(b'x')   # 0-89 were deleted
+            s.media_s = 1000
+            self.assertEqual(s._window(1000)[0], 900.0)
+
+    def test_E19_a_moment_whose_video_is_gone_is_discarded_not_left_broken(self):
+        import live, incidents
+        with tempfile.TemporaryDirectory() as tmp, patch.object(incidents, 'FILE', Path(tmp) / 'i.jsonl'):
+            s = self.session(tmp)
+            s._add_moment(dict(start=930, end=955, title='Momento'))
+            self.assertEqual(s.moments[0]['status'], 'discarded')
+
+    def test_E19_a_library_clip_without_video_is_not_reported_as_a_failure(self):
+        import app, incidents
+        from fastapi import HTTPException
+        with tempfile.TemporaryDirectory() as tmp, patch.object(incidents, 'FILE', Path(tmp) / 'i.jsonl'),              patch.object(app, 'library_preview', side_effect=HTTPException(404, 'El video de este clip no está disponible.')),              patch.object(app, '_preview_pool', types.SimpleNamespace(submit=lambda f: f())):
+            app._preview_queued.discard('live:x:y'); app.library_previews_warm(app.WarmInput(ids=['live:x:y']))
+            self.assertEqual(incidents.recent(), [])
+
+
 class RegistryTests(unittest.TestCase):
     def test_every_known_error_has_a_guard(self):
         """Each E-xx of docs/ERRORES_CONOCIDOS.md names a test that exists."""
