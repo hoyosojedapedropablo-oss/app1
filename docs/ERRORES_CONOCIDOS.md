@@ -83,3 +83,14 @@ una prueba automática (entre comillas invertidas) que falla si el error vuelve.
 
 ## E-18 · Sesión reanudada grababa en el sitio equivocado
 - **Guardas:** `test_a_resumed_session_records_after_its_newest_segment`, `test_state_survives_restart_as_interrupted`
+
+## E-19 · Clip en vivo «sin video» tras detener y reanudar una sesión (HotSpanish Vlogs, nov 2026)
+- **Síntoma:** aviso «Corte del clip en vivo · FileNotFoundError: segments» y «Vista previa del clip · 404» repetido.
+- **Causa raíz:** al detener una sesión se borra su memoria temporal de video. Al reanudarla, el «corte» que impide al
+  análisis mirar hacia atrás solo se marcaba si FFmpeg se había reconectado antes (`next_index > 0`); esta sesión nunca
+  perdió la señal, así que la primera ronda tras reanudar propuso el minuto 15, cuyo video ya no existía.
+- **Solución:** `_mark_restart` marca el corte siempre que ya hay video grabado; el análisis nunca mira antes del
+  fragmento más antiguo que sigue en el disco; un momento sin video se descarta (no queda roto en la biblioteca); un
+  clip sin video no se cuenta como fallo de vista previa.
+- **Guardas:** `test_E19_resuming_a_stopped_session_marks_a_gap_even_without_reconnections`, `test_E19_detection_only_looks_at_video_still_on_disk`,
+  `test_E19_a_moment_whose_video_is_gone_is_discarded_not_left_broken`, `test_E19_a_library_clip_without_video_is_not_reported_as_a_failure`
