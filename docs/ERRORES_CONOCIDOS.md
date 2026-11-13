@@ -151,3 +151,14 @@ una prueba automática (entre comillas invertidas) que falla si el error vuelve.
 - **Guardas:** `test_E23_a_described_quote_is_replaced_by_its_key_phrase`, `test_E23_a_key_far_from_the_moment_does_not_rescue_it`,
   `test_E23_selector_asks_for_a_copied_quote_and_its_phrase_id`, `test_E23_a_clip_without_valid_titles_does_not_fail_the_analysis`
 
+## E-24 · El filtro de interés del selector tiraba lo que el juez valoraba, y la cobertura repetía clips de la IA (nov 2026)
+- **Síntoma (con E-23):** en Ibai la IA propuso 9 momentos con cita real y se aceptaron 0: 8 por «interés o resolución
+  insuficiente» (el propio modelo se ponía 2 en gancho o remate). En el podcast, dos clips de cobertura repetían las frases
+  de clips de la IA (0:00 con 0:15, 1:50 con 2:00). Los títulos salían con mayúsculas en cada palabra y «Así fue...».
+- **Solución:** con repair (videos y directo) el selector solo descarta lo que el modelo puntúa con 1 o menos; el juez y la
+  nota final deciden. La cobertura no añade una ventana que repita más de un cuarto de un clip existente. Los títulos pasan
+  a mayúscula solo al inicio y en nombres (los que el clip escribe con mayúscula), sin puntos suspensivos, y la guía pide no
+  preguntar por un desenlace que el clip ya muestra.
+- **Guardas:** `test_E24_with_repair_the_judge_decides_moments_the_model_rated_two`, `test_E24_titles_in_spanish_case_and_without_ellipsis`,
+  `test_E24_coverage_does_not_repeat_an_ai_clip`
+

@@ -104,9 +104,28 @@ def copied_example(title):
     return any(SequenceMatcher(None,norm(title),norm(e)).ratio()>=.8 for e in OLD_EXAMPLES)
 
 
+def sentence_case(title,text):
+    """E-24: «Entrenamiento Intenso: ¿Qué Tan Fuertes Se Hacen?» -> «Entrenamiento intenso: ¿qué tan fuertes se hacen?».
+    Spanish titles capitalise the first word only; a word stays capitalised when the clip writes it so (a name) or it is
+    all capitals (an acronym). Only applied when most words are capitalised, so ordinary titles are left alone."""
+    tokens=title.split()
+    letters=[t for t in tokens if re.search(r'[A-Za-zÁÉÍÓÚÑáéíóúñ]',t)]
+    caps=[t for t in letters if re.sub(r'^[¿¡«"(]+','',t)[:1].isupper()]
+    if len(letters)<3 or len(caps)<.7*len(letters):return title
+    named=set(re.findall(r'\b([A-ZÁÉÍÓÚÑ][\wáéíóúñ]+)',text))
+    out=[]
+    for i,t in enumerate(tokens):
+        lead=re.match(r'^[¿¡«"(]*',t).group();core=t[len(lead):];word=re.sub(r'\W+$','',core)
+        keep=i==0 or word in named or (word.isupper() and len(word)>1) or (out and re.search(r'[:.!?]$',out[-1]) and not lead)
+        out.append(t if keep or not core else lead+core[:1].lower()+core[1:])
+    return ' '.join(out)
+
+
 def clean_title(title,text):
     title=re.sub(r'\s*#[^\s#]+','',title)      # E-20d: titles came with hashtags stuck on («#ConfusiónEnElAsalto»)
+    title=re.sub(r'\s*(\.\.\.|…)\s*',' ',title)   # E-24: «Así fue... la muerte» -> «Así fue la muerte»
     title=re.sub(r'\s+',' ',title).strip(' "«»')
+    title=sentence_case(title,text)
     if len(title)>80 or len(title.split())>14 or len(title)<8:return None
     if re.search(r'(caracteres? sobrantes?|límite de|opción \d|título:|titulo:)',title,re.I):return None
     if re.match(r'^(descubre|mejora tu|no creerás|esto lo cambia|mira cómo)',title,re.I):return None
@@ -211,7 +230,11 @@ def accept_proposals(data,phrases,transcript,minimum,maximum,speaker='',diagnost
             reject('cita no respaldada por el fragmento');continue
         # Require an early hook and a payoff, not just many buzzwords.
         strength=max(m.novelty,m.emotion,m.discussion)
-        if m.hook<3 or m.payoff<3 or strength<3:
+        # E-24: with repair (video and live), the viral judge reviews every clip afterwards and the final note decides
+        # what reaches «Los mejores»; here only what the model itself calls flat is dropped (2 = «algo»). Measured on a
+        # real Ibai video: the 7B model gave 2 in hook or payoff to 8 of 9 proposals that the judge later rated well.
+        gate=2 if repair else 3
+        if m.hook<gate or m.payoff<gate or strength<gate:
             reject('interés o resolución insuficiente');continue
         score=round((.35*m.hook+.30*m.payoff+.35*strength)*20)
         titles=list(dict.fromkeys(t for t in (clean_title(t,text) for t in m.titles) if t))

@@ -79,6 +79,34 @@ class RepairTests(unittest.TestCase):
         self.assertTrue(clips)
         self.assertTrue(all(c['title_fallback'] and 'ponle título' in c['title'] for c in clips))
 
+    def test_E24_with_repair_the_judge_decides_moments_the_model_rated_two(self):
+        phrases, transcript = story()
+        data = proposal(18, 24, 'me dijeron que me iban a cobrar la deuda con la vida')
+        data['moments'][0].update(hook=2, payoff=2)
+        self.assertEqual(intelligence.accept_proposals(data, phrases, transcript, 20, 60), [])          # strict without repair
+        self.assertEqual(len(intelligence.accept_proposals(data, phrases, transcript, 20, 60, repair=True)), 1)
+        data['moments'][0].update(hook=1)
+        self.assertEqual(intelligence.accept_proposals(data, phrases, transcript, 20, 60, repair=True), [])
+
+    def test_E24_titles_in_spanish_case_and_without_ellipsis(self):
+        text = 'Ibai y Westcol entrenan con la Policía'
+        self.assertEqual(intelligence.clean_title('Entrenamiento Intenso: ¿Qué Tan Fuertes Se Hacen?', text),
+                         'Entrenamiento intenso: ¿qué tan fuertes se hacen?')
+        self.assertEqual(intelligence.clean_title('Westcol Y Ibai Contra La Policía En El Asalto', text),
+                         'Westcol y Ibai contra la Policía en el asalto')
+        self.assertEqual(intelligence.clean_title('Así fue... la muerte del vecino del barrio', text), 'Así fue la muerte del vecino del barrio')
+        self.assertEqual(intelligence.clean_title('¿Por qué Westcol no encuentra la planta?', text), '¿Por qué Westcol no encuentra la planta?')
+
+    def test_E24_coverage_does_not_repeat_an_ai_clip(self):
+        from coverage import plan
+        transcript = [{'start': i * 5., 'end': i * 5. + 4.6, 'text': f'Frase número {i} del podcast.',
+                       'words': [{'start': i * 5., 'end': i * 5. + 4.6, 'text': f'frase{i}.'}]} for i in range(60)]
+        ai = {'id': 'ia', 'start': 15., 'end': 50., 'text': 'x', 'score': 70, 'title': 'IA'}
+        clips = plan([ai], transcript, 300, 20, 60)
+        for c in clips:
+            if c['id'] != 'ia':
+                self.assertLessEqual(min(c['end'], 50.) - max(c['start'], 15.), .25 * min(c['end'] - c['start'], 35.) + 1e-6)
+
     def test_quote_too_long_for_the_range_is_still_dropped(self):
         phrases = [{'start': 0., 'end': 70., 'text': 'una sola frase enorme sin cortes que dura setenta segundos'}]
         self.assertIsNone(intelligence.fit_around(phrases, 0, 0, (0, 0), 20, 60))
