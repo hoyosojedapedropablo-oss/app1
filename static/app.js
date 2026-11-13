@@ -6,7 +6,7 @@ let trackingPoints=[],trackingRange=null,trackingRequest=0;
 let job=null,selected=null,cues=[],cueVersion=0,captionPending=false,captionTimer,pollToken=0;
 const edits=new Map();
 const numeric=['title_padding_x','title_padding_y','title_size','title_outline_width','title_x','title_y','caption_x','caption_y','caption_size','outline_width','focus_x','focus_y','start','end','logo_width','logo_x','logo_y','logo_start','logo_end','resolution'];
-const styleKeys=['game_follow','resolution','zoom','tracking_person','tracking_motion','show_subtitles','title_corners','title_padding_x','title_padding_y','title_bg_color','title_text_color','auto_follow','style','font','title_font','title_outline_color','title_size','title_outline_width','title_x','title_y','caption_x','caption_y','caption_size','caption_color','outline_color','outline_width','logo','framing','focus_x','focus_y','logo_width','logo_x','logo_y','logo_start','logo_end'];
+const styleKeys=['mute_words','mute_sound','game_follow','resolution','zoom','tracking_person','tracking_motion','show_subtitles','title_corners','title_padding_x','title_padding_y','title_bg_color','title_text_color','auto_follow','style','font','title_font','title_outline_color','title_size','title_outline_width','title_x','title_y','caption_x','caption_y','caption_size','caption_color','outline_color','outline_width','logo','framing','focus_x','focus_y','logo_width','logo_x','logo_y','logo_start','logo_end'];
 const OFFLINE='ClipStudio no responde: su servidor está cerrado. Abre INICIAR_WINDOWS.bat, deja abierta esa ventana y recarga la página.';
 async function request(url,options={}){let r;try{r=await fetch(url,options);}catch{const e=Error(OFFLINE);e.offline=true;throw e;}if(!r.ok){let e;try{e=await r.json()}catch{e={detail:r.statusText}}throw Error(typeof e.detail==='string'?e.detail:'Revisa los campos y el rango de tiempos.')}return r;}
 const jsonOptions=value=>({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});
@@ -14,7 +14,7 @@ function showView(name){$('analysisView').classList.toggle('hidden',name!=='anal
 $('goAnalyze').onclick=()=>showView('analysis');$('goEditor').onclick=()=>showView('editor');
 for(const button of document.querySelectorAll('[data-tab]'))button.onclick=()=>{for(const b of document.querySelectorAll('[data-tab]')){b.classList.toggle('active',b===button);b.setAttribute('aria-selected',String(b===button));}for(const panel of document.querySelectorAll('.tab-panel'))panel.classList.toggle('hidden',panel.id!=='tab-'+button.dataset.tab);};
 function say(text){$('status').textContent=text;}
-const CHECKS=['auto_follow','show_subtitles','game_follow'];
+const CHECKS=['auto_follow','show_subtitles','game_follow','mute_words'];
 function styles(){return Object.fromEntries(styleKeys.map(k=>[k,CHECKS.includes(k)?$(k).checked:k==='logo_end'&&!$(k).value?null:numeric.includes(k)?Number($(k).value):$(k).value]));}
 function settings(){return {...styles(),title:$('title').value,subtitles:$('subtitles').value,start:Number($('start').value),end:Number($('end').value),clip_id:selected&&selected.id!=='manual'?selected.id:null,captions:cues.map(c=>({...c}))};}
 let persistTimer=null;
@@ -434,11 +434,11 @@ request('/api/live').then(r=>r.json()).then(list=>{if(!list.length)return;liveId
 // --- Configura tus clips: per-project framing, zoom, tracking, subtitles and title corners -------------------------------
 // Same proportions as tracking.ZOOM on the server: the video band uses this share of the 9:16 height.
 const ZOOM={soft:.5,balanced:.6,close:.72};
-const NEW_DEFAULTS={framing:'zoom',zoom:'balanced',tracking:true,tracking_motion:'balanced',subtitles:true,title_corners:'rounded',auto_stack:true,resolution:1080};
+const NEW_DEFAULTS={framing:'zoom',zoom:'balanced',tracking:true,tracking_motion:'balanced',subtitles:true,title_corners:'rounded',auto_stack:true,resolution:1080,mute_words:false,mute_sound:'silence'};
 let projectConfig={...NEW_DEFAULTS},configTimer=null;
 const radio=name=>document.querySelector(`input[name="${name}"]:checked`)?.value;
 const setRadio=(name,value)=>{const el=document.querySelector(`input[name="${name}"][value="${value}"]`);if(el)el.checked=true;};
-function readConfig(){return {framing:radio('cfgFraming')||'zoom',zoom:radio('cfgZoom')||'balanced',tracking:$('cfgTracking').checked,tracking_motion:radio('cfgMotion')||'balanced',subtitles:radio('cfgSubtitles')!=='off',title_corners:radio('cfgCorners')||'rounded',auto_stack:$('cfgAutoStack').checked,resolution:Number(radio('cfgResolution')||1080)};}
+function readConfig(){return {framing:radio('cfgFraming')||'zoom',zoom:radio('cfgZoom')||'balanced',tracking:$('cfgTracking').checked,tracking_motion:radio('cfgMotion')||'balanced',subtitles:radio('cfgSubtitles')!=='off',title_corners:radio('cfgCorners')||'rounded',auto_stack:$('cfgAutoStack').checked,resolution:Number(radio('cfgResolution')||1080),mute_words:(radio('cfgMute')||'off')!=='off',mute_sound:radio('cfgMute')==='beep'?'beep':'silence'};}
 function paintConfig(){
  const c=readConfig();$('cfgZoomGroup').classList.toggle('is-off',c.framing!=='zoom');$('cfgMotionGroup').classList.toggle('is-off',!c.tracking);
  document.querySelector('.mini916[data-style="zoom"]').style.setProperty('--band',(ZOOM[c.zoom]*100)+'%');
@@ -446,12 +446,13 @@ function paintConfig(){
 function showConfig(c){
  // "fit" (old big-bands layout) is still available in the editor; the two styles offered here are zoom and full screen.
  setRadio('cfgFraming',['crop','stack'].includes(c.framing)?c.framing:'zoom');$('cfgAutoStack').checked=c.auto_stack!==false;setRadio('cfgResolution',String(c.resolution||1080));setRadio('cfgZoom',c.zoom);$('cfgTracking').checked=!!c.tracking;setRadio('cfgMotion',c.tracking_motion);
- setRadio('cfgSubtitles',c.subtitles?'on':'off');setRadio('cfgCorners',c.title_corners);paintConfig();
+ setRadio('cfgSubtitles',c.subtitles?'on':'off');setRadio('cfgCorners',c.title_corners);setRadio('cfgMute',c.mute_words?(c.mute_sound==='beep'?'beep':'silence'):'off');paintConfig();
 }
 function applyProjectToEditor(){
  const c=projectConfig,framing=effectiveFraming(c);$('framing').value=framing;$('zoom').value=c.zoom;$('tracking_motion').value=c.tracking_motion;$('resolution').value=String(c.resolution||1080);
  if(framing==='stack')stackDom();
  $('show_subtitles').checked=!!c.subtitles;$('title_corners').value=c.title_corners;$('auto_follow').checked=!!c.tracking&&c.framing!=='fit';
+ $('mute_words').checked=!!c.mute_words;$('mute_sound').value=c.mute_sound==='beep'?'beep':'silence';
 }
 function loadProject(j){
  projectConfig={...NEW_DEFAULTS,...(j.clip_settings||{})};delete projectConfig.legacy;showConfig(projectConfig);
@@ -467,11 +468,11 @@ function saveProjectConfig(){
 document.querySelectorAll('#configure input').forEach(input=>input.addEventListener('change',()=>{
  projectConfig=readConfig();paintConfig();saveProjectConfig();
  // Applies to every clip of the project, including ones already adjusted in the editor.
- for(const [id,e] of edits)edits.set(id,{...e,framing:effectiveFraming(projectConfig),zoom:projectConfig.zoom,tracking_motion:projectConfig.tracking_motion,show_subtitles:projectConfig.subtitles,title_corners:projectConfig.title_corners,resolution:projectConfig.resolution});
+ for(const [id,e] of edits)edits.set(id,{...e,framing:effectiveFraming(projectConfig),zoom:projectConfig.zoom,tracking_motion:projectConfig.tracking_motion,show_subtitles:projectConfig.subtitles,title_corners:projectConfig.title_corners,resolution:projectConfig.resolution,mute_words:projectConfig.mute_words,mute_sound:projectConfig.mute_sound});
  if(selected){applyProjectToEditor();saveCurrent();if($('framing').value==='stack')loadStackPath().catch(e=>say(e.message));else if($('auto_follow').checked)prepareTracking().catch(e=>say(e.message));else paint();}
 }));
 // Editor changes to these options also become the project's preference.
-const EDITOR_TO_PROJECT={framing:'framing',zoom:'zoom',tracking_motion:'tracking_motion',show_subtitles:'subtitles',title_corners:'title_corners',auto_follow:'tracking',resolution:'resolution'};
+const EDITOR_TO_PROJECT={framing:'framing',zoom:'zoom',tracking_motion:'tracking_motion',show_subtitles:'subtitles',title_corners:'title_corners',auto_follow:'tracking',resolution:'resolution',mute_words:'mute_words',mute_sound:'mute_sound'};
 for(const [id,keyName] of Object.entries(EDITOR_TO_PROJECT))$(id).addEventListener('change',()=>{
  projectConfig[keyName]=CHECKS.includes(id)?$(id).checked:id==='resolution'?Number($(id).value):$(id).value;
  // Choosing another format by hand for a stream video means: stop switching to «Cámara + juego» automatically.
@@ -655,3 +656,21 @@ function dropStack(){
  if($('framing').value==='stack'){$('framing').value=fallback;saveCurrent();paint();}
  try{placeTitle();}catch{}
 }
+
+// «Silenciar malas palabras» in the editor preview: the video is muted during each bad word of the clip, like the MP4.
+let muteRanges=[],muteKey='',muteVolume=null;
+async function loadMuteRanges(){
+ if(!job||!selected||!$('mute_words').checked){muteRanges=[];muteKey='';return;}
+ const s=Number($('start').value),e=Number($('end').value),k=`${job.id}:${s}:${e}`;if(k===muteKey)return;muteKey=k;
+ try{muteRanges=(await(await request(`/api/jobs/${job.id}/mute-ranges`,jsonOptions({start:s,end:e}))).json()).ranges||[];}catch{muteRanges=[];}
+}
+function applyMute(){
+ const v=$('video');if(!v)return requestAnimationFrame(applyMute);
+ const on=$('mute_words').checked&&muteRanges.length;const t=v.currentTime-Number($('start').value||0);
+ const inside=on&&muteRanges.some(([a,b])=>t>=a&&t<=b);
+ if(inside&&muteVolume===null){muteVolume=v.volume;v.volume=0;}else if(!inside&&muteVolume!==null){v.volume=muteVolume;muteVolume=null;}
+ requestAnimationFrame(applyMute);
+}
+requestAnimationFrame(applyMute);
+for(const id of ['mute_words','start','end'])$(id).addEventListener('change',()=>{muteKey='';loadMuteRanges();});
+setInterval(loadMuteRanges,1500);

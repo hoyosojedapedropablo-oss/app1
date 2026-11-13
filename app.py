@@ -18,6 +18,7 @@ capabilities.enable_cuda_libraries()
 ROOT=Path(__file__).parent
 DATA=ROOT/'data'; DATA.mkdir(exist_ok=True)
 import incidents as _incidents; _incidents.FILE=DATA/'incidents.jsonl'
+import profanity as _profanity; _profanity.FILE=DATA/'profanity.json'
 os.environ.setdefault('HF_HOME',str(DATA/'models'))
 app=FastAPI(title='Clip Studio')
 app.mount('/static',StaticFiles(directory=ROOT/'static'),name='static')
@@ -591,6 +592,8 @@ class Export(BaseModel):
  game_follow:bool=True
  resolution:Literal[1080,1440]=1080
  preview:bool=False               # «Comprobar MP4»: not an export, not recorded in the library
+ mute_words:bool=False            # «Silenciar malas palabras» (the list is in Configuración)
+ mute_sound:Literal['silence','beep']='silence'
 
 def stamp(seconds):
  c=round(max(0,seconds)*100); return f'{c//360000}:{c//6000%60:02}:{c//100%60:02}.{c%100:02}'
@@ -603,8 +606,14 @@ def caption_cues(opts,transcript):
   duration=opts.end-opts.start
   if any(c['end']>duration+.001 for c in cues):raise ValueError('Un subtítulo termina fuera del clip.')
   if any(a['end']>b['start']+.001 for a,b in zip(cues,cues[1:])):raise ValueError('Los subtítulos no deben solaparse y deben estar ordenados.')
-  return cues
- return make_cues(transcript,opts.start,opts.end,opts.subtitles)
+ else:cues=make_cues(transcript,opts.start,opts.end,opts.subtitles)
+ if getattr(opts,'mute_words',False):
+  config=_profanity.load();cues=[{**c,'text':_profanity.censor_text(c['text'],config)} for c in cues]
+ return cues
+
+def mute_ranges(transcript,start,end):
+ """Where the bad words of [start, end) are, relative to start (the transcript's words carry their own times)."""
+ return _profanity.find([w for s in transcript or [] for w in s.get('words',[])],start,end)
 
 TRACKING={}
 tracking_pool=ThreadPoolExecutor(max_workers=1)
@@ -781,7 +790,11 @@ def export(ident:str,opts:Export):
   last='v2'
  if opts.resolution==1440:
   graph.append(f'[{last}]scale=1440:2560:flags=lanczos[vbig]');last='vbig'
- args+=['-filter_complex',';'.join(graph),'-map',f'[{last}]','-map','0:a?']
+ audio='0:a?'
+ if opts.mute_words:
+  part=_profanity.audio_filter(mute_ranges(JOBS[ident].get('transcript',[]),opts.start,opts.end),opts.mute_sound)
+  if part:graph.append(part);audio='[aout]'
+ args+=['-filter_complex',';'.join(graph),'-map',f'[{last}]','-map',audio]
  args+=['-t',str(opts.end-opts.start),'-r',str(JOBS[ident].get('fps',30)),'-fps_mode','cfr','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-movflags','+faststart',str(output)]
  export_env=None
  if os.name!='nt':
@@ -836,8 +849,8 @@ def encode(args,cwd=None,env=None):
 
 # "Configura tus clips": per-project preferences. New projects get the new defaults; projects saved before this
 # feature keep the behaviour they had (full 9:16 crop, square titles, no automatic tracking).
-CLIP_DEFAULTS=dict(framing='zoom',zoom='balanced',tracking=True,tracking_motion='balanced',subtitles=True,title_corners='rounded',auto_stack=True,resolution=1080)
-LEGACY_CLIP_SETTINGS=dict(framing='crop',zoom='balanced',tracking=False,tracking_motion='balanced',subtitles=True,title_corners='square',auto_stack=False,resolution=1080)
+CLIP_DEFAULTS=dict(framing='zoom',zoom='balanced',tracking=True,tracking_motion='balanced',subtitles=True,title_corners='rounded',auto_stack=True,resolution=1080,mute_words=False,mute_sound='silence')
+LEGACY_CLIP_SETTINGS=dict(framing='crop',zoom='balanced',tracking=False,tracking_motion='balanced',subtitles=True,title_corners='square',auto_stack=False,resolution=1080,mute_words=False,mute_sound='silence')
 
 class ClipSettings(BaseModel):
  framing:Literal['zoom','crop','fit','stack']='zoom'
@@ -848,6 +861,8 @@ class ClipSettings(BaseModel):
  tracking_motion:Literal['smooth','balanced','fast']='balanced'
  subtitles:bool=True
  title_corners:Literal['rounded','square']='rounded'
+ mute_words:bool=False            # off unless the user turns it on (per project / live session)
+ mute_sound:Literal['silence','beep']='silence'
 
 def clip_settings(job):
  return {**LEGACY_CLIP_SETTINGS,**job['clip_settings']} if job.get('clip_settings') else dict(LEGACY_CLIP_SETTINGS,legacy=True)
@@ -1348,6 +1363,27 @@ def start_streamer_checks():
  if os.environ.get('CLIPSTUDIO_NO_STREAMER_CHECKS')!='1':
   threading.Thread(target=streamers_loop,daemon=True).start();threading.Thread(target=refresh_live_layouts,daemon=True).start()
 
+class MuteInput(BaseModel):
+ start:float=Field(ge=0);end:float=Field(gt=0)
+
+@app.post('/api/jobs/{ident}/mute-ranges')
+def job_mute_ranges(ident:str,opts:MuteInput):
+ """Bad words of a clip (seconds from its start): the editor mutes them while previewing."""
+ if ident not in JOBS:raise HTTPException(404)
+ return dict(ranges=mute_ranges(JOBS[ident].get('transcript',[]),opts.start,opts.end))
+
+class ProfanityInput(BaseModel):
+ on:dict[str,bool]=Field(default_factory=dict)
+ custom:list[str]=Field(default_factory=list,max_length=200)
+
+@app.get('/api/profanity')
+def profanity_list():
+ return _profanity.load()
+
+@app.put('/api/profanity')
+def profanity_save(values:ProfanityInput):
+ return _profanity.save(values.on,values.custom)
+
 @app.get('/api/incidents')
 def incidents_list(hours:float=24):
  """Failures of the steps that decide how a clip looks, grouped (the app shows a warning while they keep happening)."""
@@ -1700,6 +1736,19 @@ def clip_look(cid):
  ov=spec['overlay'];panels=layout.panels(ov) if ov else None
  return r,spec,ov,panels,title_position(spec['framing'],spec['zoom'],panels,spec['edits'].get('title_y'),spec['edits'].get('title_manual'),bar=letterbox(spec['source'])['top'])
 
+def preview_mute(r,spec,start,end):
+ """Bad-word ranges for a library preview when its project (or live session) has «Silenciar malas palabras» on."""
+ try:
+  if r['project_id'] and r['project_id'] in JOBS:
+   job=JOBS[r['project_id']];settings=clip_settings(job);edits=spec['edits']
+   if not edits.get('mute_words',settings.get('mute_words')):return [],'silence'
+   return mute_ranges(job.get('transcript',[]),start,end),edits.get('mute_sound',settings.get('mute_sound','silence'))
+  session=LIVE.get(r['session_id']);settings=(session.clip_settings if session else None) or {}
+  if not session or not settings.get('mute_words'):return [],'silence'
+  return mute_ranges(session.moment_transcript(session.moment(r['clip_ref'])),start,end),settings.get('mute_sound','silence')
+ except Exception as e:
+  _incidents.record('preview',e,clip=r.get('id'));return [],'silence'
+
 _previews=threading.Lock()
 @app.get('/api/library/{cid}/preview.mp4')
 def library_preview(cid:str):
@@ -1718,7 +1767,8 @@ def library_preview(cid:str):
   try:followed=follow_path(spec,compute=True)
   except Exception as e:logging.getLogger('uvicorn.error').warning('Preview tracking failed (%s): %s',cid,e)
  follow_sig=followed and [followed[1]['person'],followed[1]['motion'],round(float(np.mean(followed[1]['x'])),1)]
- sig=hashlib.sha256(json.dumps([2,spec['title'],spec['framing'],spec['zoom'],title_y,spec['corners'],ov and [ov[k] for k in 'xywh'],job_start,job_end,follow_sig]).encode()).hexdigest()[:10]
+ mute,mute_sound=preview_mute(r,spec,job_start,job_end)
+ sig=hashlib.sha256(json.dumps([2,spec['title'],spec['framing'],spec['zoom'],title_y,spec['corners'],ov and [ov[k] for k in 'xywh'],job_start,job_end,follow_sig,mute,mute_sound]).encode()).hexdigest()[:10]
  target=DATA/'previews'/f"{cid.replace(':','_')}-{sig}.mp4";target.parent.mkdir(exist_ok=True)
  if not target.exists():
   with _previews, tempfile.TemporaryDirectory() as tmp:
@@ -1736,8 +1786,12 @@ def library_preview(cid:str):
      image.save(Path(tmp)/'title.png');args+=['-loop','1','-i',str(Path(tmp)/'title.png')]
      graph+=f";[b][1:v]overlay=x=W*{float(edits.get('title_x',50))/100}-w/2:y=H*{float(title_y)/100}-h/2:shortest=1[t]";last='t'
     graph+=f';[{last}]scale=360:640:flags=bicubic,fps=24[o]'
+    audio='0:a?'
+    if mute:
+     part=_profanity.audio_filter(mute,mute_sound)
+     if part:graph+=';'+part;audio='[aout]'
     out=Path(tmp)/'p.mp4'
-    run=subprocess.run(args+['-filter_complex',graph,'-map','[o]','-map','0:a?','-c:v','libx264','-preset','veryfast','-crf','28','-pix_fmt','yuv420p','-c:a','aac','-b:a','96k','-movflags','+faststart','-t',f'{job_end-job_start:.2f}',str(out)],
+    run=subprocess.run(args+['-filter_complex',graph,'-map','[o]','-map',audio,'-c:v','libx264','-preset','veryfast','-crf','28','-pix_fmt','yuv420p','-c:a','aac','-b:a','96k','-movflags','+faststart','-t',f'{job_end-job_start:.2f}',str(out)],
                        capture_output=True,timeout=240,cwd=tmp,creationflags=0x00004000 if os.name=='nt' else 0)
     if run.returncode or not out.exists():raise HTTPException(500,'No se pudo preparar la vista previa.')
     os.replace(out,target)
@@ -1765,7 +1819,8 @@ def library_export(cid:str,item:LibraryExport):
  settings=clip_settings(job)
  base=dict(start=clip['start'],end=clip['end'],title=clip.get('title') or '',subtitles=clip.get('text') or '',clip_id=ref,
            framing=spec['framing'],zoom=spec['zoom'],title_corners=spec['corners'],show_subtitles=bool(settings.get('subtitles',True)),
-           caption_y=85 if spec['framing']=='stack' else 81,tracking_motion=settings.get('tracking_motion','balanced'))
+           caption_y=85 if spec['framing']=='stack' else 81,tracking_motion=settings.get('tracking_motion','balanced'),
+           mute_words=bool(settings.get('mute_words')),mute_sound=settings.get('mute_sound','silence'))
  values={**base,**{k:v for k,v in edits.items() if k in Export.model_fields},'title_y':title_y,'resolution':item.resolution,'preview':False}
  if values.get('framing')=='stack' and not ov:values['framing']='zoom'
  import tracking      # face tracking on unless turned off for the clip; computed now when the editor never did it
