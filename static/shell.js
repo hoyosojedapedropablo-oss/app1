@@ -947,14 +947,14 @@ function paintSpotlight(s) {
       h('div', { class: 'acts' }, h('button', { class: 'btn primary', type: 'button', text: 'Editar y publicar', onclick: () => openMoment(s, best) }),
         h('button', { class: 'btn ghost', type: 'button', text: '✓ Ya lo publiqué', onclick: () => hideSpot(s, best, true) })))));
 }
-// Score badge: the note at a glance. 85+ is on fire (post it now), then rocket, thumbs up and «flojo».
+// Score badge: the note at a glance. 85+ is on fire (post it now), 70+ rocket, 55+ «publicable», then «flojo» (E-20).
 const EMOJI = (n) => `/static/img/emoji/${n}.png`;
 const KIND_EMOJI = { humor: ['laugh', 'Humor'], suspenso: ['eyes', 'Suspenso'], 'polémica': ['pepper', 'Polémica'], conflicto: ['boxing', 'Conflicto'] };
 function scoreTier(score) {
   const n = Math.round(score || 0);
   if (n >= 85) return { cls: 'fire', icon: 'fire', label: '¡Súbelo ya!' };
-  if (n >= 75) return { cls: 'great', icon: 'rocket', label: 'Muy bueno' };
-  if (n >= 60) return { cls: 'good', icon: 'thumbs', label: 'Bueno' };
+  if (n >= 70) return { cls: 'great', icon: 'rocket', label: 'Muy bueno' };
+  if (n >= 55) return { cls: 'good', icon: 'thumbs', label: 'Publicable' };
   return { cls: 'weak', icon: 'zzz', label: 'Flojo' };
 }
 function scoreBadge(score, kind, compact) {
@@ -981,6 +981,7 @@ function momentCard(s, m) {
     onclick: () => { picked ? liveUI.picked.delete(m.id) : liveUI.picked.add(m.id); paintLiveMoments(); },
     onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); card.click(); } } }, box,
     h('b', { class: 't', text: m.title }), m.score != null ? scoreBadge(m.score, m.viral_kind) : '', h('span', { class: 'muted', text: `${m.detected_at} · ${m.status === 'opened' ? 'Abierto en el editor' : 'Listo'}` }),
+    m.reasons?.length ? h('span', { class: 'why reasons', text: m.reasons.join(' · ') }) : '',
     m.analysis?.motivo ? h('span', { class: 'why', text: m.analysis.motivo }) : '',
     h('div', { class: 'acts' }, h('button', { class: 'btn primary', type: 'button', onclick: (e) => { e.stopPropagation(); openMoment(s, m); } }, svg(ICON_EDIT, 16), 'Editar'),
       h('button', { class: 'btn ghost discard', type: 'button', onclick: (e) => { e.stopPropagation(); discardMoment(s, m); } }, svg(ICON_X, 15), 'Descartar')));
@@ -1191,14 +1192,16 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === ' ' && !(e.target instanceof HTMLButtonElement)) { e.preventDefault(); $('play').click(); }
   else if (e.key === '[' || e.key === ']') { e.preventDefault(); stepEditorClip(e.key === ']' ? 1 : -1); }
 });
-// Moments list: search, filters and a mark on the clips you already edited.
-const momentFilter = { q: '', kind: 'all' };
+// Moments list: search, filters and a mark on the clips you already edited. «Los mejores» is the default view; filler
+// kept only to cover the video waits in «Para revisar» (E-20). Clips of older analyses have no section: they count as best.
+const momentFilter = { q: '', kind: 'best' };
+const inReview = (c) => c.section === 'review';
 function buildMomentsToolbar() {
   if ($('momentTools')) return;
   const q = h('input', { id: 'momentSearch', type: 'search', placeholder: 'Buscar momento…', 'aria-label': 'Buscar momento' });
   q.addEventListener('input', () => { momentFilter.q = q.value.trim().toLowerCase(); filterMoments(); });
   const chip = (kind, text) => h('button', { type: 'button', class: 'chipbtn' + (momentFilter.kind === kind ? ' on' : ''), 'data-kind': kind, text, onclick: (e) => { momentFilter.kind = kind; for (const b of e.currentTarget.parentElement.children) b.classList.toggle('on', b === e.currentTarget); filterMoments(); } });
-  $('clips').before(h('div', { id: 'momentTools', class: 'moment-tools' }, q, h('div', { class: 'moment-chips' }, chip('all', 'Todos'), chip('top', '★ Potencial'), chip('edited', 'Editados'), chip('todo', 'Sin editar'))));
+  $('clips').before(h('div', { id: 'momentTools', class: 'moment-tools' }, q, h('div', { class: 'moment-chips' }, chip('best', 'Los mejores'), chip('review', 'Para revisar'), chip('all', 'Todos'), chip('edited', 'Editados'), chip('todo', 'Sin editar'))));
 }
 function isEdited(id) { const e = job?.clip_edits?.[id]; return !!e && !e.partial; }
 function filterMoments() {
@@ -1206,15 +1209,18 @@ function filterMoments() {
   for (const el of document.querySelectorAll('#clips .clip')) {
     const c = job?.clips?.find((x) => x.id === el.dataset.id); if (!c) continue;
     const text = `${c.title} ${c.reason || ''} ${c.category || ''}`.toLowerCase();
-    const ok = (!momentFilter.q || text.includes(momentFilter.q)) && (momentFilter.kind === 'all' || (momentFilter.kind === 'top' && c.potential) || (momentFilter.kind === 'edited' && isEdited(c.id)) || (momentFilter.kind === 'todo' && !isEdited(c.id)));
+    const ok = (!momentFilter.q || text.includes(momentFilter.q)) && (momentFilter.kind === 'all' || (momentFilter.kind === 'best' && !inReview(c)) || (momentFilter.kind === 'review' && inReview(c)) || (momentFilter.kind === 'top' && c.potential) || (momentFilter.kind === 'edited' && isEdited(c.id)) || (momentFilter.kind === 'todo' && !isEdited(c.id)));
     el.hidden = !ok; if (ok) shown++;
     el.classList.toggle('is-edited', isEdited(c.id));
     if (c.score != null && !el.querySelector('.score-bar')) {
       el.append(h('span', { class: 'score-bar ' + scoreTier(c.score).cls, 'aria-hidden': 'true' }, h('i', { style: `width:${Math.max(4, Math.min(100, c.score))}%` })));
-      const old = el.querySelector('.score'); if (old) old.replaceWith(h('div', { class: 'score' }, scoreBadge(c.score, c.viral_kind), c.analysis?.motivo ? h('span', { class: 'why', text: c.analysis.motivo }) : ''));
+      const old = el.querySelector('.score'); if (old) old.replaceWith(h('div', { class: 'score' }, scoreBadge(c.score, c.viral_kind),
+        c.reasons?.length ? h('span', { class: 'why reasons', text: c.reasons.join(' · ') }) : '', c.analysis?.motivo ? h('span', { class: 'why', text: c.analysis.motivo }) : ''));
       el.classList.toggle('on-fire', c.score >= 85);
     }
   }
+  const review = (job?.clips || []).filter(inReview).length, rb = document.querySelector('#momentTools [data-kind="review"]');
+  if (rb) rb.textContent = review ? `Para revisar (${review})` : 'Para revisar';
   if ($('empty') && job?.clips?.length) $('empty').textContent = `${shown} de ${job.clips.length} momentos · rango ${job.analysis_range?.minimum ?? ''}–${job.analysis_range?.maximum ?? ''} s`;
 }
 // Sliders show their value next to their name.

@@ -575,8 +575,15 @@ class LiveSession:
                 verdict = self._judge(text)
                 if verdict and verdict['score'] < __import__('judge').DROP_BELOW:
                     self.note(f'Se descartó un momento flojo (nota {verdict["score"]}): {verdict["analysis"].get("motivo") or ""}'[:200]); continue
-                if verdict: clip = {**clip, 'score': verdict['score'], 'verdict': verdict['verdict'], 'viral_kind': verdict['kind'],
-                                    'analysis': verdict['analysis'], 'marks': verdict['marks']}
+                if verdict:
+                    # Final note: the judge plus the moment's own signals (starts talking at once, rhythm, pauses).
+                    import scoring
+                    rel = [{'text': w['text'], 'start': w['start'] - clip['start'], 'end': w['end'] - clip['start']}
+                           for s_ in window for w in s_.get('words', []) if clip['start'] <= w['start'] < clip['end']]
+                    sig = scoring.signals(rel, clip['end'] - clip['start'])
+                    clip = {**clip, 'score': scoring.base(verdict['score'], sig['score'], live=True), 'judge_score': verdict['score'],
+                            'signals': sig, 'reasons': scoring.reasons(verdict.get('marks'), sig), 'verdict': verdict['verdict'],
+                            'viral_kind': verdict['kind'], 'analysis': verdict['analysis'], 'marks': verdict['marks']}
                 clip = {**clip, **self._viral_title(text, clip)}
             self._add_moment({**clip, 'text': text, 'source': clip.get('source', source)})
 
@@ -636,6 +643,7 @@ class LiveSession:
                   'score': clip.get('score'), 'category': clip.get('category', ''), 'reason': clip.get('reason', ''),
                   'evidence': clip.get('evidence', ''), 'claim': clip.get('claim', ''), 'source': clip.get('source', ''), 'cut_at_topic': bool(clip.get('cut_at_topic')),
                   'verdict': clip.get('verdict', ''), 'viral_kind': clip.get('viral_kind', ''), 'analysis': clip.get('analysis') or {}, 'marks': clip.get('marks') or {},
+                  'judge_score': clip.get('judge_score'), 'reasons': clip.get('reasons') or [], 'signals': clip.get('signals') or {},
                   'detected_at': datetime.now().strftime('%H:%M:%S'), 'status': 'rendering', 'job_id': None}
         with self.lock: self.moments.append(moment)
         self.note(f'Momento detectado: {moment["title"]}')

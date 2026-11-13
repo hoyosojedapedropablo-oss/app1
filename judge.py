@@ -17,16 +17,20 @@ SYSTEM = '\n'.join([
     'Luego puntúa de 0 a 10: gancho (los primeros segundos atrapan), desenlace (hay remate, respuesta o consecuencia), '
     'humor, suspenso, polemica (una opinión fuerte, una acusación, algo que divide a la gente), emocion y conflicto '
     '(dos personas enfrentadas).',
-    'Sé estricto y realista, y usa toda la escala: la mayoría de momentos de un directo son normales (veredicto "flojo", '
-    'notas de 3 a 6); los que tienen una situación clara con gracia, tensión o una opinión son "bueno" (6 a 8); solo '
-    'uno de cada diez merece "subir_ya" (8 a 10).',
+    'Los clips que recibes YA fueron preseleccionados entre los mejores momentos del video o del directo. No los compares '
+    'con lo más viral de todo TikTok: decide si un clipero con experiencia lo publicaría en su cuenta. Usa toda la escala '
+    'con honestidad: "subir_ya" (8 a 10) si tiene gancho y remate claros y genera reacción; "bueno" (6 a 8) si funciona '
+    'y alguien lo vería completo; "publicable" (5 a 6) si se entiende solo y tiene un punto de interés aunque no destaque; '
+    '"flojo" (3 a 5) si le falta gancho o remate y pocos lo terminarían de ver.',
     '"relleno" y "descartar" son SOLO para lo que no tiene contenido: saludos, silencios, ruido, frases sueltas sin '
-    'sentido o algo que no se entiende. Una charla con información, una pregunta o un pedido a los fans es "flojo", no '
+    'sentido o algo que no se entiende. Una charla con información, una pregunta o un pedido a los fans es como mínimo "flojo", no '
     'relleno.',
     'Ejemplos de calibración (no copies su contenido):',
     '  - Un streamer acusa en directo a otro de haberle robado el torneo y el otro le responde furioso -> polemica 9, '
     'conflicto 9, gancho 8, desenlace 8, veredicto subir_ya.',
     '  - Alguien cuenta un chiste que se entiende solo y todos explotan de risa -> humor 8, gancho 7, desenlace 8, bueno.',
+    '  - Un streamer da su opinión clara sobre un tema conocido, con una frase que se puede citar -> polemica 6, gancho 6, '
+    'desenlace 5, publicable.',
     '  - Dos personas comentan qué van a cocinar, sin tensión -> todo 1-3, relleno, descartar.',
     '  - Alguien pide a sus fans que donen, sin reacción ni gracia -> gancho 4, desenlace 2, flojo.',
 ])
@@ -38,11 +42,15 @@ SCHEMA = {'type': 'object', 'properties': {
     'humor': {'type': 'integer', 'minimum': 0, 'maximum': 10}, 'suspenso': {'type': 'integer', 'minimum': 0, 'maximum': 10},
     'polemica': {'type': 'integer', 'minimum': 0, 'maximum': 10}, 'emocion': {'type': 'integer', 'minimum': 0, 'maximum': 10},
     'conflicto': {'type': 'integer', 'minimum': 0, 'maximum': 10}, 'relleno': {'type': 'boolean'},
-    'veredicto': {'type': 'string', 'enum': ['subir_ya', 'bueno', 'flojo', 'descartar']}, 'motivo': {'type': 'string'}},
+    'veredicto': {'type': 'string', 'enum': ['subir_ya', 'bueno', 'publicable', 'flojo', 'descartar']}, 'motivo': {'type': 'string'}},
     'required': ['quien', 'a_quien', 'que_pasa', 'por_que', 'despues', 'tiene_sentido', 'se_entiende_solo', 'tipo', 'gancho',
                  'desenlace', 'humor', 'suspenso', 'polemica', 'emocion', 'conflicto', 'relleno', 'veredicto', 'motivo']}
-VERDICT_RANGE = {'subir_ya': (85, 100), 'bueno': (65, 84), 'flojo': (40, 64), 'descartar': (0, 39)}
+# Recalibrated (Nov 2026): the old scale told the model that most moments are «flojo» and boxed them at 40-64, so the
+# clips of a whole video averaged about 40 and the tool looked weak. The clips reaching the judge are already the best of
+# their video; the question now is whether an experienced clipper would post them.
+VERDICT_RANGE = {'subir_ya': (85, 99), 'bueno': (70, 84), 'publicable': (55, 69), 'flojo': (35, 54), 'descartar': (0, 34)}
 DROP_BELOW = 35          # live moments below this (filler) are not offered
+SPREAD = (15, 90)        # raw marks mapped across each verdict's range (bottom, top)
 
 
 def score(v):
@@ -51,11 +59,14 @@ def score(v):
     val = lambda k: max(0, min(10, int(v.get(k) or 0)))
     tension = sorted((val(k) for k in ('humor', 'suspenso', 'polemica', 'emocion', 'conflicto')), reverse=True)
     raw = 10 * (.28 * val('gancho') + .24 * val('desenlace') + .34 * tension[0] + .14 * tension[1])
-    if not v.get('se_entiende_solo', True): raw -= 12
-    if not v.get('tiene_sentido', True): raw -= 15
+    if not v.get('se_entiende_solo', True): raw -= 8
+    if not v.get('tiene_sentido', True): raw -= 12
     if v.get('relleno'): raw = min(raw, 30)
-    lo, hi = VERDICT_RANGE.get(v.get('veredicto'), (0, 100))
-    return int(round(max(lo, min(hi, raw))))
+    if v.get('veredicto') not in VERDICT_RANGE: return int(round(max(0, min(100, raw))))
+    # Inside its verdict's range the note follows the marks (raw 15 -> bottom, 90 -> top). Clamping raw to the range
+    # put 9 of 11 «publicable» clips of a real video at exactly 55: the judge could not tell a strong one from a weak one.
+    lo, hi = VERDICT_RANGE[v['veredicto']]
+    return int(round(lo + (hi - lo) * max(0., min(1., (raw - SPREAD[0]) / (SPREAD[1] - SPREAD[0])))))
 
 
 def judge(text, speaker='', context='', names=(), complete=None, cancel=None):

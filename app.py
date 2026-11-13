@@ -380,14 +380,20 @@ def analyze(ident,options):
   clips=complete_coverage(clips,transcript,job['duration'],options.minimum,options.maximum,completion,speaker=options.speaker,context=options.context,profile=profile,cancel=event,on_progress=title_progress,topics=topics)
   job['timings']['titles_s']=round(time.monotonic()-started,1)
   if options.engine=='gpu':
-   # The viral judge gives the strongest clips an honest note (who says what to whom, why, what happens after).
-   import judge
-   top=sorted(clips,key=lambda c:-(c.get('score') or 0))[:15]
+   # The viral judge gives every proposed clip an honest note (who says what to whom, why, what happens after), with
+   # the names of the video so a misheard name does not confuse it. The AI's own picks go first, then coverage clips:
+   # when the AI marks no moment the whole video is coverage, and leaving it unjudged emptied «Los mejores» (E-20c).
+   import judge,scoring
+   names=video_names(job,options)
+   top=scoring.judge_order(clips,JUDGE_LIMIT)
    for i,c in enumerate(top):
     if event.is_set():break
-    job.update(message=f'Revisando el potencial viral de los mejores clips · {i+1} de {len(top)}')
-    v=judge.judge(c.get('text',''),speaker=options.speaker,context=options.context)
-    if v:c.update(score=v['score'],verdict=v['verdict'],viral_kind=v['kind'],analysis=v['analysis'],marks=v['marks'],potential=v['score']>=75)
+    job.update(message=f'Revisando el potencial viral de los clips · {i+1} de {len(top)}')
+    v=judge.judge(c.get('text',''),speaker=options.speaker,context=options.context,names=names)
+    if v:c.update(score=v['score'],verdict=v['verdict'],viral_kind=v['kind'],analysis=v['analysis'],marks=v['marks'])
+  # Final note: judge + the clip's own signals + its place in this video; best first, filler in «Para revisar» (E-20).
+  import scoring
+  clips=scoring.rank_video(clips,lambda c:clip_words(job.get('transcript',[]),c['start'],c['end']))
   job['topics']=topics
   job['coverage_percent']=round(100*covered(clips)/job['duration'],2)
   message=f'{len(clips)} clips · cobertura {job["coverage_percent"]}% del video. Mayor potencial identifica los destacados; el resto queda para tu revisión.' if clips else 'La selección quedó vacía tras la revisión. Esto no demuestra que el video no tenga potencial. Revisa la transcripción y añade contexto para volver a analizar sin transcribir de nuevo.'
@@ -402,6 +408,20 @@ def analyze(ident,options):
  except cloud_ai.AnalysisCancelled:job.update(status='cancelled',message='Análisis cancelado. Puedes reutilizar la transcripción completa si ya se guardó.')
  except Exception as e: job.update(status='error',message=str(e))
  finally:save_job(job)
+
+JUDGE_LIMIT=40   # clips the viral judge reviews per video (about 3-6 s each on the local GPU)
+
+def video_names(job,options):
+ """People and words of this video for the judge: the speaker the user named, the channel and the capitalised words of
+ the imported video's title (the transcriber can mishear them)."""
+ import re
+ yt=job.get('youtube') or {};live_info=job.get('live') or {}
+ found=[options.speaker,yt.get('channel'),live_info.get('channel')]
+ found+=re.findall(r'\b[A-ZÁÉÍÓÚÑ][\wáéíóúñ]{2,}',' '.join(filter(None,[yt.get('title'),live_info.get('title')])))
+ out,seen=[],set()
+ for name in found:
+  if name and name.lower() not in seen:seen.add(name.lower());out.append(name)
+ return out[:30]
 
 @app.post('/api/jobs/{ident}/analyze')
 def start(ident:str,options:Analysis):
