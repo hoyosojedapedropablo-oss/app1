@@ -90,6 +90,21 @@ class RankTests(unittest.TestCase):
         self.assertTrue(all(c['section'] == 'best' for c in out[:3]))       # «Los mejores» is never empty
         self.assertEqual(out[-1]['id'], 'c9'); self.assertEqual(out[-1]['section'], 'review')
 
+    def test_E20d_main_list_is_a_real_selection(self):
+        out = self.rank([clip(i, s) for i, s in enumerate([87, 86, 84, 78, 75, 74, 71, 68, 66, 64, 62, 61, 60, 60, 59, 59, 59, 7])])
+        best = [c for c in out if c['section'] == 'best']
+        self.assertLess(len(best), 14)                                       # from 55, 17 of 18 got in
+        self.assertGreaterEqual(len(best), 3)
+
+    def test_E20d_ordinary_talk_no_longer_maxes_the_signals(self):
+        ordinary = scoring.signals(talk(30, rate=2.2, first=.8, pause_at=12, pause=1.2), 30)
+        self.assertLess(ordinary['score'], 86)
+
+    def test_E20d_titles_lose_stuck_hashtags(self):
+        from intelligence import clean_title
+        self.assertEqual(clean_title('¿Quién controla el disparo? #ConfusiónEnElAsalto #Westcol', 'texto del clip'),
+                         '¿Quién controla el disparo?')
+
     def test_E20_place_in_the_video_never_turns_a_weak_clip_into_a_great_one(self):
         out = self.rank([clip(0, 30)])
         self.assertLess(out[0]['score'], scoring.POTENTIAL_FROM)

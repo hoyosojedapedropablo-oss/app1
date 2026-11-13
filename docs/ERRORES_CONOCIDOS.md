@@ -113,3 +113,7 @@ una prueba automática (entre comillas invertidas) que falla si el error vuelve.
   del Silencio Podcast»). Ahora el juez revisa primero lo que marcó la IA y después la cobertura, hasta 40 clips; solo
   queda en «Para revisar» lo que no se juzgó o lo que el juez llamó relleno. Guardas:
   `test_E20c_coverage_clips_are_judged_when_the_ai_marked_no_moment`, `test_E20c_judged_coverage_enters_the_ranking_and_filler_waits_in_review`
+- **E-20d (mismo video, con E-20c):** desde 55 entraban 17 de 18 clips a «Los mejores» y la pestaña no filtraba; las
+  señales daban 86-99 a casi todos y no ordenaban. Ahora «Los mejores» empieza en 65 (los 3 mejores siempre), las señales
+  son más exigentes y pesan 15 % (juez 70 %), y los títulos pierden los hashtags pegados. Guardas:
+  `test_E20d_main_list_is_a_real_selection`, `test_E20d_ordinary_talk_no_longer_maxes_the_signals`, `test_E20d_titles_lose_stuck_hashtags`

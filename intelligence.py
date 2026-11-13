@@ -92,6 +92,7 @@ def query_json(user,schema,quality="quality"):
 
 
 def clean_title(title,text):
+    title=re.sub(r'\s*#[^\s#]+','',title)      # E-20d: titles came with hashtags stuck on («#ConfusiónEnElAsalto»)
     title=re.sub(r'\s+',' ',title).strip(' "«»')
     if len(title)>80 or len(title.split())>14 or len(title)<8:return None
     if re.search(r'(caracteres? sobrantes?|límite de|opción \d|título:|titulo:)',title,re.I):return None
