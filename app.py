@@ -6,7 +6,7 @@ import numpy as np
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator, SecretStr
 from timeline import make_cues, clip_words
@@ -48,7 +48,14 @@ def decode_audio(path):
  return audio
 
 @app.get('/')
-def home(): return FileResponse(ROOT/'static/index.html',headers={'Cache-Control':'no-store'})
+def home():
+ # E-26: each script and style sheet is asked for with its own modification time, so an update reaches the browser
+ # without Ctrl + F5 (the hand-kept «?v=46» stayed the same when shell.js changed).
+ html=(ROOT/'static/index.html').read_text(encoding='utf-8')
+ for name in ('app.js','shell.js','style.css','theme.css'):
+  path=ROOT/'static'/name
+  if path.exists():html=re.sub(rf'/static/{re.escape(name)}\?v=[\w.]+',f'/static/{name}?v={int(path.stat().st_mtime)}',html)
+ return HTMLResponse(html,headers={'Cache-Control':'no-store'})
 
 def register_video(ident,path,name,*,max_duration=7200):
  info=probe(path);duration=float(info['format']['duration'])
@@ -393,9 +400,12 @@ def analyze(ident,options):
     job.update(message=f'Revisando el potencial viral de los clips · {i+1} de {len(top)}')
     v=judge.judge(c.get('text',''),speaker=options.speaker,context=options.context,names=names)
     if v:c.update(score=v['score'],verdict=v['verdict'],viral_kind=v['kind'],analysis=v['analysis'],marks=v['marks'])
+   # E-27: a per-clip title pass (E-26) was measured and withdrawn: +35-63 % analysis time and only 8 of 35 clips got a
+   # valid title from the 7B model. Better titles come from a better title model (tools/comparar_modelos_titulos.py).
   # Final note: judge + the clip's own signals + its place in this video; best first, filler in «Para revisar» (E-20).
   import scoring
   clips=scoring.rank_video(clips,lambda c:clip_words(job.get('transcript',[]),c['start'],c['end']))
+  clips=scoring.distinct_titles(clips)
   job['topics']=topics
   job['coverage_percent']=round(100*covered(clips)/job['duration'],2)
   message=f'{len(clips)} clips · cobertura {job["coverage_percent"]}% del video. Mayor potencial identifica los destacados; el resto queda para tu revisión.' if clips else 'La selección quedó vacía tras la revisión. Esto no demuestra que el video no tenga potencial. Revisa la transcripción y añade contexto para volver a analizar sin transcribir de nuevo.'

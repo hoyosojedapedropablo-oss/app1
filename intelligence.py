@@ -104,20 +104,38 @@ def copied_example(title):
     return any(SequenceMatcher(None,norm(title),norm(e)).ratio()>=.8 for e in OLD_EXAMPLES)
 
 
+ORDINARY_WORDS=set('''y o u e a de del la las el los en con sin por para que qué se su sus al lo le les un una unos unas
+es son fue era muy más tan como cómo cuando dónde quién quiénes por qué contra entre sobre hasta desde'''.split())
+
+
 def sentence_case(title,text):
     """E-24: «Entrenamiento Intenso: ¿Qué Tan Fuertes Se Hacen?» -> «Entrenamiento intenso: ¿qué tan fuertes se hacen?».
     Spanish titles capitalise the first word only; a word stays capitalised when the clip writes it so (a name) or it is
-    all capitals (an acronym). Only applied when most words are capitalised, so ordinary titles are left alone."""
+    all capitals (an acronym). E-26: applied to every stray capital, not only when most words have one («Desastre en el
+    Piso» -> «Desastre en el piso»); after «.!?» a new sentence keeps its capital, after «:» it does not."""
     tokens=title.split()
+    named=set(re.findall(r'\b([A-ZÁÉÍÓÚÑ][\wáéíóúñ]+)',text))
+    # Only an ordinary word loses its capital: one the clip says in lower case or a Spanish function word. A word the
+    # clip never says (often a misheard name: «Westcol» for «Uescol») keeps it.
+    lower_said=set(w for w in re.findall(r'\w+',text) if w.islower())
+    from viral import fold,sounds_said
     letters=[t for t in tokens if re.search(r'[A-Za-zÁÉÍÓÚÑáéíóúñ]',t)]
     caps=[t for t in letters if re.sub(r'^[¿¡«"(]+','',t)[:1].isupper()]
-    if len(letters)<3 or len(caps)<.7*len(letters):return title
-    named=set(re.findall(r'\b([A-ZÁÉÍÓÚÑ][\wáéíóúñ]+)',text))
+    title_case=len(letters)>=3 and len(caps)>=.7*len(letters)   # «Entrenamiento Intenso: ¿Qué Tan…»: every word goes
     out=[]
     for i,t in enumerate(tokens):
         lead=re.match(r'^[¿¡«"(]*',t).group();core=t[len(lead):];word=re.sub(r'\W+$','',core)
-        keep=i==0 or word in named or (word.isupper() and len(word)>1) or (out and re.search(r'[:.!?]$',out[-1]) and not lead)
+        plain=word.lower() in lower_said or word.lower() in ORDINARY_WORDS
+        heard=not plain and len(word)>=4 and sounds_said(fold(word),text,.7,joined=.6)    # a misheard name («Uescol») keeps it
+        keep=(i==0 or word in named or (word.isupper() and len(word)>1) or bool(out and re.search(r'[.!?]$',out[-1]))
+              or heard or (not title_case and not plain))
         out.append(t if keep or not core else lead+core[:1].lower()+core[1:])
+    # E-27: a capital before a kept name stays when the clip writes the two together: «Más Allá del Silencio», not «más Allá».
+    for i in range(len(out)-2,0,-1):
+        nxt=re.sub(r'^[¿¡«"(]+','',out[i+1])
+        pair=re.sub(r'^[¿¡«"(]+','',tokens[i])+' '+re.sub(r'\W+$','',nxt)
+        if tokens[i][:1].isupper() and out[i][:1].islower() and nxt[:1].isupper() and pair in text:
+            out[i]=tokens[i]
     return ' '.join(out)
 
 
@@ -136,20 +154,46 @@ def clean_title(title,text):
     # E-25: «¡Va, va, va!» says nothing; «la vida de un hablante» reads like a machine.
     if len({w for w in re.findall(r'\w{4,}',title.lower())})<2:return None
     if re.search(r'\bhablantes?\b',title,re.I):return None
+    if GENERIC.search(title.strip(' ¿?¡!')) or only_abstract(title):return None          # E-26: «Descripción de la misión», «Entrenamiento diferenciado»
     if text.strip() and unsaid_name(title,text):return None
     return title
+
+
+# Capitalised at the start of a title but not names (the check above would otherwise ask the clip to say them).
+COMMON_WORDS=set('''asi entrenamiento desastre recorrido tiro mision preparacion descripcion historia vida carcel momento
+reaccion respuesta pregunta verdad secreto miedo error problema sorpresa final primera primer nadie todos cuando donde
+quien porque nunca siempre ahora antes despues hoy esto este esta habla dice cuenta revela confiesa explica'''.split())
+# E-27: titles made only of abstract nouns and adjectives («Humor y entusiasmo», «Persecución policial y tensión»).
+ABSTRACT=set('''humor entusiasmo tension tensión emocion emoción reaccion reacción reacciones risas risa diversion diversión
+persecucion persecución accion acción adrenalina caos drama polemica polémica sorpresa nervios miedo intensidad momento
+momentos experiencia aventura reflexion reflexión confusion confusión'''.split())
+ADJECTIVE=re.compile(r'(al|ales|ico|ica|icos|icas|oso|osa|ivo|iva|ante|ente|ado|ada)$')
+
+
+def only_abstract(title):
+    content=[w for w in re.findall(r'\w+',title.lower()) if w not in ('y','e','de','la','el','en','con','del')]
+    return 0<len(content)<=4 and all(w in ABSTRACT or ADJECTIVE.search(w) for w in content) and any(w in ABSTRACT for w in content)
+
+
+GENERIC=re.compile(r'^(descripci[oó]n|preparaci[oó]n|explicaci[oó]n|introducci[oó]n|resumen|presentaci[oó]n|instrucciones)\b'
+                   r'|^(entrenamiento|ejercicio|conversaci[oó]n|charla|momento)( \w+){0,2}$',re.I)
 
 
 def unsaid_name(title,text):
     """E-25: a person's name in the title that nothing in the clip sounds like («Westcol reflexiona…» on a clip where
     the guest speaks). Misheard names still pass: «Westcol» for a clip that says «Uescol»."""
     from viral import fold,sounds_said,COMMON_CAPS
+    from viral import STOP,ORDINARY
     for m in re.finditer(r'\b([A-ZÁÉÍÓÚÑ][\wáéíóúñ]{3,})',title):
-        before=title[:m.start(1)].rstrip()
-        if not before or before[-1] in '.:!?¿¡«"|»':continue          # first word of a phrase, not necessarily a name
-        word=fold(m.group(1))
+        before=title[:m.start(1)].rstrip();word=fold(m.group(1))
+        # E-26: «Westcol: mi historia en la cárcel», on a clip where the guest speaks, passed because it opened the title.
+        # Without the video's names here, an opening word counts as a name only in the «Name: …» form; the per-clip titles
+        # (viral.grounded_title, which has the names) check every position.
+        opening=not before or before[-1] in '.:!?¿¡«"|»'
+        if opening and not title[m.end(1):].startswith(':'):continue
+        if opening and (len(word)<=4 or word in STOP or ORDINARY.search(word) or word in COMMON_WORDS):continue
         if word in COMMON_CAPS or word in fold(text):continue
-        if not sounds_said(word,text):return m.group(1)
+        if not sounds_said(word,text,.7,joined=.6):return m.group(1)          # E-26: at .6 «westcol» sounded like «estuvo»
     return None
 
 

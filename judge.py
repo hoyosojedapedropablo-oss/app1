@@ -11,6 +11,9 @@ import json
 SYSTEM = '\n'.join([
     'Eres el editor jefe de un equipo de cliperos virales en español (TikTok, Reels, Shorts). Recibes la transcripción '
     'automática de UN clip de un directo o video y decides, con criterio exigente, si merece publicarse.',
+    '"quien" es la persona que habla en el clip: su nombre si se dice en el clip o está en "nombres_del_directo" y suena '
+    'en el clip; si no, su papel (el entrevistado, el instructor, el streamer, el invitado). Nunca el título del video, el '
+    'nombre del canal ni el del programa.',
     'Antes de puntuar, respóndete en el JSON: ¿quién habla?, ¿a quién se lo dice?, ¿qué pasa exactamente?, ¿por qué lo '
     'dice o lo hace?, ¿qué pasa después (hay desenlace, reacción, respuesta)?, ¿tiene sentido?, ¿se entiende sin haber '
     'visto el resto del directo?',
@@ -69,6 +72,23 @@ def score(v):
     return int(round(lo + (hi - lo) * max(0., min(1., (raw - SPREAD[0]) / (SPREAD[1] - SPREAD[0])))))
 
 
+ROLES = ('el ', 'la ', 'los ', 'las ', 'un ', 'una ')
+
+
+def who(quien, text, context='', speaker=''):
+    """E-27: «quien» filled with words of the video title or the channel («Sobreviví», «ASÍ CONTRATAN», «Más Allá del
+    Silencio Podcast») made the title writer put a podcast's name on its guest. A role («el entrevistado») is kept; a name
+    is kept only when something in the clip sounds like it; otherwise it is left empty."""
+    import viral
+    q = str(quien or '').strip()
+    if not q or q.lower().startswith(ROLES) and q[:1].islower(): return q
+    if speaker and viral.fold(q) in viral.fold(speaker): return q           # the user named them, or the live channel
+    if q.isupper() and len(q) > 4: return ''                              # a shouted title, not a person
+    parts = [viral.fold(p) for p in viral.re.findall(r'\w{3,}', q)]
+    if parts and all(viral.sounds_said(p, text, .7, joined=.6) for p in parts): return q
+    return ''
+
+
 def judge(text, speaker='', context='', names=(), complete=None, cancel=None):
     """{'score', 'verdict', 'kind', 'analysis': {...}} for one clip, or None when the judge is not available."""
     if not text.strip(): return None
@@ -77,6 +97,7 @@ def judge(text, speaker='', context='', names=(), complete=None, cancel=None):
     except Exception: return None
     if not isinstance(v, dict) or 'veredicto' not in v: return None
     analysis = {k: v.get(k) for k in ('quien', 'a_quien', 'que_pasa', 'por_que', 'despues', 'motivo')}
+    analysis['quien'] = who(analysis.get('quien'), text, context, speaker)
     return {'score': score(v), 'verdict': v.get('veredicto'), 'kind': v.get('tipo') or '', 'analysis': analysis,
             'marks': {k: v.get(k) for k in ('gancho', 'desenlace', 'humor', 'suspenso', 'polemica', 'emocion', 'conflicto')}}
 
