@@ -50,6 +50,7 @@ SCHEMA = {'type': 'object', 'properties': {
 # their video; the question now is whether an experienced clipper would post them.
 VERDICT_RANGE = {'subir_ya': (85, 99), 'bueno': (70, 84), 'publicable': (55, 69), 'flojo': (35, 54), 'descartar': (0, 34)}
 DROP_BELOW = 35          # live moments below this (filler) are not offered
+SPREAD = (15, 90)        # raw marks mapped across each verdict's range (bottom, top)
 
 
 def score(v):
@@ -61,8 +62,11 @@ def score(v):
     if not v.get('se_entiende_solo', True): raw -= 8
     if not v.get('tiene_sentido', True): raw -= 12
     if v.get('relleno'): raw = min(raw, 30)
-    lo, hi = VERDICT_RANGE.get(v.get('veredicto'), (0, 100))
-    return int(round(max(lo, min(hi, raw))))
+    if v.get('veredicto') not in VERDICT_RANGE: return int(round(max(0, min(100, raw))))
+    # Inside its verdict's range the note follows the marks (raw 15 -> bottom, 90 -> top). Clamping raw to the range
+    # put 9 of 11 «publicable» clips of a real video at exactly 55: the judge could not tell a strong one from a weak one.
+    lo, hi = VERDICT_RANGE[v['veredicto']]
+    return int(round(lo + (hi - lo) * max(0., min(1., (raw - SPREAD[0]) / (SPREAD[1] - SPREAD[0])))))
 
 
 def judge(text, speaker='', context='', names=(), complete=None, cancel=None):

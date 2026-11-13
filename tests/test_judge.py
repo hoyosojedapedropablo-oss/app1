@@ -98,3 +98,15 @@ class LiveJudgeTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SpreadTests(unittest.TestCase):
+    def test_notes_spread_inside_a_verdict_instead_of_sticking_to_its_bottom(self):
+        """E-20b: 9 of 11 «publicable» clips of a real video got exactly 55 (raw clamped to the range)."""
+        notes = [judge.score(answers(gancho=g, desenlace=d, humor=h, polemica=0, conflicto=0, emocion=0, suspenso=0, veredicto='publicable'))
+                 for g, d, h in ((3, 2, 3), (5, 4, 5), (6, 6, 6), (8, 7, 8))]
+        lo, hi = judge.VERDICT_RANGE['publicable']
+        self.assertEqual(notes, sorted(notes)); self.assertEqual(len(set(notes)), 4)
+        self.assertTrue(all(lo <= n <= hi for n in notes))
+        self.assertGreaterEqual(notes[-1] - notes[0], 8)
+
