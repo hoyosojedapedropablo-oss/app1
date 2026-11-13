@@ -915,8 +915,21 @@ function paintTiers(s) {
   put($('liveTiers'), TIERS.filter(([k]) => k === 'all' || count(k)).map(([k, t, e]) => h('button', { type: 'button', class: `tier ${k}${liveUI.tier === k ? ' on' : ''}`, 'aria-pressed': String(liveUI.tier === k),
     onclick: () => { liveUI.tier = k; paintLiveMoments(); } }, e ? emo(e) : '', h('span', { text: t }), h('b', { text: String(count(k)) }))));
 }
+// «El mejor momento hasta ahora» can be taken off (×, or «Ya lo publiqué»): that moment is not shown there again for
+// this session; the next best one (if any) takes its place. Remembered in this browser.
+const spotKey = (sid) => 'cs.spot.hidden.' + sid;
+function spotHidden(sid) { try { return new Set(JSON.parse(localStorage.getItem(spotKey(sid)) || '[]')); } catch { return new Set(); } }
+function hideSpot(s, m, published) {
+  const hidden = spotHidden(s.id); hidden.add(m.id);
+  try { localStorage.setItem(spotKey(s.id), JSON.stringify([...hidden].slice(-200))); } catch {}
+  const card = $('liveSpot').querySelector('.spot');
+  const done = () => { $('liveSpot').dataset.mid = ''; paintSpotlight(s); };
+  if (card) { card.classList.add('spot-leaving'); setTimeout(done, 280); } else done();
+  toast(published ? 'Marcado como publicado' : 'Quitado de «El mejor momento»', 'El clip sigue en la lista de momentos y en tu biblioteca.');
+}
 function paintSpotlight(s) {
-  const best = liveShown(s).filter((m) => m.status !== 'rendering' && m.score >= 75).sort((a, b) => b.score - a.score)[0];
+  const hidden = spotHidden(s.id);
+  const best = liveShown(s).filter((m) => m.status !== 'rendering' && m.score >= 75 && !hidden.has(m.id)).sort((a, b) => b.score - a.score)[0];
   const host = $('liveSpot'); if (!best) { put(host); return; }
   if (host.dataset.mid === best.id + ':' + best.score + ':' + best.status) return;     // same moment: keep its preview alive
   host.dataset.mid = best.id + ':' + best.score + ':' + best.status;
@@ -924,12 +937,15 @@ function paintSpotlight(s) {
   const box = previewBox(thumb, null, 3, best.duration); box.classList.add('spot-thumb');
   const img = box.querySelector('img'); if (img) retryThumb(img, thumb);
   hoverPreview(box, { id, title: best.title, channel: s.channel || 'Directo', duration: best.duration, thumb_url: thumb }, () => openMoment(s, best));
-  put(host, h('div', { class: 'card spot' + (best.score >= 85 ? ' on-fire' : '') }, box,
+  put(host, h('div', { class: 'card spot' + (best.score >= 85 ? ' on-fire' : '') },
+    h('button', { class: 'spot-x', type: 'button', 'aria-label': 'Quitar este momento de aquí', title: 'Quitar', onclick: () => hideSpot(s, best, false) }, svg('<path d="M6 6l12 12M18 6L6 18"></path>', 16)),
+    box,
     h('div', { class: 'spot-body' }, h('span', { class: 'lbl-s' }, emo('trophy'), 'El mejor momento hasta ahora'),
       h('b', { class: 'spot-title', text: best.title }), scoreBadge(best.score, best.viral_kind),
       best.analysis?.motivo ? h('span', { class: 'why', text: best.analysis.motivo }) : '',
       h('span', { class: 'muted', text: `Minuto ${Math.floor((best.start || 0) / 60)} · ${fmtDur(best.duration)} · detectado ${best.detected_at || ''}` }),
-      h('div', { class: 'acts' }, h('button', { class: 'btn primary', type: 'button', text: 'Editar y publicar', onclick: () => openMoment(s, best) })))));
+      h('div', { class: 'acts' }, h('button', { class: 'btn primary', type: 'button', text: 'Editar y publicar', onclick: () => openMoment(s, best) }),
+        h('button', { class: 'btn ghost', type: 'button', text: '✓ Ya lo publiqué', onclick: () => hideSpot(s, best, true) })))));
 }
 // Score badge: the note at a glance. 85+ is on fire (post it now), then rocket, thumbs up and «flojo».
 const EMOJI = (n) => `/static/img/emoji/${n}.png`;
