@@ -367,10 +367,12 @@ def analyze(ident,options):
   topics=[];started=time.monotonic()
   if options.engine=='cloud':
    job['selection_diagnostics']=[]
-   clips=cloud_ai.select_cloud(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,max_clips=options.max_clips,on_progress=progress,cancel=event,diagnostics=job['selection_diagnostics'],topic_ranges=topics,completion=completion)
+   clips=cloud_ai.select_cloud(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,max_clips=options.max_clips,on_progress=progress,cancel=event,diagnostics=job['selection_diagnostics'],topic_ranges=topics,completion=completion,repair=True)
   elif options.engine=='gpu':
+   # repair=True (E-21): a punchline of 5 s grows with its neighbouring phrases and a 2-minute story is cut around its
+   # quote, instead of being dropped. Without it, 0 of 24 proposals survived on two real videos.
    job['selection_diagnostics']=[]
-   clips=gpu_ai.select_gpu(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,max_clips=options.max_clips,on_progress=progress,cancel=event,diagnostics=job['selection_diagnostics'],topic_ranges=topics,completion=completion)
+   clips=gpu_ai.select_gpu(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,max_clips=options.max_clips,on_progress=progress,cancel=event,diagnostics=job['selection_diagnostics'],topic_ranges=topics,completion=completion,repair=True)
   else:
    clips=select_clips(transcript,options.minimum,options.maximum,job['duration'],speaker=options.speaker,context=options.context,profile=profile,quality=options.quality,max_clips=options.max_clips,on_progress=progress)
   job['timings']['analysis_s']=round(time.monotonic()-started,1);started=time.monotonic()

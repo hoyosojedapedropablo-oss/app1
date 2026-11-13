@@ -117,3 +117,16 @@ una prueba automática (entre comillas invertidas) que falla si el error vuelve.
   señales daban 86-99 a casi todos y no ordenaban. Ahora «Los mejores» empieza en 65 (los 3 mejores siempre), las señales
   son más exigentes y pesan 15 % (juez 70 %), y los títulos pierden los hashtags pegados. Guardas:
   `test_E20d_main_list_is_a_real_selection`, `test_E20d_ordinary_talk_no_longer_maxes_the_signals`, `test_E20d_titles_lose_stuck_hashtags`
+
+## E-21 · La IA proponía momentos, pero el análisis de videos los descartaba casi todos (nov 2026)
+- **Síntoma:** en el video de Ibai con Westcol y en el de «Más Allá del Silencio Podcast» ningún clip venía de la IA: todos
+  eran de cobertura («Para revisar») y la cobertura del podcast fue del 15 %.
+- **Causa raíz:** el análisis de videos llamaba al selector sin `repair`. La IA propuso 24 momentos y se aceptaron 0: casi
+  todos por duración (remates de 4-11 s en Ibai, historias de 72-188 s en el podcast). El ajuste de duración y de la cita
+  ya existía, pero solo se usaba en directo. Y el recorte de lo largo se quedaba con los primeros 60 s y perdía el remate.
+- **Solución:** el análisis de videos usa `repair=True` (como el directo); una propuesta larga se recorta alrededor de su
+  cita (`fit_around`), sumando remate y planteamiento por turnos hasta la mitad del rango; una corta crece con sus frases
+  vecinas.
+- **Guardas:** `test_E21_video_analysis_repairs_cuts_instead_of_dropping`, `test_E21_a_long_story_is_cut_around_its_quote`,
+  `test_E21_a_short_punchline_grows_to_the_minimum`
+

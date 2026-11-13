@@ -128,6 +128,34 @@ def fit_duration(phrases,first,last,minimum,maximum):
     return (first,last) if minimum<=span<=maximum else None
 
 
+def quote_span(phrases,evidence,first,last):
+    """(i, j): the 1-4 phrases inside [first, last] that hold the quote, or None."""
+    for i in range(first,last+1):
+        for k in range(4):
+            if i+k>last:break
+            if grounded(evidence,' '.join(p.get('text','') for p in phrases[i:i+k+1]),True):return (i,i+k)
+    return None
+
+
+def fit_around(phrases,first,last,anchor,minimum,maximum):
+    """Cut a proposal longer than the range around its quote (E-21): start from the quote's phrases and add the next
+    phrase (payoff, reaction) and the previous one (setup) in turns, inside the proposal, up to the middle of the range.
+    The old trim kept the first `maximum` seconds of a 2-minute story and dropped its point."""
+    span=lambda a,b:phrases[b]['end']-phrases[a]['start']
+    lo,hi=anchor
+    if span(lo,hi)>maximum:return None
+    target=(minimum+maximum)/2;turn=0
+    while span(lo,hi)<target:
+        options=[(lo,hi+1)] if hi+1<=last else []
+        options+=[(lo-1,hi)] if lo-1>=first else []
+        if turn%2 and len(options)==2:options.reverse()
+        options=[o for o in options if span(*o)<=maximum]
+        if not options:break
+        lo,hi=options[0];turn+=1
+    if span(lo,hi)<minimum:return fit_duration(phrases,lo,hi,minimum,maximum)
+    return (lo,hi)
+
+
 def accept_proposals(data,phrases,transcript,minimum,maximum,speaker='',diagnostics=None,repair=False):
     result=[]
     def reject(reason):
@@ -140,7 +168,10 @@ def accept_proposals(data,phrases,transcript,minimum,maximum,speaker='',diagnost
             reject('idea incompleta o IDs inválidos');continue
         start,end=phrases[m.first]['start'],phrases[m.last]['end']
         if not minimum<=end-start<=maximum:
-            span=fit_duration(phrases,m.first,m.last,minimum,maximum) if repair else None
+            span=None
+            if repair:
+                anchor=quote_span(phrases,m.evidence,m.first,m.last) if end-start>maximum and m.evidence.strip() else None
+                span=fit_around(phrases,m.first,m.last,anchor,minimum,maximum) if anchor else fit_duration(phrases,m.first,m.last,minimum,maximum)
             if span is None:
                 reject(f'duración {end-start:.1f}s fuera del rango {minimum}–{maximum}s');continue
             start,end=phrases[span[0]]['start'],phrases[span[1]]['end']
