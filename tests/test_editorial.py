@@ -44,7 +44,7 @@ class EditorialTests(unittest.TestCase):
   calls=[]
   def completion(payload,**kwargs):
    calls.append(payload)
-   return {'clips':[dict(id=c['id'],titles=['¿Dónde está el límite al trabajar con tu pareja?']) for c in payload['clips']]}
+   return {'clips':[dict(id=c['id'],titles=['¿Qué cambia cuando trabajas con tu pareja?']) for c in payload['clips']]}
   clips=complete_coverage([],[],1080,20,60,completion)
   self.assertEqual(len(calls),3);self.assertEqual(len(clips),14)
   self.assertIn('TODO el clip',calls[0]['instruccion'])
@@ -66,7 +66,7 @@ class EditorialTests(unittest.TestCase):
    calls=[]
    def completion(payload,**kwargs):
     calls.append(payload)
-    return {'clips':[dict(id=c['id'],titles=['¿Dónde está el límite al trabajar con tu pareja?']) for c in payload['clips']]}
+    return {'clips':[dict(id=c['id'],titles=['¿Qué cambia cuando trabajas con tu pareja?']) for c in payload['clips']]}
    wrapped=cached_completion(Path(tmp),'gpu',completion)
    first=complete_coverage([],[],1080,20,60,wrapped)
    count=len(calls)
@@ -85,7 +85,7 @@ class EditorialTests(unittest.TestCase):
    calls=[]
    def complete(payload,**kwargs):
     calls.append(payload)
-    if payload.get('task')=='coverage_titles':return {'clips':[dict(id=c['id'],titles=['¿Dónde está el límite al trabajar con tu pareja?' if 'pareja' in c['text'] else 'El próximo evento de boxeo ya toma forma']) for c in payload['clips']]}
+    if payload.get('task')=='coverage_titles':return {'clips':[dict(id=c['id'],titles=['¿Qué cambia cuando trabajas con tu pareja?' if 'pareja' in c['text'] else 'El próximo evento de boxeo ya toma forma']) for c in payload['clips']]}
     phrases=payload['frases'];split=next(i for i,p in enumerate(phrases) if p['start']>=30)
     return {'moments':[],'topics':[dict(first=0,last=split-1,label='Pareja'),dict(first=split,last=len(phrases)-1,label='Boxeo')]}
    with patch('cloud_ai.complete',side_effect=complete),patch('app.decode_audio',side_effect=AssertionError('Cached transcript must not be decoded')):

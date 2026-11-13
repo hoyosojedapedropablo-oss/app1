@@ -18,6 +18,12 @@ def covered(clips):
   total+=max(0,c['end']-max(end,c['start']));end=max(end,c['end'])
  return total
 
+def overlaps_a_clip(start,end,clips,share=.25,most=3.):
+ """E-24: a coverage window that repeats more than a quarter of an existing clip is not added. The old check only asked
+ for some new second, so a window from 0:00 repeated an AI clip from 0:15 (same sentences, almost the same title)."""
+ # E-25: and never more than 3 s (4.6 s of a 21 s clip, 22 %, still repeated a whole sentence).
+ return any(min(end,c['end'])-max(start,c['start'])>min(most,share*min(end-start,c['end']-c['start'])) for c in clips)
+
 def topic_windows(transcript,duration,minimum,maximum,topics):
  phrases=timed_sentences(transcript)
  boundaries=[0.,duration]
@@ -54,7 +60,7 @@ def plan(selected,transcript,duration,minimum,maximum,topics=None):
   windows.sort(key=lambda w:abs((w[0]+w[1])/2-duration/2))
   while windows and covered(result)<duration*TARGET-1e-6:
    start,end,label=windows.pop(0)
-   if covered(result+[dict(start=start,end=end)])<=covered(result)+1e-6:continue
+   if covered(result+[dict(start=start,end=end)])<=covered(result)+1e-6 or overlaps_a_clip(start,end,result):continue
    text=' '.join(w['text'] for w in clip_words(transcript,start,end))
    result.append(dict(id=clip_identity(start,end,text),start=start,end=end,duration=end-start,text=text,title='',titles=[],score=None,category='Para revisar',potential=False,reason='Tema: '+label if label else 'Conversación agrupada por tema; revisa antes de publicar.',topic=label,evidence='',captions=make_cues(transcript,start,end),source='Cobertura por temas'))
   return sorted(result,key=lambda c:c['start'])
@@ -98,7 +104,10 @@ def complete_coverage(selected,transcript,duration,minimum,maximum,completion,sp
    if not pending:break
    payload['clips']=[dict(id=c['id'],text=c['text']) for c in pending.values()]
    payload['correccion']='Faltan títulos válidos para estos IDs. No copies el audio; respeta longitud.'
-  if pending:raise ValueError('La IA no generó títulos válidos para todos los clips. La transcripción se conserva para reintentar.')
+  # E-23: a clip whose titles were all rejected gets a plain title to edit, instead of failing the whole analysis.
+  for clip in pending.values():
+   minute=int(clip['start']//60);second=int(clip['start']%60)
+   clip.update(title=f'Momento del {minute}:{second:02d} · ponle título',titles=[],title_fallback=True)
   offset+=len(batch)
   if on_progress:on_progress(offset,len(missing),'titles')
  return clips

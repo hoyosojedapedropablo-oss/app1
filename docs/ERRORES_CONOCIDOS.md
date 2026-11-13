@@ -117,3 +117,58 @@ una prueba automática (entre comillas invertidas) que falla si el error vuelve.
   señales daban 86-99 a casi todos y no ordenaban. Ahora «Los mejores» empieza en 65 (los 3 mejores siempre), las señales
   son más exigentes y pesan 15 % (juez 70 %), y los títulos pierden los hashtags pegados. Guardas:
   `test_E20d_main_list_is_a_real_selection`, `test_E20d_ordinary_talk_no_longer_maxes_the_signals`, `test_E20d_titles_lose_stuck_hashtags`
+
+## E-21 · La IA proponía momentos, pero el análisis de videos los descartaba casi todos (nov 2026)
+- **Síntoma:** en el video de Ibai con Westcol y en el de «Más Allá del Silencio Podcast» ningún clip venía de la IA: todos
+  eran de cobertura («Para revisar») y la cobertura del podcast fue del 15 %.
+- **Causa raíz:** el análisis de videos llamaba al selector sin `repair`. La IA propuso 24 momentos y se aceptaron 0: casi
+  todos por duración (remates de 4-11 s en Ibai, historias de 72-188 s en el podcast). El ajuste de duración y de la cita
+  ya existía, pero solo se usaba en directo. Y el recorte de lo largo se quedaba con los primeros 60 s y perdía el remate.
+- **Solución:** el análisis de videos usa `repair=True` (como el directo); una propuesta larga se recorta alrededor de su
+  cita (`fit_around`), sumando remate y planteamiento por turnos hasta la mitad del rango; una corta crece con sus frases
+  vecinas.
+- **Guardas:** `test_E21_video_analysis_repairs_cuts_instead_of_dropping`, `test_E21_a_long_story_is_cut_around_its_quote`,
+  `test_E21_a_short_punchline_grows_to_the_minimum`
+
+## E-22 · Títulos copiados de los ejemplos de la guía en videos sin relación (nov 2026)
+- **Síntoma:** en el video de Ibai con Westcol (un entrenamiento táctico) dos clips salieron con «¿Dónde está el límite cuando
+  trabajas con tu pareja?». El mismo título está en al menos 7 proyectos guardados.
+- **Causa raíz:** `TITLE_GUIDE` daba tres títulos de ejemplo y el modelo de 7B los copiaba tal cual. `clean_title` no rechazaba
+  las copias de esos ejemplos.
+- **Solución:** la guía describe formas, sin títulos para copiar (versión `topics-human-titles-v2`, que invalida los títulos
+  guardados); `clean_title` rechaza los ejemplos antiguos y sus variantes cercanas. Exigir una palabra dicha en el clip se
+  probó y se descartó: rechazaba títulos creativos válidos («Una habitación idéntica…» para un clip que dice «cuarto»).
+- **Guardas:** `test_E22_example_titles_of_the_guide_are_never_accepted`
+
+## E-23 · La IA describía la cita en vez de copiarla, y un clip sin título tumbaba el análisis (nov 2026)
+- **Síntoma:** en el video de Ibai, con E-21 y E-22, 7 de 9 propuestas de la IA se rechazaron por «cita no respaldada»:
+  la IA escribía «Se menciona que hay un rehén…» en lugar de una frase dicha. Dos títulos cambiaban el tono (una broma
+  como «critica», un disparo accidental como «se pelean»). Y si todos los títulos de un clip se rechazaban dos veces, el
+  análisis entero fallaba.
+- **Solución:** el selector pide una copia exacta con un ejemplo de lo que no vale y el ID de su frase (`key`); con repair,
+  si la cita no está en el fragmento, se usa el texto de esa frase (solo si está en el momento o a 3 frases). La guía de
+  títulos pide respetar el tono real. Un clip sin título válido recibe «Momento del m:ss · ponle título» en vez de fallar.
+- **Guardas:** `test_E23_a_described_quote_is_replaced_by_its_key_phrase`, `test_E23_a_key_far_from_the_moment_does_not_rescue_it`,
+  `test_E23_selector_asks_for_a_copied_quote_and_its_phrase_id`, `test_E23_a_clip_without_valid_titles_does_not_fail_the_analysis`
+
+## E-24 · El filtro de interés del selector tiraba lo que el juez valoraba, y la cobertura repetía clips de la IA (nov 2026)
+- **Síntoma (con E-23):** en Ibai la IA propuso 9 momentos con cita real y se aceptaron 0: 8 por «interés o resolución
+  insuficiente» (el propio modelo se ponía 2 en gancho o remate). En el podcast, dos clips de cobertura repetían las frases
+  de clips de la IA (0:00 con 0:15, 1:50 con 2:00). Los títulos salían con mayúsculas en cada palabra y «Así fue...».
+- **Solución:** con repair (videos y directo) el selector solo descarta lo que el modelo puntúa con 1 o menos; el juez y la
+  nota final deciden. La cobertura no añade una ventana que repita más de un cuarto de un clip existente. Los títulos pasan
+  a mayúscula solo al inicio y en nombres (los que el clip escribe con mayúscula), sin puntos suspensivos, y la guía pide no
+  preguntar por un desenlace que el clip ya muestra.
+- **Guardas:** `test_E24_with_repair_the_judge_decides_moments_the_model_rated_two`, `test_E24_titles_in_spanish_case_and_without_ellipsis`,
+  `test_E24_coverage_does_not_repeat_an_ai_clip`
+
+## E-25 · Con E-24 seguían cayendo propuestas por la nota que la IA se ponía, y quedaban títulos vacíos o con nombres ajenos (nov 2026)
+- **Síntoma:** en Ibai, 9 de 13 propuestas cayeron por «interés» (la IA se ponía 1). Quedaba un solapamiento de 4,6 s (22 %
+  de un clip de 21 s) en Ibai y de 10,5 s en el podcast. Títulos: «¡Va, va, va!», «la vida delincuencial de un hablante», y
+  «Westcol reflexiona…» en un clip donde habla el entrevistado.
+- **Solución:** con repair, la nota que la IA se pone ya no descarta (solo `coherent=false`); decide el juez. La cobertura no
+  repite más de 3 s ni más de un cuarto del clip más corto. Se rechazan títulos con menos de dos palabras de contenido, con
+  «hablante», o con un nombre que no suena a nada dicho en el clip (un nombre mal oído, «Uescol» por Westcol, sí pasa).
+- **Guardas:** `test_E24_with_repair_the_judge_decides_moments_the_model_rated_two`, `test_E25_titles_that_say_nothing_or_name_someone_absent_are_rejected`,
+  `test_E25_coverage_never_repeats_more_than_three_seconds`
+
