@@ -1110,3 +1110,12 @@ body.has-back main>.view:not(#editorView){padding-top:62px}
 .prof-add input{flex:1;min-width:0}
 .mute-box{margin:10px 0 14px;padding:12px 14px;border-radius:14px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.03)}
 .mute-box select{max-width:220px}
+
+/* --- «El mejor momento»: take it off once handled ---------------------------------------------------------------- */
+.spot{position:relative;transition:opacity .28s ease,transform .28s ease}
+.spot.spot-leaving{opacity:0;transform:translateY(-8px) scale(.985)}
+.spot-x{position:absolute;top:12px;right:12px;width:34px;height:34px;display:grid;place-items:center;border-radius:50%;cursor:pointer;
+  border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.35);color:rgba(255,255,255,.75);backdrop-filter:blur(6px);
+  transition:background .2s,color .2s,transform .2s,border-color .2s}
+.spot-x:hover{background:rgba(255,80,60,.22);border-color:rgba(255,110,90,.6);color:#fff;transform:rotate(90deg)}
+.spot-x:focus-visible{outline:2px solid #c8ff5a;outline-offset:2px}
