@@ -40,27 +40,52 @@ class TitleRuleTests(unittest.TestCase):
 
 
 class PerClipTitleTests(unittest.TestCase):
-    def test_E26_each_judged_clip_gets_its_own_title_from_the_analysis(self):
-        import app
-        seen = {}
-        def generate(text, **kw):
-            seen.update(kw); return {'title': 'Juan Camilo y sus ocho años en la cárcel', 'claim': 'x',
-                                     'titles': ['Juan Camilo y sus ocho años en la cárcel', 'Westcol: mi historia en la cárcel']}
-        class O: speaker = ''; context = 'Podcast'
-        clip = {'text': GUEST, 'title': 'Así era su vida', 'titles': [], 'analysis': {'quien': 'Juan Camilo'}}
-        with patch('viral.generate', side_effect=generate):
-            out = app.clip_title(clip, O(), ['Westcol'])
-        self.assertEqual(seen['analysis'], {'quien': 'Juan Camilo'})
-        self.assertEqual(out['title'], 'Juan Camilo y sus ocho años en la cárcel')
-        self.assertNotIn('Westcol: mi historia en la cárcel', out['titles'])           # filtered by clean_title
-        self.assertIn('Así era su vida', out['titles'])                                 # the batch title stays as an option
-
     def test_E26_the_page_asks_for_each_script_with_its_own_version(self):
         import app
         from fastapi.testclient import TestClient
         html = TestClient(app.app).get('/').text
         stamp = int((app.ROOT / 'static' / 'shell.js').stat().st_mtime)
         self.assertIn(f'/static/shell.js?v={stamp}', html)
+
+
+class E27Tests(unittest.TestCase):
+    def test_E27_titles_are_distinct_within_a_video(self):
+        import scoring
+        clips = [{'start': 460., 'title': 'Humor y risas en la azotea', 'titles': ['Humor y risas en la azotea']},
+                 {'start': 508., 'title': 'Humor y risas en la azotea', 'titles': ['Humor y risas en la azotea', 'Ibai sube a la azotea']},
+                 {'start': 600., 'title': 'Humor y risas en la azotea', 'titles': []}]
+        out = scoring.distinct_titles(clips)
+        self.assertEqual(out[0]['title'], 'Humor y risas en la azotea')
+        self.assertEqual(out[1]['title'], 'Ibai sube a la azotea')
+        self.assertEqual(out[2]['title'], 'Momento del 10:00 · ponle título'); self.assertTrue(out[2]['title_fallback'])
+
+    def test_E27_titles_of_only_abstract_words_are_rejected(self):
+        for title in ('Humor y entusiasmo', 'Persecución policial y tensión', 'Reacciones y diversión'):
+            self.assertIsNone(intelligence.clean_title(title, 'corre, corre, que viene la policía'), title)
+        self.assertEqual(intelligence.clean_title('Humor en la azotea con Ibai', 'Ibai en la azotea'), 'Humor en la azotea con Ibai')
+
+    def test_E27_multiword_names_keep_their_capitals(self):
+        text = 'Bienvenidos a Más Allá del Silencio, hoy con Juan Camilo'
+        self.assertEqual(intelligence.sentence_case('Juan Camilo habla en Más Allá del Silencio', text),
+                         'Juan Camilo habla en Más Allá del Silencio')
+
+    def test_E27_judge_who_is_a_person_in_the_clip(self):
+        import judge
+        self.assertEqual(judge.who('Más Allá del Silencio Podcast', GUEST), '')
+        self.assertEqual(judge.who('ASÍ CONTRATAN', GUEST), '')
+        self.assertEqual(judge.who('Sobreviví', GUEST), '')
+        self.assertEqual(judge.who('Juan Camilo', GUEST), 'Juan Camilo')
+        self.assertEqual(judge.who('el entrevistado', GUEST), 'el entrevistado')
+        self.assertEqual(judge.who('Spreen', 'te robaste el torneo', speaker='Spreen'), 'Spreen')   # live: the channel speaks
+        self.assertIn('Nunca el título del video', judge.SYSTEM)
+
+    def test_E27_the_title_model_can_be_chosen(self):
+        seen = {}
+        def fake(payload, cancel=None, model=None):
+            seen['model'] = model; return {'titulos': []}
+        with patch('viral._ollama', side_effect=fake):
+            viral.generate('algo dicho en el clip', model='qwen3:8b')
+        self.assertEqual(seen['model'], 'qwen3:8b')
 
 
 if __name__ == '__main__':

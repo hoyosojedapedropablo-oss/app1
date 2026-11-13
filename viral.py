@@ -130,13 +130,13 @@ def clean(title):
     return title
 
 
-def generate(text, speaker='', context='', complete=None, cancel=None, names=(), analysis=None):
+def generate(text, speaker='', context='', complete=None, cancel=None, names=(), analysis=None, model=None):
     """Return {'title', 'titles', 'claim', 'kind'} or None when no grounded title survives."""
     if not text.strip(): return None
     payload = {'canal': speaker or 'desconocido', 'contexto': context, 'nombres_del_directo': list(names)[:30],
                'transcripcion_del_clip': text[:4000]}
     if analysis: payload['analisis_del_editor'] = {k: v for k, v in analysis.items() if v}      # who, to whom, what, why, after
-    data = (complete or _ollama)(payload, cancel)
+    data = complete(payload, cancel) if complete else _ollama(payload, cancel, model)
     raw_titles = data.get('titulos') if isinstance(data.get('titulos'), list) else []
     titles = []
     for raw in raw_titles:
@@ -149,13 +149,14 @@ def generate(text, speaker='', context='', complete=None, cancel=None, names=(),
     return {'title': titles[0], 'titles': titles, 'claim': str(data.get('afirmacion', ''))[:240], 'kind': str(data.get('tipo', ''))}
 
 
-def _ollama(payload, cancel=None):
+def _ollama(payload, cancel=None, model=None):
     import gpu_ai
     from cloud_ai import AnalysisCancelled
     if cancel is not None and cancel.is_set(): raise AnalysisCancelled()
-    body = {'model': gpu_ai.MODEL, 'stream': False, 'format': SCHEMA, 'keep_alive': '10m',
+    body = {'model': model or gpu_ai.MODEL, 'stream': False, 'format': SCHEMA, 'keep_alive': '10m',
             'messages': [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)}],
             'options': {'num_ctx': 4096, 'num_predict': 500, 'temperature': .5}}
-    with gpu_ai.client(timeout=60) as conn:
+    if (model or '').startswith('qwen3'): body['think'] = False      # Qwen 3: answer directly, no reasoning block
+    with gpu_ai.client(timeout=90) as conn:
         response = conn.post('/api/chat', json=body); response.raise_for_status()
     return json.loads(response.json()['message']['content'])

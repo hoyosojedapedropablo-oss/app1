@@ -400,18 +400,12 @@ def analyze(ident,options):
     job.update(message=f'Revisando el potencial viral de los clips · {i+1} de {len(top)}')
     v=judge.judge(c.get('text',''),speaker=options.speaker,context=options.context,names=names)
     if v:c.update(score=v['score'],verdict=v['verdict'],viral_kind=v['kind'],analysis=v['analysis'],marks=v['marks'])
-   # E-26: one title per clip from what the judge understood (who speaks, what happens, its tone), instead of batches
-   # of six where a title could describe the next clip or turn a joke into a complaint. The batch title stays as an
-   # alternative and as the fallback when no grounded title comes back.
-   judged=[c for c in top if c.get('analysis')]
-   for i,c in enumerate(judged):
-    if event.is_set():break
-    job.update(message=f'Escribiendo el título de cada clip · {i+1} de {len(judged)}')
-    better=clip_title(c,options,names)
-    if better:c.update(better)
+   # E-27: a per-clip title pass (E-26) was measured and withdrawn: +35-63 % analysis time and only 8 of 35 clips got a
+   # valid title from the 7B model. Better titles come from a better title model (tools/comparar_modelos_titulos.py).
   # Final note: judge + the clip's own signals + its place in this video; best first, filler in «Para revisar» (E-20).
   import scoring
   clips=scoring.rank_video(clips,lambda c:clip_words(job.get('transcript',[]),c['start'],c['end']))
+  clips=scoring.distinct_titles(clips)
   job['topics']=topics
   job['coverage_percent']=round(100*covered(clips)/job['duration'],2)
   message=f'{len(clips)} clips · cobertura {job["coverage_percent"]}% del video. Mayor potencial identifica los destacados; el resto queda para tu revisión.' if clips else 'La selección quedó vacía tras la revisión. Esto no demuestra que el video no tenga potencial. Revisa la transcripción y añade contexto para volver a analizar sin transcribir de nuevo.'
@@ -428,19 +422,6 @@ def analyze(ident,options):
  finally:save_job(job)
 
 JUDGE_LIMIT=40   # clips the viral judge reviews per video (about 3-6 s each on the local GPU)
-
-def clip_title(c,options,names):
- """{'title','titles','claim'} from viral.py for one judged clip, or None (the batch title then stays)."""
- import viral
- from intelligence import clean_title
- try:result=viral.generate(c.get('text',''),speaker=options.speaker,context=options.context,names=names,analysis=c.get('analysis'))
- except Exception as e:
-  logging.getLogger('uvicorn.error').warning('Clip title failed: %s',e);return None
- if not result:return None
- titles=[t for t in (clean_title(t,c.get('text','')) for t in result['titles']) if t]
- if not titles:return None
- old=[t for t in [c.get('title'),*(c.get('titles') or [])] if t and not c.get('title_fallback')]
- return dict(title=titles[0],titles=list(dict.fromkeys(titles+old))[:5],claim=result.get('claim',''),title_fallback=False)
 
 def video_names(job,options):
  """People and words of this video for the judge: the speaker the user named, the channel and the capitalised words of

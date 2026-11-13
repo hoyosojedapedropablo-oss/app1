@@ -18,6 +18,8 @@ Filler kept only for coverage (no score) never gets a note: it goes to «Para re
 
 # E-20d, measured on a real Ibai video (18 clips): from 55, 17 of 18 clips reached «Los mejores» and the tab did not
 # filter; from 65 it keeps 11, a real selection. The top 3 of a video are always shown.
+import re
+
 BEST_FROM = 65            # from this note a clip is shown in the main list («Los mejores»)
 POTENTIAL_FROM = 70       # «Mayor potencial»
 MARK_REASONS = (('gancho', 'Gancho fuerte'), ('desenlace', 'Remate claro'), ('humor', 'Humor'), ('polemica', 'Polémica'),
@@ -69,6 +71,31 @@ def judge_order(clips, limit):
     picked = sorted((c for c in clips if c.get('score') is not None), key=lambda c: -c['score'])
     coverage = sorted((c for c in clips if c.get('score') is None), key=lambda c: c['start'])
     return (picked + coverage)[:limit]
+
+
+def _norm(title):
+    return ' '.join(re.findall(r'\w+', (title or '').lower()))
+
+
+def distinct_titles(clips):
+    """E-27: no two clips of a video share a title («Humor y entusiasmo» twice). Best clips keep theirs; a later clip
+    takes its next alternative that no clip uses, or a plain title to write by hand."""
+    from difflib import SequenceMatcher
+    used = []
+    same = lambda t: any(SequenceMatcher(None, _norm(t), u).ratio() >= .85 for u in used)
+    out = []
+    for c in clips:
+        title = c.get('title') or ''
+        if title and same(title):
+            title = next((t for t in c.get('titles') or [] if t and not same(t)), '')
+            if not title:
+                m, s = int(c['start'] // 60), int(c['start'] % 60)
+                c = dict(c, title=f'Momento del {m}:{s:02d} · ponle título', title_fallback=True)
+            else:
+                c = dict(c, title=title)
+        if c.get('title') and not c.get('title_fallback'): used.append(_norm(c['title']))
+        out.append(c)
+    return out
 
 
 def rank_video(clips, words_of):

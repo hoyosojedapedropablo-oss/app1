@@ -130,6 +130,12 @@ def sentence_case(title,text):
         keep=(i==0 or word in named or (word.isupper() and len(word)>1) or bool(out and re.search(r'[.!?]$',out[-1]))
               or heard or (not title_case and not plain))
         out.append(t if keep or not core else lead+core[:1].lower()+core[1:])
+    # E-27: a capital before a kept name stays when the clip writes the two together: «Más Allá del Silencio», not «más Allá».
+    for i in range(len(out)-2,0,-1):
+        nxt=re.sub(r'^[¿¡«"(]+','',out[i+1])
+        pair=re.sub(r'^[¿¡«"(]+','',tokens[i])+' '+re.sub(r'\W+$','',nxt)
+        if tokens[i][:1].isupper() and out[i][:1].islower() and nxt[:1].isupper() and pair in text:
+            out[i]=tokens[i]
     return ' '.join(out)
 
 
@@ -148,7 +154,7 @@ def clean_title(title,text):
     # E-25: «¡Va, va, va!» says nothing; «la vida de un hablante» reads like a machine.
     if len({w for w in re.findall(r'\w{4,}',title.lower())})<2:return None
     if re.search(r'\bhablantes?\b',title,re.I):return None
-    if GENERIC.search(title.strip(' ¿?¡!')):return None          # E-26: «Descripción de la misión», «Entrenamiento diferenciado»
+    if GENERIC.search(title.strip(' ¿?¡!')) or only_abstract(title):return None          # E-26: «Descripción de la misión», «Entrenamiento diferenciado»
     if text.strip() and unsaid_name(title,text):return None
     return title
 
@@ -157,6 +163,18 @@ def clean_title(title,text):
 COMMON_WORDS=set('''asi entrenamiento desastre recorrido tiro mision preparacion descripcion historia vida carcel momento
 reaccion respuesta pregunta verdad secreto miedo error problema sorpresa final primera primer nadie todos cuando donde
 quien porque nunca siempre ahora antes despues hoy esto este esta habla dice cuenta revela confiesa explica'''.split())
+# E-27: titles made only of abstract nouns and adjectives («Humor y entusiasmo», «Persecución policial y tensión»).
+ABSTRACT=set('''humor entusiasmo tension tensión emocion emoción reaccion reacción reacciones risas risa diversion diversión
+persecucion persecución accion acción adrenalina caos drama polemica polémica sorpresa nervios miedo intensidad momento
+momentos experiencia aventura reflexion reflexión confusion confusión'''.split())
+ADJECTIVE=re.compile(r'(al|ales|ico|ica|icos|icas|oso|osa|ivo|iva|ante|ente|ado|ada)$')
+
+
+def only_abstract(title):
+    content=[w for w in re.findall(r'\w+',title.lower()) if w not in ('y','e','de','la','el','en','con','del')]
+    return 0<len(content)<=4 and all(w in ABSTRACT or ADJECTIVE.search(w) for w in content) and any(w in ABSTRACT for w in content)
+
+
 GENERIC=re.compile(r'^(descripci[oó]n|preparaci[oó]n|explicaci[oó]n|introducci[oó]n|resumen|presentaci[oó]n|instrucciones)\b'
                    r'|^(entrenamiento|ejercicio|conversaci[oó]n|charla|momento)( \w+){0,2}$',re.I)
 

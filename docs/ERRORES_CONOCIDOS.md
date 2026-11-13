@@ -185,8 +185,19 @@ una prueba automática (entre comillas invertidas) que falla si el error vuelve.
   minúscula (un nombre mal oído las conserva). La página pide cada script con su fecha de modificación.
 - **Guardas:** `test_E26_stray_capitals_become_spanish_case`, `test_E26_a_name_opening_the_title_must_be_said_in_the_clip`,
   `test_E26_generic_titles_are_rejected`, `test_E26_viral_titles_do_not_borrow_a_name_from_the_context`,
-  `test_E26_title_writer_is_told_the_analysis_decides_who_and_tone`, `test_E26_each_judged_clip_gets_its_own_title_from_the_analysis`,
+  `test_E26_title_writer_is_told_the_analysis_decides_who_and_tone`,
   `test_E26_the_page_asks_for_each_script_with_its_own_version`, `test_E26_a_name_the_transcriber_split_in_two_still_counts`
 - **Ajuste al aplicar E-26:** a .7 también se rechazaba «JLexis» cuando la transcripción escribe «J. Lessie» (.62, dos
   palabras juntas), un caso real ya resuelto en directo. Una sola palabra exige .7; dos o tres palabras juntas, .6.
+- **Retirado en E-27:** el título por clip (+35-63 % de tiempo, título propio en solo 8 de 35 clips con el modelo de 7B).
+
+## E-27 · Títulos repetidos o abstractos, el juez tomaba el título del video como «quién habla», y nombres partidos (nov 2026)
+- **Síntoma (con E-26):** «Humor y entusiasmo» dos veces en un video, «Persecución policial y tensión»; el juez ponía en
+  «quien» «Sobreviví», «ASÍ CONTRATAN» o «Más Allá del Silencio Podcast», y salía «¿Por qué más Allá del Silencio defiende…?».
+- **Solución:** ningún título se repite dentro de un video (el clip de menor nota toma otra alternativa o «ponle título»); se
+  rechazan los títulos hechos solo de palabras abstractas; el juez pone en «quien» una persona del clip o su papel, y
+  `judge.who` vacía lo que no suena en el clip; una mayúscula unida a un nombre se conserva («Más Allá del Silencio»). Se
+  retira el título por clip de E-26. `tools/comparar_modelos_titulos.py` compara modelos de Ollama para los títulos.
+- **Guardas:** `test_E27_titles_are_distinct_within_a_video`, `test_E27_titles_of_only_abstract_words_are_rejected`,
+  `test_E27_multiword_names_keep_their_capitals`, `test_E27_judge_who_is_a_person_in_the_clip`, `test_E27_the_title_model_can_be_chosen`
 
