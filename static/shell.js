@@ -1684,6 +1684,34 @@ function renderSettings() {
   if (panel && panel.parentElement !== host) { host.append(panel); }
   panel?.classList.remove('hidden'); try { loadPerformance(); } catch {}
   renderStorage();
+  renderProfanity();
+}
+// «Malas palabras»: the list the clips mute when «Silenciar malas palabras» is on (per project, off by default).
+async function renderProfanity() {
+  let box = $('profanityBox');
+  if (!box) { box = h('div', { id: 'profanityBox', class: 'card prof-box' }); $('settingsHost').after(box); }
+  const data = await api('/api/profanity').catch(() => null);
+  if (!data) { put(box, h('p', { class: 'muted', text: 'No se pudo cargar la lista.' })); return; }
+  const on = Object.fromEntries(data.words.map((w) => [w.word, w.on])); let custom = [...data.custom];
+  let timer = null;
+  const persist = () => { clearTimeout(timer); timer = setTimeout(() => api('/api/profanity', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on, custom }) })
+    .then(() => toast('Lista guardada', 'Se aplica a los próximos clips que exportes.')).catch((e) => toast('No se pudo guardar', e.message)), 500); };
+  const chip = (w) => { const b = h('button', { type: 'button', class: 'prof-chip' + (on[w.word] ? ' on' : ''), 'aria-pressed': String(!!on[w.word]), text: w.word,
+    onclick: () => { on[w.word] = !on[w.word]; b.classList.toggle('on', on[w.word]); b.setAttribute('aria-pressed', String(on[w.word])); persist(); } }); return b; };
+  const customRow = h('div', { class: 'prof-chips' });
+  const paintCustom = () => put(customRow, custom.length ? custom.map((c) => h('span', { class: 'prof-chip on own' }, c,
+    h('button', { type: 'button', class: 'prof-del', 'aria-label': `Quitar ${c}`, text: '×', onclick: () => { custom = custom.filter((x) => x !== c); paintCustom(); persist(); } }))) : h('span', { class: 'muted', text: 'Aún no añadiste palabras.' }));
+  const input = h('input', { type: 'text', maxlength: 40, placeholder: 'Escribe una palabra o frase y pulsa Enter' });
+  const add = () => { const v = input.value.trim(); if (!v || custom.some((c) => c.toLowerCase() === v.toLowerCase())) return; custom.push(v); input.value = ''; paintCustom(); persist(); };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+  paintCustom();
+  put(box, h('h3', { text: 'Malas palabras', style: 'font-size:20px;margin:0 0 6px' }),
+    h('p', { class: 'muted', text: 'Se activan por proyecto en «Configura tus clips» (Silencio o Pitido) o en el editor, pestaña Subtítulos. Las marcadas en verde se silencian en el audio y salen tapadas en los subtítulos (p***). Toca una para activarla o desactivarla.' }),
+    h('b', { class: 'prof-group', text: 'Fuertes' }), h('div', { class: 'prof-chips' }, data.words.filter((w) => w.group === 'fuerte').map(chip)),
+    h('b', { class: 'prof-group', text: 'Dudosas · muchas se usan como muletilla (Colombia, Puerto Rico, Argentina)' }), h('div', { class: 'prof-chips' }, data.words.filter((w) => w.group === 'dudosa').map(chip)),
+    h('b', { class: 'prof-group', text: 'Tus palabras' }), customRow,
+    h('div', { class: 'prof-add' }, input, h('button', { class: 'btn ghost', type: 'button', text: 'Añadir', onclick: add })),
+    h('p', { class: 'muted', text: 'Solo se silencia lo que la transcripción entiende: si una palabra se oye mal, puede escaparse. El sonido del juego o la música también se silencia esa fracción de segundo.' }));
 }
 // Espacio en disco: temporary buffers of stopped live sessions; removed only after an explicit confirmation.
 const gb = (mb) => mb >= 1000 ? `${(mb / 1000).toFixed(1).replace('.', ',')} GB` : `${Math.round(mb)} MB`;

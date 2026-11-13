@@ -1095,3 +1095,18 @@ body.has-back main>.view:not(#editorView){padding-top:62px}
 .incident-card small{flex-basis:100%;opacity:.7;font-family:ui-monospace,monospace;font-size:11px;word-break:break-word}
 .incident-card p{margin:0;font-size:12px}
 @keyframes incidentIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+
+/* --- Malas palabras --------------------------------------------------------------------------------------------- */
+.prof-box{padding:20px;margin-top:18px}
+.prof-group{display:block;margin:14px 0 8px;font-size:13px;opacity:.85}
+.prof-chips{display:flex;flex-wrap:wrap;gap:8px}
+.prof-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.04);
+  color:inherit;font:500 13px var(--ui);cursor:pointer;transition:background .2s,border-color .2s,transform .15s}
+.prof-chip:hover{transform:translateY(-1px)}
+.prof-chip.on{background:rgba(190,255,90,.14);border-color:rgba(190,255,90,.55);color:#e6ffc2}
+.prof-chip.own{cursor:default}
+.prof-del{background:none;border:0;color:inherit;cursor:pointer;font-size:15px;line-height:1;opacity:.75}
+.prof-add{display:flex;gap:8px;margin:12px 0 4px}
+.prof-add input{flex:1;min-width:0}
+.mute-box{margin:10px 0 14px;padding:12px 14px;border-radius:14px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.03)}
+.mute-box select{max-width:220px}
