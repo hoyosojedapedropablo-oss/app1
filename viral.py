@@ -14,8 +14,11 @@ SYSTEM = '\n'.join([
     'Eres un clipero con años de experiencia en TikTok, Reels y YouTube Shorts en español. Lees la transcripción automática de '
     'UN clip de un directo y escribes títulos que hagan que la gente se detenga, comente y comparta.',
     'No copies la transcripción: cuenta QUÉ PASA y por qué importa, con un gancho de curiosidad, duda o polémica. '
-    'Usa verbos de acción concretos (le hace un llamado a, explota contra, confiesa, revela, responde a, se burla de, '
-    'promete, reta a, se pelea con, defiende a).',
+    'Usa verbos de acción concretos que correspondan a lo que pasa (le hace un llamado a, confiesa, revela, responde a, '
+    'se burla de, promete, reta a, defiende a, presume, bromea con).',
+    'Si recibes "analisis_del_editor", es la verdad sobre el clip: quien habla ("quien") es la persona del título, y el '
+    'tono ("que_pasa", "tipo") manda. Una broma no es una crítica ni una denuncia, un accidente no es una pelea, una '
+    'explicación no es una competencia, y no preguntes por un final que el clip ya muestra ("¿lo lograrán?" si lo logran).',
     'Nombres: "nombres_del_directo" son las personas y palabras de esta transmisión. La transcripción automática puede '
     'escribir mal un nombre (por ejemplo "Lessie" o "J. Lessie" cuando se dijo "JLexis"): si un nombre de la transcripción '
     'suena parecido a uno de la lista, usa el de la lista. Nunca inventes un nombre que no esté en la lista, el contexto o '
@@ -31,7 +34,8 @@ SYSTEM = '\n'.join([
     'corta y fuerte entre comillas, uno en forma de pregunta que genere duda, uno que plantee un contraste o polémica y '
     'uno que despierte curiosidad sobre el desenlace.',
     '- Corresponde a lo que se dice en el clip, no a otro tema.',
-    '- No inventes hechos, cifras ni lugares. Exagerar el tono está bien; mentir no.',
+    '- No inventes hechos, cifras, lugares, peleas ni competencias. Un tono con gancho está bien; cambiar lo que pasa, no.',
+    '- Escribe en español: mayúscula solo al inicio y en nombres propios.',
     '- Prohibido: "Descubre", "Increíble", "No creerás", "te sorprenderá", emojis, hashtags y títulos todo en mayúsculas.',
     'Ejemplos de estilo (no copies su contenido):',
     '  Se dice: "actívense, quiero escuchar los super chat, pongan team JLexis y su nombre para saber quién me lo envió" -> '
@@ -86,6 +90,14 @@ def grounded_title(title, text, speaker='', names=(), context=''):
         if w in COMMON_CAPS or root(w, known) or w in joined: continue
         if (not before or before[-1] in '.:!?¿¡«"|»') and (len(w) <= 4 or w in STOP or ORDINARY.search(w)): continue
         return False
+    # E-26: a name taken from the context or the list (not from the clip) must still sound said in the clip, also when
+    # it opens the title («Westcol: mi historia en la cárcel» on a clip where the guest, not Westcol, speaks).
+    for m in re.finditer(r'\b([A-ZÁÉÍÓÚÑ][\wáéíóúñ]{3,})', title):
+        w = fold(m.group(1)); before = title[:m.start(1)].rstrip()
+        if w in COMMON_CAPS or w in said or w in joined: continue
+        if (not before or before[-1] in '.:!?¿¡«"|»') and (w in STOP or ORDINARY.search(w)): continue
+        # .7, not .6: at .6 «westcol» sounded like «estuvo»; «uescol» (a misheard Westcol) is .77.
+        if w in set(words(' '.join([context, *names]))) and not sounds_said(w, text, .7, joined=.6): return False
     # A name from the stream's list only where something that sounds like it is said in the clip («J. Lessie» ~
     # «JLexis»): measured, the model otherwise put the only listed name on every clip, also where someone else spoke.
     for name in names:
@@ -98,12 +110,16 @@ def grounded_title(title, text, speaker='', names=(), context=''):
     return True
 
 
-def sounds_said(name, text):
-    """Whether something in the clip sounds like `name` (folded, no spaces): a word or two joined words close to it."""
+def sounds_said(name, text, threshold=.6, joined=None):
+    """Whether something in the clip sounds like `name` (folded, no spaces): a word or two joined words close to it.
+    `joined`: threshold for two or three words joined (default: `threshold`). E-26: a single word needs .7 («westcol»
+    ~ «estuvo» is .62, a false match) while a name the ASR split in two keeps .6 («j lessie» ~ «jlexis» is .62)."""
     from difflib import SequenceMatcher
     said = words(text)
-    pieces = said + [a + b for a, b in zip(said, said[1:])] + [a + b + c for a, b, c in zip(said, said[1:], said[2:])]
-    return any(SequenceMatcher(None, name, p).ratio() >= .6 for p in pieces if abs(len(p) - len(name)) <= 3)   # «j lessie» ~ «jlexis»: .62
+    near = lambda p: abs(len(p) - len(name)) <= 3
+    if any(SequenceMatcher(None, name, p).ratio() >= threshold for p in said if near(p)): return True
+    pieces = [a + b for a, b in zip(said, said[1:])] + [a + b + c for a, b, c in zip(said, said[1:], said[2:])]
+    return any(SequenceMatcher(None, name, p).ratio() >= (threshold if joined is None else joined) for p in pieces if near(p))
 
 
 def clean(title):

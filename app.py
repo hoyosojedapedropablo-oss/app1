@@ -6,7 +6,7 @@ import numpy as np
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator, SecretStr
 from timeline import make_cues, clip_words
@@ -48,7 +48,14 @@ def decode_audio(path):
  return audio
 
 @app.get('/')
-def home(): return FileResponse(ROOT/'static/index.html',headers={'Cache-Control':'no-store'})
+def home():
+ # E-26: each script and style sheet is asked for with its own modification time, so an update reaches the browser
+ # without Ctrl + F5 (the hand-kept «?v=46» stayed the same when shell.js changed).
+ html=(ROOT/'static/index.html').read_text(encoding='utf-8')
+ for name in ('app.js','shell.js','style.css','theme.css'):
+  path=ROOT/'static'/name
+  if path.exists():html=re.sub(rf'/static/{re.escape(name)}\?v=[\w.]+',f'/static/{name}?v={int(path.stat().st_mtime)}',html)
+ return HTMLResponse(html,headers={'Cache-Control':'no-store'})
 
 def register_video(ident,path,name,*,max_duration=7200):
  info=probe(path);duration=float(info['format']['duration'])
@@ -393,6 +400,15 @@ def analyze(ident,options):
     job.update(message=f'Revisando el potencial viral de los clips · {i+1} de {len(top)}')
     v=judge.judge(c.get('text',''),speaker=options.speaker,context=options.context,names=names)
     if v:c.update(score=v['score'],verdict=v['verdict'],viral_kind=v['kind'],analysis=v['analysis'],marks=v['marks'])
+   # E-26: one title per clip from what the judge understood (who speaks, what happens, its tone), instead of batches
+   # of six where a title could describe the next clip or turn a joke into a complaint. The batch title stays as an
+   # alternative and as the fallback when no grounded title comes back.
+   judged=[c for c in top if c.get('analysis')]
+   for i,c in enumerate(judged):
+    if event.is_set():break
+    job.update(message=f'Escribiendo el título de cada clip · {i+1} de {len(judged)}')
+    better=clip_title(c,options,names)
+    if better:c.update(better)
   # Final note: judge + the clip's own signals + its place in this video; best first, filler in «Para revisar» (E-20).
   import scoring
   clips=scoring.rank_video(clips,lambda c:clip_words(job.get('transcript',[]),c['start'],c['end']))
@@ -412,6 +428,19 @@ def analyze(ident,options):
  finally:save_job(job)
 
 JUDGE_LIMIT=40   # clips the viral judge reviews per video (about 3-6 s each on the local GPU)
+
+def clip_title(c,options,names):
+ """{'title','titles','claim'} from viral.py for one judged clip, or None (the batch title then stays)."""
+ import viral
+ from intelligence import clean_title
+ try:result=viral.generate(c.get('text',''),speaker=options.speaker,context=options.context,names=names,analysis=c.get('analysis'))
+ except Exception as e:
+  logging.getLogger('uvicorn.error').warning('Clip title failed: %s',e);return None
+ if not result:return None
+ titles=[t for t in (clean_title(t,c.get('text','')) for t in result['titles']) if t]
+ if not titles:return None
+ old=[t for t in [c.get('title'),*(c.get('titles') or [])] if t and not c.get('title_fallback')]
+ return dict(title=titles[0],titles=list(dict.fromkeys(titles+old))[:5],claim=result.get('claim',''),title_fallback=False)
 
 def video_names(job,options):
  """People and words of this video for the judge: the speaker the user named, the channel and the capitalised words of
