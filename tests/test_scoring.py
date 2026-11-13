@@ -77,6 +77,19 @@ class RankTests(unittest.TestCase):
         self.assertTrue(all(c['section'] == 'best' for c in out[:3]))      # the top 3 of a video are always shown
         self.assertTrue(all(0 <= n <= 99 for n in notes))
 
+    def test_E20c_coverage_clips_are_judged_when_the_ai_marked_no_moment(self):
+        coverage = [{'id': f'f{i}', 'start': i * 40., 'end': i * 40. + 30, 'score': None} for i in range(20)]
+        self.assertEqual([c['id'] for c in scoring.judge_order(coverage, 40)], [f'f{i}' for i in range(20)])
+        mixed = coverage[:3] + [clip(5, 60, start=500.), clip(6, 80, start=600.)]
+        self.assertEqual([c['id'] for c in scoring.judge_order(mixed, 4)], ['c6', 'c5', 'f0', 'f1'])
+
+    def test_E20c_judged_coverage_enters_the_ranking_and_filler_waits_in_review(self):
+        judged = [dict(clip(i, 50 + i), category='Para revisar') for i in range(4)]
+        filler = dict(clip(9, 20), verdict='descartar')
+        out = self.rank(judged + [filler])
+        self.assertTrue(all(c['section'] == 'best' for c in out[:3]))       # «Los mejores» is never empty
+        self.assertEqual(out[-1]['id'], 'c9'); self.assertEqual(out[-1]['section'], 'review')
+
     def test_E20_place_in_the_video_never_turns_a_weak_clip_into_a_great_one(self):
         out = self.rank([clip(0, 30)])
         self.assertLess(out[0]['score'], scoring.POTENTIAL_FROM)

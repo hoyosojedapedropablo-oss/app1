@@ -57,12 +57,22 @@ def base(judged, sig_score, live=False):
     return round(.7 * judged + .3 * sig_score) if live else round((.60 * judged + .25 * sig_score) / .85)
 
 
+def judge_order(clips, limit):
+    """The clips the viral judge reviews, at most `limit`: the AI's own picks by their score first, then coverage clips
+    (no score yet) in time order. When the AI marks no moment, every clip is coverage and all of them still get a note
+    (E-20c: a real Ibai video had 20 coverage clips, none judged, and «Los mejores» came out empty)."""
+    picked = sorted((c for c in clips if c.get('score') is not None), key=lambda c: -c['score'])
+    coverage = sorted((c for c in clips if c.get('score') is None), key=lambda c: c['start'])
+    return (picked + coverage)[:limit]
+
+
 def rank_video(clips, words_of):
     """Final notes, ranks, reasons and sections for the clips of one video, best first; filler (no score) after them in
     time order. `words_of(clip)` gives the clip's words with times relative to its start."""
     scored, filler = [], []
     for c in clips:
-        if c.get('score') is None: filler.append(dict(c, section='review', reasons=[])); continue
+        # Unjudged coverage, or what the judge itself called filler, waits in «Para revisar».
+        if c.get('score') is None or c.get('verdict') == 'descartar': filler.append(dict(c, section='review', reasons=[])); continue
         sig = signals(words_of(c), c['end'] - c['start'])
         scored.append(dict(c, judge_score=c['score'], signals=sig, _base=base(c['score'], sig['score'])))
     scored.sort(key=lambda c: -c['_base'])

@@ -108,3 +108,8 @@ una prueba automática (entre comillas invertidas) que falla si el error vuelve.
   `test_E20_a_clip_that_starts_talking_scores_above_one_with_dead_air`, `test_E20_best_clips_first_with_rank_and_reasons`,
   `test_E20_filler_for_coverage_goes_to_review_not_to_the_main_list`, `test_E20_a_typical_video_no_longer_averages_forty`,
   `test_E20_place_in_the_video_never_turns_a_weak_clip_into_a_great_one`
+- **E-20c (primera prueba real, video de Ibai):** la IA no marcó ningún momento y los 20 clips eran de cobertura; la rama
+  dejó de juzgar la cobertura, nadie recibió nota y «Los mejores» quedó vacío (igual en otro video de Ibai y en «Más Allá
+  del Silencio Podcast»). Ahora el juez revisa primero lo que marcó la IA y después la cobertura, hasta 40 clips; solo
+  queda en «Para revisar» lo que no se juzgó o lo que el juez llamó relleno. Guardas:
+  `test_E20c_coverage_clips_are_judged_when_the_ai_marked_no_moment`, `test_E20c_judged_coverage_enters_the_ranking_and_filler_waits_in_review`

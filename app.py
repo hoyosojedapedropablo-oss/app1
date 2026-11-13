@@ -381,10 +381,11 @@ def analyze(ident,options):
   job['timings']['titles_s']=round(time.monotonic()-started,1)
   if options.engine=='gpu':
    # The viral judge gives every proposed clip an honest note (who says what to whom, why, what happens after), with
-   # the names of the video so a misheard name does not confuse it. Coverage filler (no score) is not judged.
-   import judge
+   # the names of the video so a misheard name does not confuse it. The AI's own picks go first, then coverage clips:
+   # when the AI marks no moment the whole video is coverage, and leaving it unjudged emptied «Los mejores» (E-20c).
+   import judge,scoring
    names=video_names(job,options)
-   top=sorted((c for c in clips if c.get('score') is not None),key=lambda c:-c['score'])[:JUDGE_LIMIT]
+   top=scoring.judge_order(clips,JUDGE_LIMIT)
    for i,c in enumerate(top):
     if event.is_set():break
     job.update(message=f'Revisando el potencial viral de los clips · {i+1} de {len(top)}')
