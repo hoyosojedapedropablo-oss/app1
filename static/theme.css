@@ -673,7 +673,7 @@ input,select,textarea{font-family:var(--ui)!important}
 .theater-host .tf-text b{font:700 17px var(--head)}
 @media (prefers-reduced-motion:reduce){.th-dock{animation:none}}
 /* «Configura tus clips»: fixed header, scrolling body, buttons always in view */
-#configModal{align-items:center!important;padding:24px 16px!important}
+/* #configModal layout: see E-35 below */
 #configModal .modal-card.cfg-structured{display:flex;flex-direction:column;width:min(760px,96vw);max-height:calc(100vh - 48px);padding:0!important;overflow:hidden;
   border-radius:24px;border:1px solid var(--line);background:linear-gradient(180deg,#16161a,#111114);box-shadow:0 40px 120px rgba(0,0,0,.6);animation:rise .35s ease both}
 #configModal .modal-card.cfg-structured:focus{outline:none}
@@ -708,13 +708,22 @@ input,select,textarea{font-family:var(--ui)!important}
 .names-input input{background:transparent;border:0;min-height:44px;font:500 14px var(--ui)!important}
 .names-input:focus-within{border-color:var(--green-line)!important;box-shadow:0 0 0 3px rgba(198,255,94,.12)}
 .cfg-names small{line-height:1.45}
-/* The dialog is as tall as its content (up to the window): the body takes its real height and only shrinks to fit.
-   With «flex:1» (a 0 basis) some Chrome versions sized the body far below its content and left an empty black area
-   under the buttons. Nothing but the header, body and buttons is ever shown in the card. */
-#configModal .modal-card.cfg-structured{height:auto!important;min-height:0!important}
+/* E-35 «Configura tus clips» always fits the window: header and buttons in view, only the body scrolls.
+   - The card is never taller than the window: min(100dvh - 48px, 100% of the dialog layer). 100vh alone can be taller
+     than what is visible (browser bars, page zoom, a horizontal scrollbar), and a centred card taller than the window
+     was cut at the top with no way to scroll up (the layer has overflow:hidden).
+   - It is centred with auto margins, not align-items:center: when it does not fit it starts at the top instead of
+     overflowing above it.
+   - The body is «0 1 auto» with min-height:0: as tall as its content, shrinking (and scrolling) only to fit, so there
+     is never an empty area under the buttons (with «flex:1», a 0 basis, some Chrome versions left one).
+   Nothing but the header, body and buttons is ever shown in the card. Guard: tests/test_config_dialog.py (a real
+   browser at 770x910, 1280x720, 1366x768 and 1920x1080, live and video). */
+#configModal{overflow:hidden!important;align-items:flex-start!important;justify-content:center;padding:24px 16px!important;box-sizing:border-box}
+#configModal .modal-card.cfg-structured{height:auto!important;min-height:0!important;margin:auto 0!important;
+  max-height:calc(100vh - 48px);max-height:min(calc(100dvh - 48px),100%)}
 #configModal .modal-card.cfg-structured>:not(.cfg-head):not(.cfg-body):not(.modal-actions){display:none!important}
 #configModal .cfg-structured .cfg-head,#configModal .cfg-structured .modal-actions{flex:0 0 auto}
-#configModal{overflow:hidden!important}
+#configModal .cfg-structured .cfg-body{flex:0 1 auto!important;min-height:0!important;overflow-y:auto!important}
 
 /* Score badges (Fluent 3D emoji, MIT, Microsoft): 85+ burns, so the clipper knows it goes up right now */
 .sbadge{position:relative;display:inline-flex;align-items:center;gap:6px;padding:4px 10px 4px 6px;border-radius:999px;font:700 12px var(--ui);line-height:1;white-space:nowrap;width:max-content;max-width:100%;background:rgba(10,10,12,.82);color:#f2f2f4;border:1px solid rgba(255,255,255,.08)}
