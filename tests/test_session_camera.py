@@ -26,6 +26,16 @@ class ConsensusTests(unittest.TestCase):
         self.assertIsNone(layout.consensus_camera([box(), box()]))
         self.assertIsNone(layout.consensus_camera([box(), box(x=900), box(x=1400, y=600), dict(found=False)]))
 
+    def test_E31_the_camera_a_centred_game_panel_shows_is_blurred(self):
+        o = box(); result = dict(overlay=o, panels=layout.panels(o), motion=dict(xs=[960.0] * 40))
+        with tempfile.TemporaryDirectory() as tmp:
+            still = layout.filter_graph(result, Path(tmp) / 'p.cmd', 1, 25, follow=False)
+            moving = layout.filter_graph(result, Path(tmp) / 'p.cmd', 1, 25, follow=True)
+        self.assertIn('boxblur', still); self.assertNotIn('boxblur', moving)
+        blur = layout.preview_path(result, follow=False)['game']['blur']
+        self.assertTrue(blur and blur['x'] == 0 and blur['w'] > 8)                      # the camera is on the left
+        self.assertIsNone(layout.preview_path(result, follow=True)['game']['blur'])
+
     def test_E31_the_game_panel_is_centred_unless_following_the_action(self):
         o = box(); result = dict(overlay=o, panels=layout.panels(o), motion=dict(xs=[1500.0] * 40))
         still = layout.game_path(result, 'balanced', follow=False)
@@ -79,6 +89,24 @@ class SessionTests(unittest.TestCase):
             with patch.object(s, '_prepare_layout', side_effect=lambda m: done.append(m['id'])):
                 s.refresh_layouts()
             self.assertEqual(done, ['m3'])
+
+
+class OpenedProjectTests(unittest.TestCase):
+    def test_E31_an_opened_project_takes_the_sessions_camera_unless_marked_by_hand(self):
+        import app
+        with tempfile.TemporaryDirectory() as tmp:
+            s = SessionTests.session(SessionTests(), tmp, n=5)
+            for m in s.moments: (s.clips / f"{m['id']}.layout.json").write_text(json.dumps(dict(overlay=box())), encoding='utf-8')
+            ident = 'b' * 32; folder = Path(tmp) / 'data' / ident; folder.mkdir(parents=True)
+            job = dict(id=ident, live={'session': s.id, 'moment': 'm4'})
+            with patch.object(app, 'DATA', Path(tmp) / 'data'), patch.dict(app.JOBS, {ident: job}), patch.dict(app.LIVE, {s.id: s}):
+                app._session_cams.clear()
+                app.write_overlay(ident, box(x=24, w=486, h=450, status='ready', manual=False))
+                ov = app.read_overlay(ident)
+                self.assertEqual((ov['x'], ov['w'], ov['h']), (28, 516, 376)); self.assertEqual(ov['detected']['h'], 450)
+                self.assertEqual(json.loads(app.overlay_file(ident).read_text(encoding='utf-8'))['h'], 376)        # saved
+                app.write_overlay(ident, box(x=24, w=486, h=450, status='ready', manual=True))
+                self.assertEqual(app.read_overlay(ident)['h'], 450)                                               # by hand: kept
 
 
 class ExportDefaultTests(unittest.TestCase):

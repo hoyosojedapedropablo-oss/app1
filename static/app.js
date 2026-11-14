@@ -641,6 +641,9 @@ function drawStack(t){
  const g=p.game,i=Math.max(0,t)*g.fps,a=Math.min(g.left.length-1,Math.floor(i)),b=Math.min(g.left.length-1,a+1);
  const left=g.left[a]+(g.left[b]-g.left[a])*Math.max(0,i-a),x=Math.min(Math.max(0,Math.round(left/2)*2),p.width-g.w);
  ctx.drawImage(video,x,g.y,g.w,g.h,0,(p.top+p.seam)*r,w,p.bottom*r);
+ // E-31: the part of the camera a centred game panel shows is blurred, as layout.filter_graph does in the MP4.
+ if(g.blur){const b=g.blur,y0=(p.top+p.seam)*r;ctx.save();ctx.beginPath();ctx.rect(b.x*r,y0+b.y*r,b.w*r,b.h*r);ctx.clip();ctx.filter=`blur(${Math.max(4,18*r)}px)`;
+  ctx.drawImage(video,x,g.y,g.w,g.h,0,y0,w,p.bottom*r);ctx.restore();}
 }
 $('game_follow').addEventListener('change',()=>{saveCurrent();loadStackPath().catch(e=>say(e.message));});
 for(const key of ['start','end'])$(key).addEventListener('change',()=>{if($('framing').value==='stack')loadStackPath().catch(e=>say(e.message));});

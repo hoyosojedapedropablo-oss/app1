@@ -216,8 +216,19 @@ class ExportTests(unittest.TestCase):
                 cam = image[int(40 * k):top - int(40 * k), int(60 * k):-int(60 * k)]
                 red = (cam[:, :, 0] > 150) & (cam[:, :, 1] < 70)
                 self.assertGreater(red.mean(), .9)                              # the camera fills the top panel
-                game = image[top + int(20 * k):]
-                self.assertLess(((game[:, :, 0] > 150) & (game[:, :, 1] < 70)).mean(), .01)   # and is not repeated below
+                # E-31: the game panel is centred by default; the corner of the camera it shows is blurred (variance of that
+                # rectangle 2885 sharp vs 257 blurred on this stream), not avoided.
+                blur = client.post(f'/api/jobs/{ident}/layout/path', json=dict(start=0, end=4, follow=False)).json()['game']['blur']
+                self.assertIsNotNone(blur)
+                gray = np.array(Image.open(frame).convert('L')).astype(float); y0 = int((path['top'] + path['seam']) * k)
+                zone = gray[y0 + int((blur['y'] + 10) * k): y0 + int((blur['y'] + blur['h'] - 10) * k), int((blur['x'] + 10) * k): int((blur['x'] + blur['w'] - 10) * k)]
+                self.assertLess(zone.var(), 600, (resolution, zone.var()))
+            # «Seguir la acción del juego» on: the game crop keeps clear of the camera, as before.
+            r = client.post(f'/api/jobs/{ident}/export', json=dict(start=0, end=4, title='', subtitles='', framing='stack', game_follow=True))
+            out = Path(tmp) / 'follow.mp4'; out.write_bytes(r.content); frame = Path(tmp) / 'follow.png'
+            backend.command(['ffmpeg', '-v', 'error', '-y', '-ss', '2', '-i', str(out), '-frames:v', '1', str(frame)])
+            image = np.array(Image.open(frame).convert('RGB')).astype(int); game = image[path['top'] + 20:]
+            self.assertLess(((game[:, :, 0] > 150) & (game[:, :, 1] < 70)).mean(), .01)   # the camera is not repeated below
             # A manual rectangle replaces the detected one and the layout follows it.
             fixed = client.put(f'/api/jobs/{ident}/overlay', json=dict(x=880, y=10, w=380, h=290)).json()
             self.assertTrue(fixed['manual']); self.assertEqual((fixed['x'], fixed['w']), (880, 380))
