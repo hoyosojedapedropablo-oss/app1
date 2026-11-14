@@ -718,6 +718,7 @@ setInterval(loadMuteRanges,1500);
 // Subtitle templates (templates.py): only the subtitles' look — font, size, colours, outline, animation, accent, capitals
 // and height. «Este clip» shows one on the open clip at once; «Todos» copies it to every clip of the project. The format
 // («Cámara + juego» included), the title and the logo never change.
+const TPL_CARD_W=236;   // a card of the template window, px (3 a row; style.css .tpl-grid)
 const TPL_KEYS=['font','caption_size','caption_color','outline_color','outline_width','caption_style','caption_accent','caption_upper','caption_y'];
 var clipTemplates=[],galleryTimer=null,galleryTab='builtin',tplCardSig='',tplMiniStep=0,tplLastId='';
 async function loadTemplates(){try{clipTemplates=(await(await request('/api/templates')).json()).templates||[];}catch{clipTemplates=[];}tplCardSig='';paintTemplateCard();}
@@ -778,7 +779,7 @@ async function shareSubtitles(keys){
 function tplBackground(){
  const p=stackPath,video=$('video');
  if($('framing').value==='stack'&&p?.found&&video.readyState>=2){
-  const W=216,H=384,r=W/1080,c=document.createElement('canvas');c.width=W;c.height=H;const ctx=c.getContext('2d');ctx.fillStyle='#0b0b0b';ctx.fillRect(0,0,W,H);
+  const W=480,H=854,r=W/1080,c=document.createElement('canvas');c.width=W;c.height=H;const ctx=c.getContext('2d');ctx.fillStyle='#0b0b0b';ctx.fillRect(0,0,W,H);
   try{ctx.drawImage(video,p.cam.x,p.cam.y,p.cam.w,p.cam.h,0,0,W,p.top*r);const g=p.game,x=Math.min(Math.max(0,Math.round(g.left[0]/2)*2),p.width-g.w);
    ctx.drawImage(video,x,g.y,g.w,g.h,0,(p.top+p.seam)*r,W,p.bottom*r);return {src:c.toDataURL('image/jpeg',.82),stack:true};}catch{}
  }
@@ -791,7 +792,7 @@ function templateCard(t,bg,sample,active){
  shot.onclick=e=>{if(!e.target.closest('button'))apply('clip');};
  shot.onkeydown=e=>{if(e.key==='Enter'&&e.target===shot){e.preventDefault();apply('clip');}};
  if(bg.src)shot.append(tplNode('img',{src:bg.src,alt:'',style:!bg.stack&&framing==='zoom'?`height:${z*100}%;top:${(1-z)*50}%`:''}));
- shot.append(tplCaption(v,sample,158));
+ shot.append(tplCaption(v,sample,TPL_CARD_W));
  if(active)shot.append(tplNode('span',{class:'tpl-check','aria-label':'Plantilla activa',text:'✓'}));
  shot.append(tplNode('div',{class:'tpl-hover'},tplNode('button',{type:'button',class:'secondary',text:'Este clip',onclick:()=>apply('clip')}),tplNode('button',{type:'button',text:'Todos',onclick:()=>apply('all')})));
  const meta=tplNode('div',{class:'tpl-meta'},tplNode('b',{text:t.name}),tplNode('small',{text:t.builtin?t.niche:'Mis plantillas'}));

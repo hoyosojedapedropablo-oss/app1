@@ -55,7 +55,7 @@
 .tpl-launch-txt span{font-size:11px;color:#95959f;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tpl-chev{flex:0 0 auto;width:8px;height:8px;border-right:2px solid #95959f;border-top:2px solid #95959f;transform:rotate(45deg);margin-right:4px}
 .tpl-launch:hover:not(:disabled) .tpl-chev{border-color:#c6ff5e}
-.cs-modal .box.tpl-gallery{width:min(1000px,100%);max-height:88vh;overflow:auto;display:block;background:#141417;border:1px solid #2c2c33;border-radius:12px;padding:18px 20px}   /* wider than theme.css's 560 px dialogs */
+.cs-modal .box.tpl-gallery{width:min(800px,100%);max-height:88vh;overflow:auto;display:block;background:#141417;border:1px solid #2c2c33;border-radius:12px;padding:18px 20px}   /* wider than theme.css's 560 px dialogs */
 .tpl-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.tpl-head h2{margin:0;font-size:18px}
 .tpl-x{width:34px;height:34px;padding:0;border-radius:10px;background:transparent;border:1px solid #2c2c33;color:#f2f2f4;font-size:20px;line-height:1}
 .tpl-x:hover{border-color:#c6ff5e;color:#c6ff5e}
@@ -71,10 +71,10 @@
 .tpl-saveform input{flex:1 1 180px;min-width:0;margin:0}.tpl-saveform button{padding:8px 14px;font-size:12px;border-radius:10px}
 .tpl-err{flex-basis:100%;font-size:12px;color:#ff7a7a}.tpl-err:empty{display:none}
 .tpl-note{margin:10px 0 0;font-size:12px}
-.tpl-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:16px;margin-top:14px}
+.tpl-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:18px;margin-top:14px}   /* 3 a row in the 800 px window */
 .tpl-empty{grid-column:1/-1;padding:30px 10px;text-align:center}
 .tpl-card{display:flex;flex-direction:column;gap:6px}
-.tpl-shot{position:relative;width:100%;max-width:190px;aspect-ratio:9/16;background:#000;border-radius:10px;overflow:hidden;cursor:pointer;box-shadow:0 0 0 1px #2c2c33;transition:box-shadow .15s}
+.tpl-shot{position:relative;width:100%;aspect-ratio:9/16;background:#000;border-radius:10px;overflow:hidden;cursor:pointer;box-shadow:0 0 0 1px #2c2c33;transition:box-shadow .15s}
 .tpl-shot:focus-visible{outline:none;box-shadow:0 0 0 2px #c6ff5e}
 .tpl-card.active .tpl-shot{box-shadow:0 0 0 2px #c6ff5e,0 0 18px rgba(198,255,94,.25)}
 .tpl-shot img{position:absolute;left:0;width:100%;height:100%;top:0;object-fit:cover}
@@ -82,8 +82,8 @@
 .tpl-hover{position:absolute;inset:auto 0 0 0;display:flex;gap:6px;padding:28px 8px 8px;background:linear-gradient(transparent,rgba(0,0,0,.85));opacity:0;transition:opacity .15s;z-index:3}
 .tpl-card:hover .tpl-hover,.tpl-shot:focus-within .tpl-hover,.tpl-shot:focus-visible .tpl-hover{opacity:1}
 @media (hover:none){.tpl-hover{opacity:1}}
-.tpl-hover button{flex:1;padding:7px 4px;font-size:11px;border-radius:8px}
-.tpl-meta{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 8px}.tpl-meta b{font-size:12px;flex-basis:100%}.tpl-meta small{font-size:10px;color:#95959f}
+.tpl-hover button{flex:1;padding:9px 6px;font-size:12px;border-radius:8px}
+.tpl-meta{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 8px}.tpl-meta b{font-size:13px;flex-basis:100%}.tpl-meta small{font-size:11px;color:#95959f}
 .tpl-del{margin-left:auto;padding:2px 8px;font-size:10px;border-radius:8px;background:transparent;border:1px solid #2c2c33;color:#95959f}
 .tpl-del:hover,.tpl-del.sure{border-color:#ff7a7a;color:#ff7a7a}
 .tpl-cap{position:absolute;left:50%;top:78%;transform:translate(-50%,-50%);width:88%;text-align:center;font-weight:700;line-height:1.15;paint-order:stroke fill;pointer-events:none;z-index:2}
@@ -115,3 +115,5 @@ select.fp-native{display:none!important}
 .sel-h{position:absolute;width:24px;height:24px;margin:-12px;pointer-events:auto;touch-action:none}
 .sel-h::after{content:'';position:absolute;left:7px;top:7px;width:10px;height:10px;background:#fff;border-radius:50%;box-shadow:0 0 0 1px rgba(0,0,0,.5),0 1px 4px rgba(0,0,0,.5)}
 .sel-h.nw{left:0;top:0;cursor:nwse-resize}.sel-h.ne{left:100%;top:0;cursor:nesw-resize}.sel-h.sw{left:0;top:100%;cursor:nesw-resize}.sel-h.se{left:100%;top:100%;cursor:nwse-resize}
+/* «Aplicar a todos los clips»: the first item of the panel's scrolling body (not a header the controls slide under). */
+#editorView .inspector-body > .share-all{display:flex;justify-content:flex-start;align-items:flex-start;margin:0 0 14px;font:inherit;color:inherit;letter-spacing:normal}
