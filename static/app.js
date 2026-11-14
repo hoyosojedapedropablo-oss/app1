@@ -725,27 +725,36 @@ async function loadTemplates(keep){
  sel.value=keep||'';paintTemplateButtons();
 }
 function paintTemplateButtons(){const t=clipTemplates.find(x=>x.id===$('templateSelect').value);$('templateApply').disabled=!t||!job;$('templateDelete').hidden=!t||t.builtin;}
-function applyTemplate(t){
- if(!job)return;const v=t.values||{},skipped=[];
- // 1) the project's format, as «Configura tus clips» does: every clip, adjusted or not, takes it
- if(v.framing||v.zoom||v.show_subtitles!==undefined){
-  projectConfig={...projectConfig,...(v.framing?{framing:v.framing}:{}),...(v.zoom?{zoom:v.zoom}:{}),...(v.show_subtitles!==undefined?{subtitles:!!v.show_subtitles}:{})};
+function applyTemplate(t,scope='all'){
+ // scope 'clip': only the open clip (what choosing a template shows at once); 'all': every clip of the project.
+ if(!job||!t)return;const v=t.values||{},skipped=[];
+ // A project in «Cámara + juego» keeps it: a template changes the look, never the format the user chose (E-07, E-31).
+ const keepStack=projectConfig.framing==='stack'||$('framing').value==='stack';
+ const format=keepStack?{}:{...(v.framing?{framing:v.framing}:{}),...(v.zoom?{zoom:v.zoom}:{})};
+ const before=$('framing').value;
+ if(scope==='all'&&(Object.keys(format).length||v.show_subtitles!==undefined)){
+  projectConfig={...projectConfig,...format,...(v.show_subtitles!==undefined?{subtitles:!!v.show_subtitles}:{})};
   showConfig(projectConfig);saveProjectConfig();
   for(const [id,e] of edits)edits.set(id,{...e,framing:effectiveFraming(projectConfig),zoom:projectConfig.zoom,show_subtitles:projectConfig.subtitles});
   if(selected)applyProjectToEditor();
+ }else if(scope==='clip'&&selected){
+  if(format.framing)$('framing').value=effectiveFraming({...projectConfig,...format});
+  if(format.zoom)$('zoom').value=format.zoom;
+  if(v.show_subtitles!==undefined)$('show_subtitles').checked=!!v.show_subtitles;
  }
- // 2) the look: the editor's fields, then «Aplicar a todos los clips»
  for(const [k,val] of Object.entries(v)){
-  if(['framing','zoom'].includes(k))continue;const el=$(k);if(!el)continue;
+  if(['framing','zoom','show_subtitles'].includes(k))continue;const el=$(k);if(!el)continue;
   if(el.tagName==='SELECT'&&![...el.options].some(o=>o.value===String(val))){skipped.push(String(val));continue;}   // a font not installed
   if(CHECKS.includes(k))el.checked=!!val;else el.value=val;
  }
- captionKey='';paint();saveCurrent();shareSent='';shareStyle(true);
- if($('framing').value==='stack')loadStackPath().catch(e=>say(e.message));else if($('auto_follow').checked)prepareTracking().catch(e=>say(e.message));
- say(`Plantilla «${t.name}» aplicada a los ${job.clips.length} clips.`+(skipped.length?` Falta instalar: ${skipped.join(', ')} (se dejó la fuente actual).`:''));
+ captionKey='';paint();saveCurrent();
+ if(scope==='all'){shareSent='';shareStyle(true);}
+ if($('framing').value!==before||scope==='all'){if($('framing').value==='stack')loadStackPath().catch(e=>say(e.message));else if($('auto_follow').checked)prepareTracking().catch(e=>say(e.message));}
+ const where=scope==='all'?`a los ${job.clips.length} clips`:'a este clip';
+ say(`Plantilla «${t.name}» aplicada ${where}.`+(keepStack&&(v.framing||v.zoom)?' Se mantuvo «Cámara + juego».':'')+(skipped.length?` Falta instalar: ${skipped.join(', ')} (se dejó la fuente actual).`:''));
 }
-$('templateSelect').onchange=paintTemplateButtons;
-$('templateApply').onclick=()=>{const t=clipTemplates.find(x=>x.id===$('templateSelect').value);if(t)applyTemplate(t);};
+$('templateSelect').onchange=()=>{paintTemplateButtons();const t=clipTemplates.find(x=>x.id===$('templateSelect').value);if(t)applyTemplate(t,'clip');};
+$('templateApply').onclick=()=>{const t=clipTemplates.find(x=>x.id===$('templateSelect').value);if(t)applyTemplate(t,'all');};
 $('templateSave').onclick=async()=>{
  const name=$('templateName').value.trim();if(!name){say('Escribe un nombre para la plantilla.');$('templateName').focus();return;}
  const look=styles(),values={framing:projectConfig.framing,zoom:projectConfig.zoom};
@@ -755,4 +764,46 @@ $('templateSave').onclick=async()=>{
 $('templateDelete').onclick=async()=>{const t=clipTemplates.find(x=>x.id===$('templateSelect').value);if(!t||t.builtin)return;
  try{await request(`/api/templates/${t.id}`,{method:'DELETE'});await loadTemplates();say(`Plantilla «${t.name}» borrada.`);}catch(e){say(e.message);}};
 loadTemplates();
-
+// «Ver todas las plantillas en vivo»: each template on a still of the open clip, with its title and its subtitles moving
+// as they will in the MP4 (same classes as the editor preview).
+let galleryTimer=null;
+// app.js's own element helper (the one in shell.js is private to its closure): attributes, on* listeners, text, children.
+function tplNode(tag,attrs={},...kids){const node=document.createElement(tag);
+ for(const [k,v] of Object.entries(attrs||{})){if(v==null||v===false)continue;if(k==='class')node.className=v;else if(k==='style')node.style.cssText=v;
+  else if(k.startsWith('on'))node.addEventListener(k.slice(2),v);else if(k==='text')node.textContent=v;else node.setAttribute(k,v===true?'':v);}
+ for(const kid of kids.flat())if(kid!=null&&kid!==false)node.append(kid.nodeType?kid:document.createTextNode(String(kid)));return node;}
+function templateCard(t,still,sample,title){
+ const v=t.values||{},W=158,r=W/1080,z=ZOOM[v.zoom]||ZOOM.balanced;
+ const keepStack=projectConfig.framing==='stack'||$('framing').value==='stack';
+ const framing=keepStack?'stack':(v.framing||'zoom');
+ const shot=tplNode('div',{class:'tpl-shot'+(framing==='zoom'?' zoom':'')});
+ if(still)shot.append(tplNode('img',{src:still,alt:'',style:framing==='zoom'?`height:${z*100}%;top:${(1-z)*50}%`:''}));
+ const fontOk=f=>[...$('font').options].some(o=>o.value===f);
+ if(title)shot.append(tplNode('span',{class:'tpl-title',text:title,style:`font-family:'${v.title_font||'Montserrat'}';background:${v.title_bg_color||'#fff'};color:${v.title_text_color||'#000'};border-radius:${v.title_corners==='square'?'0':'.35em'};top:${framing==='zoom'?(1-z)*50:12}%`}));
+ const words=(v.caption_upper?sample.toUpperCase():sample).split(/\s+/).filter(Boolean).slice(0,6);
+ const cap=tplNode('span',{class:'tpl-cap cap-'+(v.caption_style||'clasico'),style:`font-family:'${fontOk(v.font)?v.font:'Montserrat'}';font-size:${Math.round((v.caption_size||64)*r*1.15)}px;color:${v.caption_color||'#fff'};-webkit-text-stroke:${Math.max(.6,(v.outline_width||4)*r)}px ${v.outline_color||'#000'};--cap-accent:${v.caption_accent||'#FFE14D'}`});
+ const keys=v.caption_style==='palabra_clave'?keyWords(words):new Set();
+ words.forEach((w,i)=>{cap.append(tplNode('span',{class:'w'+(keys.has(i)?' key':''),text:w}));if(i<words.length-1)cap.append(document.createTextNode(' '));});
+ shot.append(cap);
+ const card=tplNode('div',{class:'tpl-card'},shot,tplNode('b',{text:t.name}),tplNode('small',{text:(t.builtin?t.niche:'Mis plantillas')+(keepStack&&v.framing&&v.framing!=='stack'?' · mantiene Cámara + juego':'')}),
+  tplNode('div',{class:'tpl-acts'},tplNode('button',{type:'button',class:'secondary',text:'En este clip',onclick:()=>{$('templateSelect').value=t.id;paintTemplateButtons();applyTemplate(t,'clip');}}),
+   tplNode('button',{type:'button',text:'En todos',onclick:()=>{$('templateSelect').value=t.id;paintTemplateButtons();applyTemplate(t,'all');closeGallery();}})));
+ return card;
+}
+function closeGallery(){clearInterval(galleryTimer);galleryTimer=null;$('tplGallery')?.remove();}
+$('templateGallery').onclick=async()=>{
+ if(!clipTemplates.length)await loadTemplates($('templateSelect').value);
+ closeGallery();
+ const still=job&&selected?`/api/jobs/${job.id}/frame?t=${((selected.start+selected.end)/2).toFixed(1)}`:'';
+ const sample=(cues.find(c=>c.text&&c.text.split(/\s+/).length>=3)?.text)||'Así se van a ver tus subtítulos';
+ const title=($('title').value||'Así se verá el título de tu clip').slice(0,70);
+ const grid=tplNode('div',{class:'tpl-grid'},clipTemplates.map(t=>templateCard(t,still,sample,title)));
+ const modal=tplNode('div',{id:'tplGallery',class:'cs-modal',role:'dialog','aria-modal':'true','aria-label':'Plantillas',onclick:e=>{if(e.target===modal)closeGallery();}},
+  tplNode('div',{class:'box tpl-gallery'},tplNode('div',{class:'tpl-head'},tplNode('h2',{text:'Plantillas'}),tplNode('button',{type:'button',class:'secondary',text:'Cerrar',onclick:closeGallery})),
+   tplNode('p',{class:'muted',text:'Así se vería este clip con cada plantilla. «En este clip» la prueba aquí; «En todos» la copia a todos los clips del proyecto.'}),grid));
+ modal.addEventListener('keydown',e=>{if(e.key==='Escape')closeGallery();});
+ modal.tabIndex=-1;document.body.append(modal);modal.focus();
+ // the word being said moves along, as in the MP4 (karaoke, pop, resaltador)
+ let step=0;galleryTimer=setInterval(()=>{step++;for(const cap of grid.querySelectorAll('.tpl-cap')){
+  if(!/cap-(karaoke|pop|resaltador)/.test(cap.className))continue;const ws=[...cap.querySelectorAll('.w')];ws.forEach((w,i)=>w.classList.toggle('on',i===step%ws.length));}},420);
+};
