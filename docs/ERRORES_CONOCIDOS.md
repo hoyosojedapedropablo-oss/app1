@@ -210,3 +210,24 @@ una prueba automática (entre comillas invertidas) que falla si el error vuelve.
   también la escriben en minúsculas o mixta (WESTCOL con «Westcol» en la descripción); las siglas cortas (VIP) siguen.
 - **Guardas:** `test_E28_a_shouted_word_of_the_stream_title_is_not_a_name`
 
+## E-29 · Los subtítulos en Montserrat salían en Arial, y las fuentes nuevas no llegaban a los proyectos (nov 2026)
+- **Síntoma:** al preparar las fuentes de Fase 3, libass dibujaba «Montserrat» (la fuente por defecto de los subtítulos)
+  con Arial Bold; y un proyecto ya exportado no tenía las fuentes nuevas (Luckiest Guy, Bangers…), que también caían en Arial.
+- **Causa raíz:** `montserrat.ttf` es una instancia 700 de la Montserrat variable, pero conservó los nombres internos
+  «Montserrat Thin»; y `export` copiaba `static/fonts` al proyecto solo si su carpeta no existía.
+- **Solución:** `montserrat.ttf` lleva los nombres «Montserrat» Bold (los dibujos no cambian); `sync_fonts` añade o
+  actualiza en cada exportación las fuentes que falten o hayan cambiado, sin borrar nada.
+- **Guardas:** `test_E29_every_offered_face_is_drawn_with_its_own_file`, `test_E29_an_old_project_gets_the_new_faces`
+
+## E-30 · Los subtítulos del MP4 salían más pequeños que en el editor (nov 2026)
+- **Síntoma:** con las plantillas a 68-90, las letras del video exportado se veían pequeñas: la línea más ancha ocupaba
+  42-61 % del ancho y Bangers, Poppins Black o Anton salían al 56-59 % del tamaño pedido.
+- **Causa raíz:** libass toma el tamaño del ASS como la altura de toda la línea de Windows de la fuente
+  (`usWinAscent + usWinDescent`), mientras el navegador, PIL y `title_layout` lo toman como su em. Cada fuente tiene
+  márgenes distintos (relación 1,23 a 1,76), así que cada una se encogía distinto.
+- **Solución:** `styling.ass_scale(fuente)` lee esa relación del propio archivo de la fuente (tablas OS/2 y head, en caché
+  por archivo y fecha; sirve para fuentes añadidas después) y `ass_file` multiplica por ella cada tamaño del ASS: el
+  `Fontsize` de `Caption` y `Box`, el `s` de cada frase y el que `caption_styles` repone tras la palabra resaltada
+  (`Caption`, `Box`). El corte de líneas sigue usando el tamaño pedido. Medido: 98-103 % del tamaño de PIL en las 11 fuentes.
+- **Guardas:** `test_E30_capitals_in_the_mp4_match_the_size_asked_for`, `test_E30_every_size_in_the_ass_is_scaled`
+

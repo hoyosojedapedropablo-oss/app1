@@ -159,6 +159,76 @@ class E19ResumedSessionGap(unittest.TestCase):
             self.assertEqual(incidents.recent(), [])
 
 
+class E29FontsReachLibass(unittest.TestCase):
+    """E-29 (Nov 2026): montserrat.ttf kept the names «Montserrat Thin» of its variable source and libass drew every
+    Montserrat subtitle in Arial; and a project copied static/fonts only on its first export, so new faces never reached it."""
+    HEAD = ('[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, '
+            'PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, '
+            'Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n')
+    EVENT = ('[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n'
+             'Dialogue: 0,0:00:00.00,0:00:01.00,C,,0,0,0,,Hola\n')
+
+    def test_E29_every_offered_face_is_drawn_with_its_own_file(self):
+        import subprocess, shutil, styling
+        with tempfile.TemporaryDirectory() as tmp:
+            shutil.copytree(ROOT / 'static' / 'fonts', Path(tmp) / 'fonts')
+            for family, file in styling.FONTS.items():
+                style = f'Style: C,{family},64,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,4,0,2,10,10,10,1\n'
+                (Path(tmp) / 'c.ass').write_text(self.HEAD + style + self.EVENT, encoding='utf-8')
+                log = subprocess.run(['ffmpeg', '-v', 'verbose', '-y', '-f', 'lavfi', '-i', 'color=size=320x180:d=0.1', '-frames:v', '1',
+                                      '-vf', 'ass=c.ass:fontsdir=fonts', 'o.png'], cwd=tmp, capture_output=True, text=True).stderr
+                chosen = next((l.split('->')[1] for l in log.splitlines() if 'fontselect:' in l), '')
+                self.assertTrue(chosen, f'{family}: no font selected')
+                self.assertNotIn('Arial', chosen, f'{family} ({file}) falls back: {chosen}')
+
+    def test_E29_an_old_project_gets_the_new_faces(self):
+        import app
+        with tempfile.TemporaryDirectory() as tmp:
+            fonts = Path(tmp) / 'fonts'; fonts.mkdir()
+            (fonts / 'montserrat.ttf').write_bytes(b'old')                                  # an old copy, different
+            app.sync_fonts(fonts)
+            for p in (ROOT / 'static' / 'fonts').glob('*.ttf'):
+                self.assertEqual((fonts / p.name).read_bytes(), p.read_bytes(), p.name)
+
+
+class E30SizeAsAsked(unittest.TestCase):
+    """E-30 (Nov 2026): libass sizes a face by its whole Windows line, the browser and PIL by its em; Bangers, Poppins
+    and Anton came out at 56-59 % of the size asked for. Every size written to the ASS is scaled by the face's ratio."""
+    def test_E30_capitals_in_the_mp4_match_the_size_asked_for(self):
+        import subprocess, shutil, app, styling
+        from PIL import Image, ImageFont
+        size = 80
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp); shutil.copytree(ROOT / 'static' / 'fonts', tmp / 'fonts')
+            for family, file in styling.FONTS.items():
+                opts = app.Export(start=0, end=1, title='', subtitles='HOLA', font=family, caption_size=size, outline_width=0,
+                                  caption_style='clasico', captions=[dict(start=0, end=1, text='HOLA')])
+                app.ass_file(tmp / 'c.ass', opts)
+                subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=black:size=1080x1920:r=10:d=0.5',
+                                '-vf', 'ass=c.ass:fontsdir=fonts', '-c:v', 'libx264', '-crf', '12', '-pix_fmt', 'yuv420p', 'c.mp4'], cwd=tmp, check=True)
+                subprocess.run(['ffmpeg', '-v', 'error', '-y', '-ss', '0.2', '-i', 'c.mp4', '-frames:v', '1', 'c.png'], cwd=tmp, check=True)
+                a = np.asarray(Image.open(tmp / 'c.png').convert('L'))
+                rows = np.where((a > 128).any(1))[0]; drawn = rows.max() - rows.min() + 1
+                _, point = styling.title_layout('HOLA', family, size)
+                box = ImageFont.truetype(str(ROOT / 'static' / 'fonts' / file), point).getbbox('HOLA'); wanted = box[3] - box[1]
+                self.assertAlmostEqual(drawn / wanted, 1, delta=.05, msg=f'{family}: {drawn} px in the MP4, {wanted} px asked for')
+
+    def test_E30_every_size_in_the_ass_is_scaled(self):
+        import app, styling
+        with tempfile.TemporaryDirectory() as tmp:
+            opts = app.Export(start=0, end=2, title='', subtitles='dos palabras', font='Bangers', caption_size=80,
+                              caption_style='resaltador', captions=[dict(start=0, end=2, text='dos palabras')])
+            app.ass_file(Path(tmp) / 'c.ass', opts)
+            ass = (Path(tmp) / 'c.ass').read_text(encoding='utf-8')
+        k = styling.ass_scale('Bangers'); drawn = round(80 * k)
+        self.assertGreater(k, 1.5)
+        for style in ('Caption', 'Box'):
+            line = next(l for l in ass.splitlines() if l.startswith(f'Style: {style},'))
+            self.assertEqual(line.split(',')[2], str(drawn), style)
+        self.assertIn(rf'\fs{drawn}', ass); self.assertIn(rf'\rBox\fs{drawn}', ass)
+        self.assertNotIn(r'\fs80}', ass)
+
+
 class RegistryTests(unittest.TestCase):
     def test_every_known_error_has_a_guard(self):
         """Each E-xx of docs/ERRORES_CONOCIDOS.md names a test that exists."""

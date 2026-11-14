@@ -71,7 +71,9 @@ def make_cues(transcript,start,end,text=None):
     cues=[]; current=[]
     def flush():
         if current:
-            cues.append(dict(start=round(current[0]['start'],3),end=round(min(end-start,current[-1]['end']+.08),3),text=' '.join(w['text'] for w in current)))
+            # words: each word's own time, for the animated subtitle styles (caption_styles.py and the editor preview)
+            cues.append(dict(start=round(current[0]['start'],3),end=round(min(end-start,current[-1]['end']+.08),3),text=' '.join(w['text'] for w in current),
+                             words=[dict(text=w['text'],start=round(w['start'],3),end=round(w['end'],3)) for w in current]))
             current.clear()
     for word in words:
         word=dict(word,end=min(word['end'],word['start']+1.72))

@@ -6,7 +6,7 @@ let trackingPoints=[],trackingRange=null,trackingRequest=0;
 let job=null,selected=null,cues=[],cueVersion=0,captionPending=false,captionTimer,pollToken=0;
 const edits=new Map();
 const numeric=['title_padding_x','title_padding_y','title_size','title_outline_width','title_x','title_y','caption_x','caption_y','caption_size','outline_width','focus_x','focus_y','start','end','logo_width','logo_x','logo_y','logo_start','logo_end','resolution'];
-const styleKeys=['mute_words','mute_sound','game_follow','resolution','zoom','tracking_person','tracking_motion','show_subtitles','title_corners','title_padding_x','title_padding_y','title_bg_color','title_text_color','auto_follow','style','font','title_font','title_outline_color','title_size','title_outline_width','title_x','title_y','caption_x','caption_y','caption_size','caption_color','outline_color','outline_width','logo','framing','focus_x','focus_y','logo_width','logo_x','logo_y','logo_start','logo_end'];
+const styleKeys=['mute_words','mute_sound','game_follow','resolution','zoom','tracking_person','tracking_motion','show_subtitles','title_corners','title_padding_x','title_padding_y','title_bg_color','title_text_color','auto_follow','style','font','title_font','title_outline_color','title_size','title_outline_width','title_x','title_y','caption_x','caption_y','caption_size','caption_color','outline_color','outline_width','caption_style','caption_accent','caption_upper','logo','framing','focus_x','focus_y','logo_width','logo_x','logo_y','logo_start','logo_end'];
 const OFFLINE='ClipStudio no responde: su servidor está cerrado. Abre INICIAR_WINDOWS.bat, deja abierta esa ventana y recarga la página.';
 async function request(url,options={}){let r;try{r=await fetch(url,options);}catch{const e=Error(OFFLINE);e.offline=true;throw e;}if(!r.ok){let e;try{e=await r.json()}catch{e={detail:r.statusText}}throw Error(typeof e.detail==='string'?e.detail:'Revisa los campos y el rango de tiempos.')}return r;}
 const jsonOptions=value=>({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});
@@ -14,7 +14,7 @@ function showView(name){$('analysisView').classList.toggle('hidden',name!=='anal
 $('goAnalyze').onclick=()=>showView('analysis');$('goEditor').onclick=()=>showView('editor');
 for(const button of document.querySelectorAll('[data-tab]'))button.onclick=()=>{for(const b of document.querySelectorAll('[data-tab]')){b.classList.toggle('active',b===button);b.setAttribute('aria-selected',String(b===button));}for(const panel of document.querySelectorAll('.tab-panel'))panel.classList.toggle('hidden',panel.id!=='tab-'+button.dataset.tab);};
 function say(text){$('status').textContent=text;}
-const CHECKS=['auto_follow','show_subtitles','game_follow','mute_words'];
+const CHECKS=['auto_follow','show_subtitles','game_follow','mute_words','caption_upper'];
 function styles(){return Object.fromEntries(styleKeys.map(k=>[k,CHECKS.includes(k)?$(k).checked:k==='logo_end'&&!$(k).value?null:numeric.includes(k)?Number($(k).value):$(k).value]));}
 function settings(){return {...styles(),title:$('title').value,subtitles:$('subtitles').value,start:Number($('start').value),end:Number($('end').value),clip_id:selected&&selected.id!=='manual'?selected.id:null,captions:cues.map(c=>({...c}))};}
 let persistTimer=null;
@@ -23,7 +23,7 @@ function saveCurrent(){if(!selected)return;edits.set(selected.id,settings());if(
  persistTimer=setTimeout(()=>{if(job?.clip_edits)job.clip_edits[clipId]=value;else if(job)job.clip_edits={[clipId]:value};request(`/api/jobs/${jobId}/clips/${encodeURIComponent(clipId)}/edits`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({settings:value})}).catch(()=>{});},800);
  if(shareAllOn())shareStyle();}
 // «Aplicar a todos los clips»: the look is copied to every clip of the project (each keeps its text, times and framing).
-const SHARED_STYLE=['logo','logo_width','logo_x','logo_y','title_font','title_size','title_padding_x','title_padding_y','title_bg_color','title_text_color','title_outline_color','title_outline_width','title_corners','title_x','style','font','caption_size','caption_color','outline_color','outline_width','caption_x','caption_y','show_subtitles','resolution'];
+const SHARED_STYLE=['logo','logo_width','logo_x','logo_y','title_font','title_size','title_padding_x','title_padding_y','title_bg_color','title_text_color','title_outline_color','title_outline_width','title_corners','title_x','style','font','caption_size','caption_color','outline_color','outline_width','caption_style','caption_accent','caption_upper','caption_x','caption_y','show_subtitles','resolution'];
 let shareTimer=null,shareSent='';
 function shareAllOn(){try{return !!job&&localStorage.getItem('cs.shareAll.'+job.id)==='1';}catch{return false;}}
 function shareStyle(now){if(!job||!selected)return;const look=styles(),value=Object.fromEntries(SHARED_STYLE.map(k=>[k,look[k]])),sig=job.id+JSON.stringify(value);if(sig===shareSent)return;
@@ -48,10 +48,35 @@ function paint(){
  if(job&&selected){const duration=Number($('end').value)-Number($('start').value);$('duration').textContent=`${duration.toFixed(1)} s · formato 9:16`;$('seek').max=Math.max(0,duration);}
  paintTime();
 }
+// Animated subtitles in the preview, with the rules of caption_styles.py: a cue's own words when they still match its
+// text, otherwise its time shared by word length; the word being said lights up (karaoke), pops (pop) or gets a box.
+const WORD_BY_WORD=['karaoke','pop','resaltador'];let captionKey='';
+function captionTimes(cue){
+ const tokens=cue.text.split(/\s+/).filter(Boolean),words=cue.words||[];
+ if(words.length===tokens.length&&words.every(w=>Math.min(cue.end,w.end)>Math.max(cue.start,w.start)))return words.map(w=>[Math.max(cue.start,w.start),Math.min(cue.end,w.end)]);
+ const total=tokens.reduce((a,t)=>a+t.length,0)||1,span=cue.end-cue.start;let at=cue.start;
+ return tokens.map(t=>{const share=span*t.length/total,out=[at,at+share];at+=share;return out;});
+}
+function keyWords(tokens){
+ const plain=tokens.map(t=>t.replace(/[^\p{L}\p{N}]/gu,'')),numbers=plain.map((p,i)=>/\d/.test(p)?i:-1).filter(i=>i>=0);
+ const longest=plain.map((p,i)=>[p.length,i]).filter(([n,i])=>n>=6&&!numbers.includes(i)).sort((a,b)=>b[0]-a[0]).map(([,i])=>i);
+ return new Set([...numbers,...longest].slice(0,2));
+}
+function paintCaption(cue,t){
+ const el=$('previewCaption'),style=$('caption_style').value,upper=$('caption_upper').checked;
+ for(const c of [...el.classList])if(c.startsWith('cap-'))el.classList.remove(c);el.classList.add('cap-'+style);el.style.setProperty('--cap-accent',$('caption_accent').value);
+ if(!cue){if(captionKey!==''){el.replaceChildren();captionKey='';}return;}
+ const text=upper?cue.text.toUpperCase():cue.text,tokens=text.split(/\s+/).filter(Boolean);
+ let on=-1;if(WORD_BY_WORD.includes(style)&&t!=null){const times=captionTimes({...cue,text});on=times.findIndex(([s],i)=>t>=s&&(i+1>=times.length||t<times[i+1][0]));}
+ const key=[style,text,on].join('|');if(key===captionKey)return;captionKey=key;
+ const keys=style==='palabra_clave'?keyWords(tokens):new Set();
+ el.replaceChildren(...tokens.flatMap((w,i)=>[Object.assign(document.createElement('span'),{className:'w'+(i===on?' on':'')+(keys.has(i)?' key':''),textContent:w}),document.createTextNode(i<tokens.length-1?' ':'')]));
+}
 function paintTime(){
  const t=$('video').currentTime-Number($('start').value),duration=Number($('end').value)-Number($('start').value);
  applyTracking(t);drawStack(t);
- const editing=$('video').paused&&$('editLayers').checked&&selected;const active=cues.find(c=>t>=c.start&&t<c.end);$('previewCaption').textContent=$('show_subtitles').checked?(active?.text||(editing?cues[0]?.text||'Subtítulos de ejemplo':'')):'';
+ const editing=$('video').paused&&$('editLayers').checked&&selected;const active=cues.find(c=>t>=c.start&&t<c.end);
+ paintCaption($('show_subtitles').checked?(active||(editing?(cues[0]||{start:0,end:1,text:'Subtítulos de ejemplo'}):null)):null,active?t:null);
  $('previewTitle').hidden=!selected||!$('title').value||(!editing&&(t<0||t>=duration));
  $('seek').value=Math.max(0,t);$('clock').textContent=`${Math.max(0,t).toFixed(1)} / ${Math.max(0,duration).toFixed(1)} s`;
  const logoEnd=$('logo_end').value?Number($('logo_end').value):duration;$('previewLogo').hidden=!selected||$('logo').value==='none'||(!editing&&(t<Number($('logo_start').value)||t>=logoEnd));
@@ -81,7 +106,8 @@ async function refreshCaptions(){
  try{const opts=settings();opts.captions=null;const body=await(await request(`/api/jobs/${jobId}/captions`,jsonOptions(opts))).json();if(version!==cueVersion||job?.id!==jobId||selected?.id!==clipId)return;cues=body.captions;captionPending=false;renderCueEditor();saveCurrent();paintTime();}
  catch(e){if(version===cueVersion){captionPending=false;say(e.message);throw e;}}
 }
-styleKeys.forEach(key=>$(key).addEventListener('input',()=>{if(key==='framing'&&$('framing').value!=='crop'){$('auto_follow').checked=false;++trackingRequest;}if(key==='style'){const presets={classic:['#FFFFFF','#000000',4],bold:['#FFF200','#000000',5],mint:['#AAFF87','#18251C',4],clean:['#FFFFFF','#000000',2]};const p=presets[$('style').value];$('caption_color').value=p[0];$('outline_color').value=p[1];$('outline_width').value=p[2];}saveCurrent();paint();}));
+styleKeys.forEach(key=>$(key).addEventListener('input',()=>{if(key==='caption_style'){const st=$('caption_style').value,face={clasico:'Montserrat ExtraBold',karaoke:'Montserrat Black',pop:'Luckiest Guy',resaltador:'Poppins Black',palabra_clave:'Anton',cine:'Bebas Neue',contorno:'Bangers'}[st];
+ $('caption_upper').checked=['pop','contorno','palabra_clave'].includes(st);if(face&&[...$('font').options].some(o=>o.value===face))$('font').value=face;}if(key==='framing'&&$('framing').value!=='crop'){$('auto_follow').checked=false;++trackingRequest;}if(key==='style'){const presets={classic:['#FFFFFF','#000000',4],bold:['#FFF200','#000000',5],mint:['#AAFF87','#18251C',4],clean:['#FFFFFF','#000000',2]};const p=presets[$('style').value];$('caption_color').value=p[0];$('outline_color').value=p[1];$('outline_width').value=p[2];}saveCurrent();paint();}));
 $('titleChoices').onchange=()=>{if($('titleChoices').value){$('title').value=$('titleChoices').value;saveCurrent();paint();}};
 $('title').oninput=()=>{saveCurrent();paint();};
 for(const key of ['subtitles','start','end'])$(key).oninput=()=>{if(key!=='subtitles'){++trackingRequest;trackingPoints=[];trackingRange=null;if($('auto_follow').checked)$('trackingState').textContent='Los tiempos cambiaron: pulsa Calcular seguimiento de nuevo.';}clearTimeout(captionTimer);++cueVersion;captionPending=true;saveCurrent();paint();captionTimer=setTimeout(()=>refreshCaptions().catch(()=>{}),500);};
@@ -674,3 +700,44 @@ function applyMute(){
 requestAnimationFrame(applyMute);
 for(const id of ['mute_words','start','end'])$(id).addEventListener('change',()=>{muteKey='';loadMuteRanges();});
 setInterval(loadMuteRanges,1500);
+// Templates (templates.py): the project's format plus the look of subtitles and title, for every clip in one click.
+let clipTemplates=[];
+async function loadTemplates(keep){
+ try{clipTemplates=(await(await request('/api/templates')).json()).templates||[];}catch{clipTemplates=[];}
+ const sel=$('templateSelect'),groups={};sel.replaceChildren(new Option('Elige una plantilla…',''));
+ for(const t of clipTemplates){const g=t.builtin?'Listas para usar':'Mis plantillas';(groups[g]||=Object.assign(document.createElement('optgroup'),{label:g})).append(new Option(t.builtin?`${t.name} · ${t.niche}`:t.name,t.id));}
+ for(const g of ['Listas para usar','Mis plantillas'])if(groups[g])sel.append(groups[g]);
+ sel.value=keep||'';paintTemplateButtons();
+}
+function paintTemplateButtons(){const t=clipTemplates.find(x=>x.id===$('templateSelect').value);$('templateApply').disabled=!t||!job;$('templateDelete').hidden=!t||t.builtin;}
+function applyTemplate(t){
+ if(!job)return;const v=t.values||{},skipped=[];
+ // 1) the project's format, as «Configura tus clips» does: every clip, adjusted or not, takes it
+ if(v.framing||v.zoom||v.show_subtitles!==undefined){
+  projectConfig={...projectConfig,...(v.framing?{framing:v.framing}:{}),...(v.zoom?{zoom:v.zoom}:{}),...(v.show_subtitles!==undefined?{subtitles:!!v.show_subtitles}:{})};
+  showConfig(projectConfig);saveProjectConfig();
+  for(const [id,e] of edits)edits.set(id,{...e,framing:effectiveFraming(projectConfig),zoom:projectConfig.zoom,show_subtitles:projectConfig.subtitles});
+  if(selected)applyProjectToEditor();
+ }
+ // 2) the look: the editor's fields, then «Aplicar a todos los clips»
+ for(const [k,val] of Object.entries(v)){
+  if(['framing','zoom'].includes(k))continue;const el=$(k);if(!el)continue;
+  if(el.tagName==='SELECT'&&![...el.options].some(o=>o.value===String(val))){skipped.push(String(val));continue;}   // a font not installed
+  if(CHECKS.includes(k))el.checked=!!val;else el.value=val;
+ }
+ captionKey='';paint();saveCurrent();shareSent='';shareStyle(true);
+ if($('framing').value==='stack')loadStackPath().catch(e=>say(e.message));else if($('auto_follow').checked)prepareTracking().catch(e=>say(e.message));
+ say(`Plantilla «${t.name}» aplicada a los ${job.clips.length} clips.`+(skipped.length?` Falta instalar: ${skipped.join(', ')} (se dejó la fuente actual).`:''));
+}
+$('templateSelect').onchange=paintTemplateButtons;
+$('templateApply').onclick=()=>{const t=clipTemplates.find(x=>x.id===$('templateSelect').value);if(t)applyTemplate(t);};
+$('templateSave').onclick=async()=>{
+ const name=$('templateName').value.trim();if(!name){say('Escribe un nombre para la plantilla.');$('templateName').focus();return;}
+ const look=styles(),values={framing:projectConfig.framing,zoom:projectConfig.zoom};
+ for(const k of ['style','font','caption_size','caption_color','outline_color','outline_width','caption_style','caption_accent','caption_upper','caption_y','show_subtitles','title_font','title_size','title_bg_color','title_text_color','title_outline_color','title_outline_width','title_corners','title_padding_x','title_padding_y','logo','logo_width','logo_x','logo_y'])if(k in look)values[k]=look[k];
+ try{const t=await(await request('/api/templates',jsonOptions({name,values}))).json();$('templateName').value='';await loadTemplates(t.id);say(`Plantilla «${t.name}» guardada.`);}catch(e){say(e.message);}
+};
+$('templateDelete').onclick=async()=>{const t=clipTemplates.find(x=>x.id===$('templateSelect').value);if(!t||t.builtin)return;
+ try{await request(`/api/templates/${t.id}`,{method:'DELETE'});await loadTemplates();say(`Plantilla «${t.name}» borrada.`);}catch(e){say(e.message);}};
+loadTemplates();
+

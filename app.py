@@ -19,6 +19,7 @@ ROOT=Path(__file__).parent
 DATA=ROOT/'data'; DATA.mkdir(exist_ok=True)
 import incidents as _incidents; _incidents.FILE=DATA/'incidents.jsonl'
 import profanity as _profanity; _profanity.FILE=DATA/'profanity.json'
+import templates as _templates; _templates.FILE=DATA/'templates.json'
 os.environ.setdefault('HF_HOME',str(DATA/'models'))
 app=FastAPI(title='Clip Studio')
 app.mount('/static',StaticFiles(directory=ROOT/'static'),name='static')
@@ -462,6 +463,24 @@ def read_profile():
  path=DATA/'editorial-profile.json'
  return json.loads(path.read_text(encoding='utf-8')) if path.exists() else Profile().model_dump()
 
+# Clip templates (templates.py): built-in ones per niche and the user's own, applied from the editor to every clip.
+class TemplateInput(BaseModel):
+ name:str=Field(min_length=1,max_length=40)
+ values:dict=Field(default_factory=dict)
+
+@app.get('/api/templates')
+def templates_list(): return {'templates':_templates.all_templates()}
+
+@app.post('/api/templates')
+def templates_save(item:TemplateInput):
+ try:return _templates.save(item.name,item.values)
+ except ValueError as e:raise HTTPException(400,str(e))
+
+@app.delete('/api/templates/{tid}')
+def templates_delete(tid:str):
+ if not re.fullmatch(r'[a-f0-9]{12}',tid) or not _templates.delete(tid):raise HTTPException(404,'Esa plantilla no existe o es de las que trae la app.')
+ return {'ok':True}
+
 @app.get('/api/profile')
 def profile(): return read_profile()
 
@@ -570,10 +589,16 @@ def logo_image(logo_id:str):
  if not re.fullmatch(r'(kick|roobet|rainbet|[a-f0-9]{32})',logo_id) or not (DATA/f'{logo_id}.png').exists():raise HTTPException(404)
  return FileResponse(DATA/f'{logo_id}.png',media_type='image/png')
 
+class CaptionWord(BaseModel):
+ start:float=Field(ge=0)
+ end:float=Field(ge=0)
+ text:str=Field(max_length=60)
+
 class Caption(BaseModel):
  start:float=Field(ge=0)
  end:float=Field(gt=0)
  text:str=Field(max_length=100)
+ words:list[CaptionWord]|None=Field(default=None,max_length=40)
  @model_validator(mode='after')
  def validate_times(self):
   if self.end<=self.start:raise ValueError('El final del subtítulo debe superar su inicio.')
@@ -602,6 +627,9 @@ class Export(BaseModel):
  caption_color:str=Field(default='#FFFFFF',pattern=r'^#[0-9A-Fa-f]{6}$')
  outline_color:str=Field(default='#000000',pattern=r'^#[0-9A-Fa-f]{6}$')
  outline_width:int=Field(default=4,ge=0,le=9)
+ caption_style:Literal['clasico','karaoke','pop','resaltador','palabra_clave','cine','contorno']='clasico'
+ caption_accent:str=Field(default='#FFE14D',pattern=r'^#[0-9A-Fa-f]{6}$')
+ caption_upper:bool=False
  auto_follow:bool=False
  clip_id:str|None=None
  captions:list[Caption]|None=Field(default=None,max_length=1000)
@@ -730,8 +758,25 @@ def captions(ident:str,opts:Export):
  if opts.end<=opts.start or opts.end>JOBS[ident]['duration']:raise HTTPException(400,'Tiempos fuera del video.')
  return {'captions':make_cues(JOBS[ident].get('transcript',[]),opts.start,opts.end,opts.subtitles)}
 
+def sync_fonts(fonts):
+ """The project's copy of static/fonts, for libass (fontsdir): files missing or different are copied every export (E-29:
+ it was copied only the first time, so a project exported before new faces were added never got them and fell back
+ to Arial). Nothing is removed."""
+ import shutil
+ src=ROOT/'static/fonts'
+ for p in src.rglob('*'):
+  if not p.is_file():continue
+  t=fonts/p.relative_to(src)
+  if t.exists() and t.stat().st_size==p.stat().st_size and t.read_bytes()==p.read_bytes():continue
+  t.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(p,t)
+ return fonts
+
 def ass_file(path,opts,transcript=None):
+ import caption_styles
  font=opts.font if opts.font in FONTS else 'Montserrat'
+ # E-30: libass sizes by the font's whole line, the browser and title_layout by its em: every size in the ASS is scaled.
+ from styling import ass_scale
+ scale=ass_scale(font)
  color=ass_color(opts.caption_color);outline=ass_color(opts.outline_color)
  header=f'''[Script Info]
 ScriptType: v4.00+
@@ -740,7 +785,7 @@ PlayResY: 1920
 WrapStyle: 2
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Caption,{font},{opts.caption_size},{color},&H00FFFFFF,{outline},&H80000000,-1,0,0,0,100,100,0,0,1,{opts.outline_width},0,2,100,100,290,1
+{caption_styles.styles_block(font,round(opts.caption_size*scale),color,outline,opts.outline_width,opts.caption_accent,opts.caption_style,ass_color)}
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 '''
@@ -748,9 +793,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
  caption_pos=r'{\an5\pos('+f'{opts.caption_x*10.8:.1f},{opts.caption_y*19.2:.1f}'+')}'
  events=[]
  for cue in caption_cues(opts,transcript or []):
-  caption,point=title_layout(cue['text'],font,opts.caption_size)
-  size_tag=r'{\fs'+str(point)+'}'
-  events.append(f"Dialogue: 0,{stamp(cue['start'])},{stamp(cue['end'])},Caption,,0,0,0,,{caption_pos}{size_tag}{safe(caption)}")
+  # Animated styles (caption_styles.py): the cue is laid out once and each word can be lit, popped or boxed.
+  text=cue['text'].upper() if opts.caption_upper else cue['text']
+  caption,point=title_layout(text,font,opts.caption_size)      # lines are cut at the size asked for (as the browser)
+  drawn=round(point*scale)                                      # what libass needs to draw that size
+  size_tag=r'{\fs'+str(drawn)+'}'
+  events+=caption_styles.events(dict(cue,text=text),safe(caption).replace(r'\N','\n'),opts.caption_style,opts.caption_accent,caption_pos+size_tag,stamp,opts.caption_color,drawn)
  path.write_text(header+'\n'.join(events),encoding='utf-8')
 
 def render_title(opts):
@@ -802,7 +850,7 @@ def export(ident:str,opts:Export):
  # Relative font directory avoids escaping Windows drive letters in FFmpeg filters.
  import shutil
  fonts=folder/'fonts'
- if not fonts.exists():shutil.copytree(ROOT/'static/fonts',fonts)
+ sync_fonts(fonts)
  # Without subtitles the transcript still drives the analysis; only the burned-in layer is skipped.
  filters=f'{geometry},setsar=1,setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=2'+(f',ass={ass.name}:fontsdir=fonts' if opts.show_subtitles else '')
  args=['ffmpeg','-v','error','-y','-ss',str(opts.start),'-t',str(opts.end-opts.start),'-i',str(folder/'source')]

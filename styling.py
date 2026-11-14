@@ -3,7 +3,37 @@ import re,math
 from pathlib import Path
 from PIL import ImageFont
 ROOT=Path(__file__).parent
-FONTS={'Montserrat':'montserrat.ttf','Poppins':'poppins.ttf','Anton':'anton.ttf','Bebas Neue':'bebasneue.ttf','Oswald':'oswald.ttf','Barlow Condensed':'barlowcondensed.ttf'}
+ALL_FONTS={'Montserrat':'montserrat.ttf','Poppins':'poppins.ttf','Anton':'anton.ttf','Bebas Neue':'bebasneue.ttf','Oswald':'oswald.ttf','Barlow Condensed':'barlowcondensed.ttf',
+           # Fase 3: heavy display faces for the animated subtitle styles (caption_styles.STYLE_FONT)
+           'Montserrat ExtraBold':'montserrat-extrabold.ttf','Montserrat Black':'montserrat-black.ttf','Poppins Black':'poppins-black.ttf',
+           'Luckiest Guy':'luckiestguy.ttf','Bangers':'bangers.ttf'}
+# Only the faces whose file is installed: a missing download falls back to Montserrat instead of failing an export.
+FONTS={name:file for name,file in ALL_FONTS.items() if (ROOT/'static/fonts'/file).exists()}
+
+def _win_ratio(path, mtime):
+    """(usWinAscent + usWinDescent) / unitsPerEm read from the font file itself (OS/2 and head tables)."""
+    import struct
+    data = Path(path).read_bytes(); count = struct.unpack('>H', data[4:6])[0]; tables = {}
+    for i in range(count):
+        tag, _, offset, _ = struct.unpack('>4sIII', data[12 + 16 * i: 28 + 16 * i]); tables[tag] = offset
+    upm = struct.unpack('>H', data[tables[b'head'] + 18: tables[b'head'] + 20])[0]
+    ascent, descent = struct.unpack('>HH', data[tables[b'OS/2'] + 74: tables[b'OS/2'] + 78])
+    return (ascent + descent) / upm if upm and ascent + descent else 1.0
+
+_ratios = {}
+def ass_scale(font):
+    """E-30: libass sizes a font by its whole Windows line (usWinAscent + usWinDescent) while the browser, PIL and
+    title_layout size it by its em, so the MP4 drew Bangers, Poppins or Anton at 56-59 % of the size asked for. Every
+    size written to the ASS is multiplied by this ratio, read from the font's own file (cached per file and its date),
+    so a face added later needs nothing else. 1.0 when the file is missing or unreadable."""
+    import struct
+    file = ROOT / 'static/fonts' / FONTS.get(font, FONTS.get('Montserrat', ''))
+    try: key = (str(file), file.stat().st_mtime)
+    except OSError: return 1.0
+    if key not in _ratios:
+        try: _ratios[key] = _win_ratio(*key)
+        except (OSError, KeyError, ValueError, IndexError, struct.error): _ratios[key] = 1.0
+    return _ratios[key]
 
 def ass_color(hex_color):
     value=hex_color.lstrip('#')
