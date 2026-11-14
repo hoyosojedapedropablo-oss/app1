@@ -286,3 +286,22 @@ una prueba automática (entre comillas invertidas) que falla si el error vuelve.
 - **Solución:** una ventana abierta es una `.cs-modal:not([hidden])`, en `shell.js` y en `app.js` (como ya hacía Alt+←).
 - **Guardas:** `test_E34_an_open_dialog_is_one_not_hidden`
 
+## E-35 · «Configura tus clips» cortada arriba y con un hueco bajo los botones (nov 2026, otra vez)
+- **Síntoma:** en una ventana de unos 770 × 910 px, en modo directo, no se veían el encabezado ni el principio de las
+  opciones (cortados arriba y sin poder subir) y bajo «Comenzar clipping en vivo» quedaba un espacio vacío. Un arreglo
+  anterior («The dialog is as tall as its content…» en `theme.css`) lo había quitado, pero volvió.
+- **Causa raíz:** la tarjeta solo se limitaba con `max-height: calc(100vh - 48px)` y la capa `#configModal` la centraba
+  (`align-items: center`) con `overflow: hidden`. Cuando la zona visible es más baja que `100vh` (barras del navegador,
+  zoom de la página, una barra de desplazamiento), la tarjeta queda más alta que la capa: centrada, se sale por arriba,
+  y como la capa no se desplaza, el encabezado no se puede ver. En Chrome y Edge con la ventana normal no pasa (60
+  combinaciones de tamaño, escala y modo caben), por eso no se veía al probar.
+- **Solución:** la tarjeta nunca supera `min(100dvh - 48px, 100%)` de la propia capa; se centra con márgenes automáticos
+  (si no cabe, empieza arriba en vez de salirse); `.cfg-body` es `flex: 0 1 auto` con `min-height: 0` y su propio
+  desplazamiento, así que no crece más que su contenido y no deja hueco; el encabezado y los botones no se encogen.
+- **Guardas:** `test_E35_configure_dialog_fits_every_window_in_live_and_video_mode` (Chrome o Edge real, sin interfaz:
+  770×910, 1280×720, 1366×768 y 1920×1080, directo y video: encabezado y botones dentro de la pantalla, botones al final
+  de la tarjeta, cuerpo desplazable hasta arriba y abajo), `test_E35_the_card_fits_a_dialog_layer_shorter_than_100vh`
+  (la capa 300 px más baja que la ventana: con el CSS anterior el encabezado quedaba en −282 px),
+  `test_E35_the_browser_check_needs_only_what_requirements_txt_installs` (`websockets` está en `requirements.txt`; si
+  falta, las pruebas fallan, no se saltan). Solo se saltan en un equipo sin Chrome ni Edge.
+
