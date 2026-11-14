@@ -42,4 +42,6 @@
 .preview .cap-pop{-webkit-text-stroke-width:.11em!important}
 .tpl-box{border:1px solid #3d5c1c;background:#121a0b;border-radius:10px;padding:4px 12px 8px;margin:6px 0 10px}
 .tpl-box .row{align-items:center}.tpl-box .row button{flex:0 0 auto;padding:10px 12px;font-size:11px}
-
+/* E-31: blur of the camera corner a centred game panel shows (same as the MP4) */
+.preview .stack-blur{position:absolute;pointer-events:none;z-index:2}
+.preview .stack-blur[hidden]{display:none}

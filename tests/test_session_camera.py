@@ -31,10 +31,34 @@ class ConsensusTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             still = layout.filter_graph(result, Path(tmp) / 'p.cmd', 1, 25, follow=False)
             moving = layout.filter_graph(result, Path(tmp) / 'p.cmd', 1, 25, follow=True)
-        self.assertIn('boxblur', still); self.assertNotIn('boxblur', moving)
+        self.assertIn('gblur', still); self.assertIn('alphamerge', still); self.assertNotIn('gblur', moving)
         blur = layout.preview_path(result, follow=False)['game']['blur']
         self.assertTrue(blur and blur['x'] == 0 and blur['w'] > 8)                      # the camera is on the left
         self.assertIsNone(layout.preview_path(result, follow=True)['game']['blur'])
+
+    def test_E31_the_blur_fades_into_the_game_without_a_cut(self):
+        """Just inside the blurred zone's inner edge the game keeps most of its detail (the mask fades from 0), so there is
+        no rectangle: measured 0.75 of the detail just outside with the 24 px fade, 0.06 with a hard edge."""
+        import subprocess
+        import numpy as np
+        from PIL import Image
+        lap = lambda z: np.abs(z[1:-1, 1:-1] * 4 - z[:-2, 1:-1] - z[2:, 1:-1] - z[1:-1, :-2] - z[1:-1, 2:]).mean()
+        o = box(); result = dict(overlay=o, panels=layout.panels(o), motion=dict(xs=[960.0] * 40))
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i',
+                            "nullsrc=size=1920x1080:rate=25,geq=lum='128+90*sin(X/7)*cos(Y/5)+30*random(1)':cb=128:cr=128", '-t', '0.2',
+                            '-vf', 'drawbox=x=28:y=24:w=516:h=376:color=0xC01010:t=fill', '-c:v', 'libx264', '-crf', '8', 'src.mp4'], cwd=tmp, check=True)
+            graph = layout.filter_graph(result, tmp / 'p.cmd', .2, 25, follow=False)
+            subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', 'src.mp4', '-frames:v', '1', '-filter_complex', f'[0:v]{graph}[o]', '-map', '[o]', 'f.png'],
+                           cwd=tmp, check=True)
+            a = np.asarray(Image.open(tmp / 'f.png').convert('L')).astype(float)
+        b = layout.preview_path(result, follow=False)['game']['blur']; y0 = result['panels']['top'] + layout.SEAM
+        self.assertTrue(b['fade']['r']); self.assertFalse(b['fade']['l'])               # the camera is on the panel's left edge
+        x1 = b['x'] + b['w']; rows = slice(y0 + b['y'] + 30, y0 + b['y'] + b['h'] - 40)
+        self.assertGreater(lap(a[rows, x1 - 9: x1 - 1]) / lap(a[rows, x1 + 1: x1 + 9]), .5)
+        centre = a[y0 + b['y'] + 10: y0 + b['y'] + b['h'] - b['feather'] - 10, b['x'] + 10: x1 - b['feather'] - 10]
+        self.assertLess(lap(centre), .2 * lap(a[rows, x1 + 1: x1 + 9]))                    # the camera itself is well blurred
 
     def test_E31_the_game_panel_is_centred_unless_following_the_action(self):
         o = box(); result = dict(overlay=o, panels=layout.panels(o), motion=dict(xs=[1500.0] * 40))

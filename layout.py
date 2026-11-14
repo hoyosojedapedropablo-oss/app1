@@ -645,10 +645,16 @@ def analyze(source, start, end, overlay, progress=lambda v: None):
     return result
 
 
-def camera_blur(overlay, bottom, left, top, width, height, margin=8):
+BLUR_SIGMA = 14         # gblur of the camera corner a centred game panel shows
+BLUR_FEATHER = 24       # px over which that blur fades into the game (no visible rectangle)
+
+
+def camera_blur(overlay, bottom, left, top, width, height, margin=24):
     """E-31: with the game panel centred (no «Seguir la acción»), the part of the camera box that the fixed game crop
     (left, top, width, height in source px) shows, as {x, y, w, h} in the bottom panel's px (CANVAS_W x bottom), with
-    `margin` px around and even values; None when the crop does not reach the camera. It is blurred, not avoided."""
+    `margin` px around and even values; None when the crop does not reach the camera. It is blurred, not avoided.
+    `fade`: the sides inside the panel, where the blur fades out over BLUR_FEATHER px (a side on the panel's edge does
+    not fade, or the camera would show sharp there)."""
     x0, y0 = max(overlay['x'], left), max(overlay['y'], top)
     x1, y1 = min(overlay['x'] + overlay['w'], left + width), min(overlay['y'] + overlay['h'], top + height)
     if x1 <= x0 or y1 <= y0: return None
@@ -656,13 +662,19 @@ def camera_blur(overlay, bottom, left, top, width, height, margin=8):
     bx0 = max(0, int((x0 - left) * sx - margin) // 2 * 2); by0 = max(0, int((y0 - top) * sy - margin) // 2 * 2)
     bx1 = min(CANVAS_W, -(-int((x1 - left) * sx + margin + 1) // 2) * 2); by1 = min(bottom, -(-int((y1 - top) * sy + margin + 1) // 2) * 2)
     if bx1 - bx0 < 8 or by1 - by0 < 8: return None
-    return dict(x=bx0, y=by0, w=bx1 - bx0, h=by1 - by0)
+    fade = dict(l=bx0 > 0, t=by0 > 0, r=bx1 < CANVAS_W, b=by1 < bottom)
+    return dict(x=bx0, y=by0, w=bx1 - bx0, h=by1 - by0, fade=fade, feather=BLUR_FEATHER, sigma=BLUR_SIGMA)
 
 
 def _blur_chain(blur):
-    """crop + boxblur + overlay of the camera part of the game panel (radius within boxblur's limits for yuv420p)."""
-    side = min(blur['w'], blur['h']); luma = max(1, min(40, side // 2 - 1)); chroma = max(1, min(20, side // 4 - 1))
-    return (f',split[lgs][lgb];[lgb]crop={blur["w"]}:{blur["h"]}:{blur["x"]}:{blur["y"]},boxblur={luma}:3:{chroma}:3[lgbl];'
+    """The camera part of the game panel: crop + gblur, an alpha mask that is 1 inside and fades to 0 over `feather` px
+    on the sides inside the panel (geq + alphamerge), and overlay: the blur melts into the game, no cut line."""
+    f = max(1, int(blur.get('feather', BLUR_FEATHER))); fade = blur.get('fade') or dict(l=True, t=True, r=True, b=True)
+    far = '100000'
+    d = [('X' if fade['l'] else far), ('(W-1-X)' if fade['r'] else far), ('Y' if fade['t'] else far), ('(H-1-Y)' if fade['b'] else far)]
+    alpha = f"255*clip(min(min({d[0]},{d[1]}),min({d[2]},{d[3]}))/{f},0,1)"
+    return (f',split[lgs][lgb];[lgb]crop={blur["w"]}:{blur["h"]}:{blur["x"]}:{blur["y"]},gblur=sigma={blur.get("sigma", BLUR_SIGMA)},split[lgc][lgm];'
+            f"[lgm]format=gray,geq=lum='{alpha}'[lga];[lgc][lga]alphamerge[lgbl];"
             f'[lgs][lgbl]overlay={blur["x"]}:{blur["y"]}')
 
 

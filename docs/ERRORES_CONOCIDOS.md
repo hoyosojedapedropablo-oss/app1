@@ -242,11 +242,12 @@ una prueba automática (entre comillas invertidas) que falla si el error vuelve.
   mayoritario, al menos 3); un momento que no la encuentra o da otra caja usa esa, salvo que en ese momento no haya nadie en
   el recuadro (intro, pantalla completa), y entonces avisa. Al arrancar, los momentos guardados con la caja equivocada se
   preparan otra vez. Sin «Seguir la acción del juego» (ahora apagado por defecto) el panel del juego va centrado. La esquina de
-  la cámara que muestra el juego centrado se difumina (crop + boxblur + overlay con 8 px de margen, `layout.camera_blur`),
+  la cámara que muestra el juego centrado se difumina sin que se note el rectángulo (crop + gblur sigma 14 con 24 px de margen,
+  y una máscara alfa que se funde en 24 px por los lados interiores con geq + alphamerge antes del overlay; `layout.camera_blur`),
   igual en el MP4, la vista previa del editor y las miniaturas; con «Seguir la acción» el recorte sigue esquivando la cámara.
   Los proyectos ya abiertos desde un directo toman la cámara de la sesión si su caja es de las equivocadas y no se marcó a mano.
 - **Guardas:** `test_E31_the_box_most_moments_agree_on_wins`, `test_E31_the_game_panel_is_centred_unless_following_the_action`,
   `test_E31_a_moment_that_missed_the_camera_uses_the_sessions`, `test_E31_a_wrong_box_is_replaced_by_the_sessions`,
   `test_E31_nobody_in_the_sessions_camera_means_no_camera`, `test_E31_saved_moments_with_a_wrong_box_are_prepared_again`,
   `test_E31_exports_centre_the_game_by_default`, `test_E31_the_camera_a_centred_game_panel_shows_is_blurred`,
-  `test_E31_an_opened_project_takes_the_sessions_camera_unless_marked_by_hand`
+  `test_E31_an_opened_project_takes_the_sessions_camera_unless_marked_by_hand`, `test_E31_the_blur_fades_into_the_game_without_a_cut`

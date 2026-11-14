@@ -216,13 +216,21 @@ class ExportTests(unittest.TestCase):
                 cam = image[int(40 * k):top - int(40 * k), int(60 * k):-int(60 * k)]
                 red = (cam[:, :, 0] > 150) & (cam[:, :, 1] < 70)
                 self.assertGreater(red.mean(), .9)                              # the camera fills the top panel
-                # E-31: the game panel is centred by default; the corner of the camera it shows is blurred (variance of that
-                # rectangle 2885 sharp vs 257 blurred on this stream), not avoided.
+                # E-31: the game panel is centred by default and the corner of the camera it shows is blurred (gblur that
+                # fades over BLUR_FEATHER px on the inner sides): the centre of that zone keeps less than half its variance.
                 blur = client.post(f'/api/jobs/{ident}/layout/path', json=dict(start=0, end=4, follow=False)).json()['game']['blur']
                 self.assertIsNotNone(blur)
-                gray = np.array(Image.open(frame).convert('L')).astype(float); y0 = int((path['top'] + path['seam']) * k)
-                zone = gray[y0 + int((blur['y'] + 10) * k): y0 + int((blur['y'] + blur['h'] - 10) * k), int((blur['x'] + 10) * k): int((blur['x'] + blur['w'] - 10) * k)]
-                self.assertLess(zone.var(), 600, (resolution, zone.var()))
+                f = blur['feather'] + 10; side = lambda key: f if blur['fade'][key] else 10
+                y0 = int((path['top'] + path['seam']) * k)
+                rows = slice(y0 + int((blur['y'] + side('t')) * k), y0 + int((blur['y'] + blur['h'] - side('b')) * k))
+                cols = slice(int((blur['x'] + side('l')) * k), int((blur['x'] + blur['w'] - side('r')) * k))
+                blurred = np.array(Image.open(frame).convert('L')).astype(float)[rows, cols]
+                with patch('layout.camera_blur', return_value=None):
+                    sharp_r = client.post(f'/api/jobs/{ident}/export', json=dict(start=0, end=4, title='', subtitles='', framing='stack', resolution=resolution))
+                sharp_out = Path(tmp) / f'sharp{resolution}.mp4'; sharp_out.write_bytes(sharp_r.content); sharp_frame = Path(tmp) / f's{resolution}.png'
+                backend.command(['ffmpeg', '-v', 'error', '-y', '-ss', '2', '-i', str(sharp_out), '-frames:v', '1', str(sharp_frame)])
+                sharp = np.array(Image.open(sharp_frame).convert('L')).astype(float)[rows, cols]
+                self.assertLess(blurred.var(), .5 * sharp.var(), (resolution, blurred.var(), sharp.var()))
             # «Seguir la acción del juego» on: the game crop keeps clear of the camera, as before.
             r = client.post(f'/api/jobs/{ident}/export', json=dict(start=0, end=4, title='', subtitles='', framing='stack', game_follow=True))
             out = Path(tmp) / 'follow.mp4'; out.write_bytes(r.content); frame = Path(tmp) / 'follow.png'
