@@ -774,6 +774,9 @@ def sync_fonts(fonts):
 def ass_file(path,opts,transcript=None):
  import caption_styles
  font=opts.font if opts.font in FONTS else 'Montserrat'
+ # E-30: libass sizes by the font's whole line, the browser and title_layout by its em: every size in the ASS is scaled.
+ from styling import ass_scale
+ scale=ass_scale(font)
  color=ass_color(opts.caption_color);outline=ass_color(opts.outline_color)
  header=f'''[Script Info]
 ScriptType: v4.00+
@@ -782,7 +785,7 @@ PlayResY: 1920
 WrapStyle: 2
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-{caption_styles.styles_block(font,opts.caption_size,color,outline,opts.outline_width,opts.caption_accent,opts.caption_style,ass_color)}
+{caption_styles.styles_block(font,round(opts.caption_size*scale),color,outline,opts.outline_width,opts.caption_accent,opts.caption_style,ass_color)}
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 '''
@@ -792,9 +795,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
  for cue in caption_cues(opts,transcript or []):
   # Animated styles (caption_styles.py): the cue is laid out once and each word can be lit, popped or boxed.
   text=cue['text'].upper() if opts.caption_upper else cue['text']
-  caption,point=title_layout(text,font,opts.caption_size)
-  size_tag=r'{\fs'+str(point)+'}'
-  events+=caption_styles.events(dict(cue,text=text),safe(caption).replace(r'\N','\n'),opts.caption_style,opts.caption_accent,caption_pos+size_tag,stamp,opts.caption_color,point)
+  caption,point=title_layout(text,font,opts.caption_size)      # lines are cut at the size asked for (as the browser)
+  drawn=round(point*scale)                                      # what libass needs to draw that size
+  size_tag=r'{\fs'+str(drawn)+'}'
+  events+=caption_styles.events(dict(cue,text=text),safe(caption).replace(r'\N','\n'),opts.caption_style,opts.caption_accent,caption_pos+size_tag,stamp,opts.caption_color,drawn)
  path.write_text(header+'\n'.join(events),encoding='utf-8')
 
 def render_title(opts):

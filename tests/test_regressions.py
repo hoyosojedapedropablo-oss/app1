@@ -191,6 +191,44 @@ class E29FontsReachLibass(unittest.TestCase):
                 self.assertEqual((fonts / p.name).read_bytes(), p.read_bytes(), p.name)
 
 
+class E30SizeAsAsked(unittest.TestCase):
+    """E-30 (Nov 2026): libass sizes a face by its whole Windows line, the browser and PIL by its em; Bangers, Poppins
+    and Anton came out at 56-59 % of the size asked for. Every size written to the ASS is scaled by the face's ratio."""
+    def test_E30_capitals_in_the_mp4_match_the_size_asked_for(self):
+        import subprocess, shutil, app, styling
+        from PIL import Image, ImageFont
+        size = 80
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp); shutil.copytree(ROOT / 'static' / 'fonts', tmp / 'fonts')
+            for family, file in styling.FONTS.items():
+                opts = app.Export(start=0, end=1, title='', subtitles='HOLA', font=family, caption_size=size, outline_width=0,
+                                  caption_style='clasico', captions=[dict(start=0, end=1, text='HOLA')])
+                app.ass_file(tmp / 'c.ass', opts)
+                subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=black:size=1080x1920:r=10:d=0.5',
+                                '-vf', 'ass=c.ass:fontsdir=fonts', '-c:v', 'libx264', '-crf', '12', '-pix_fmt', 'yuv420p', 'c.mp4'], cwd=tmp, check=True)
+                subprocess.run(['ffmpeg', '-v', 'error', '-y', '-ss', '0.2', '-i', 'c.mp4', '-frames:v', '1', 'c.png'], cwd=tmp, check=True)
+                a = np.asarray(Image.open(tmp / 'c.png').convert('L'))
+                rows = np.where((a > 128).any(1))[0]; drawn = rows.max() - rows.min() + 1
+                _, point = styling.title_layout('HOLA', family, size)
+                box = ImageFont.truetype(str(ROOT / 'static' / 'fonts' / file), point).getbbox('HOLA'); wanted = box[3] - box[1]
+                self.assertAlmostEqual(drawn / wanted, 1, delta=.05, msg=f'{family}: {drawn} px in the MP4, {wanted} px asked for')
+
+    def test_E30_every_size_in_the_ass_is_scaled(self):
+        import app, styling
+        with tempfile.TemporaryDirectory() as tmp:
+            opts = app.Export(start=0, end=2, title='', subtitles='dos palabras', font='Bangers', caption_size=80,
+                              caption_style='resaltador', captions=[dict(start=0, end=2, text='dos palabras')])
+            app.ass_file(Path(tmp) / 'c.ass', opts)
+            ass = (Path(tmp) / 'c.ass').read_text(encoding='utf-8')
+        k = styling.ass_scale('Bangers'); drawn = round(80 * k)
+        self.assertGreater(k, 1.5)
+        for style in ('Caption', 'Box'):
+            line = next(l for l in ass.splitlines() if l.startswith(f'Style: {style},'))
+            self.assertEqual(line.split(',')[2], str(drawn), style)
+        self.assertIn(rf'\fs{drawn}', ass); self.assertIn(rf'\rBox\fs{drawn}', ass)
+        self.assertNotIn(r'\fs80}', ass)
+
+
 class RegistryTests(unittest.TestCase):
     def test_every_known_error_has_a_guard(self):
         """Each E-xx of docs/ERRORES_CONOCIDOS.md names a test that exists."""
