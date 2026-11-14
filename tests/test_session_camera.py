@@ -53,7 +53,7 @@ class SessionTests(unittest.TestCase):
 
     def test_E31_a_moment_that_missed_the_camera_uses_the_sessions(self):
         with tempfile.TemporaryDirectory() as tmp:
-            s = self.session(tmp)
+            s = self.session(tmp); s.moments[-1]['layout_note'] = 'No se vio la cámara…'       # from an earlier miss
             ov = self.prepare(s, dict(found=False, kind='none', width=1920, height=1080))
             self.assertTrue(ov['found']); self.assertTrue(ov['consensus']); self.assertEqual(ov['h'], 376)
             self.assertNotIn('layout_note', s.moments[-1])

@@ -707,6 +707,7 @@ class LiveSession:
                 result = layout.analyze(target, round(start, 3), round(end, 3), overlay)
             (self.clips / f'{moment["id"]}.layout.json').write_text(json.dumps(result), encoding='utf-8')
             moment.pop('layout_error', None)
+            moment.pop('layout_note', None)       # E-31: a note from an earlier miss goes once the camera is found
             if settings.get('framing') == 'stack' and not overlay.get('found'):
                 # Chosen «Cámara + juego» but no camera in this moment (an intro, full screen): say so, never silently.
                 moment['layout_note'] = 'No se vio la cámara del streamer en este clip: sale con bandas negras. Puedes marcarla a mano en el editor.'
