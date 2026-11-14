@@ -216,8 +216,27 @@ class ExportTests(unittest.TestCase):
                 cam = image[int(40 * k):top - int(40 * k), int(60 * k):-int(60 * k)]
                 red = (cam[:, :, 0] > 150) & (cam[:, :, 1] < 70)
                 self.assertGreater(red.mean(), .9)                              # the camera fills the top panel
-                game = image[top + int(20 * k):]
-                self.assertLess(((game[:, :, 0] > 150) & (game[:, :, 1] < 70)).mean(), .01)   # and is not repeated below
+                # E-31: the game panel is centred by default and the corner of the camera it shows is blurred (gblur that
+                # fades over BLUR_FEATHER px on the inner sides): the centre of that zone keeps less than half its variance.
+                blur = client.post(f'/api/jobs/{ident}/layout/path', json=dict(start=0, end=4, follow=False)).json()['game']['blur']
+                self.assertIsNotNone(blur)
+                f = blur['feather'] + 10; side = lambda key: f if blur['fade'][key] else 10
+                y0 = int((path['top'] + path['seam']) * k)
+                rows = slice(y0 + int((blur['y'] + side('t')) * k), y0 + int((blur['y'] + blur['h'] - side('b')) * k))
+                cols = slice(int((blur['x'] + side('l')) * k), int((blur['x'] + blur['w'] - side('r')) * k))
+                blurred = np.array(Image.open(frame).convert('L')).astype(float)[rows, cols]
+                with patch('layout.camera_blur', return_value=None):
+                    sharp_r = client.post(f'/api/jobs/{ident}/export', json=dict(start=0, end=4, title='', subtitles='', framing='stack', resolution=resolution))
+                sharp_out = Path(tmp) / f'sharp{resolution}.mp4'; sharp_out.write_bytes(sharp_r.content); sharp_frame = Path(tmp) / f's{resolution}.png'
+                backend.command(['ffmpeg', '-v', 'error', '-y', '-ss', '2', '-i', str(sharp_out), '-frames:v', '1', str(sharp_frame)])
+                sharp = np.array(Image.open(sharp_frame).convert('L')).astype(float)[rows, cols]
+                self.assertLess(blurred.var(), .5 * sharp.var(), (resolution, blurred.var(), sharp.var()))
+            # «Seguir la acción del juego» on: the game crop keeps clear of the camera, as before.
+            r = client.post(f'/api/jobs/{ident}/export', json=dict(start=0, end=4, title='', subtitles='', framing='stack', game_follow=True))
+            out = Path(tmp) / 'follow.mp4'; out.write_bytes(r.content); frame = Path(tmp) / 'follow.png'
+            backend.command(['ffmpeg', '-v', 'error', '-y', '-ss', '2', '-i', str(out), '-frames:v', '1', str(frame)])
+            image = np.array(Image.open(frame).convert('RGB')).astype(int); game = image[path['top'] + 20:]
+            self.assertLess(((game[:, :, 0] > 150) & (game[:, :, 1] < 70)).mean(), .01)   # the camera is not repeated below
             # A manual rectangle replaces the detected one and the layout follows it.
             fixed = client.put(f'/api/jobs/{ident}/overlay', json=dict(x=880, y=10, w=380, h=290)).json()
             self.assertTrue(fixed['manual']); self.assertEqual((fixed['x'], fixed['w']), (880, 380))

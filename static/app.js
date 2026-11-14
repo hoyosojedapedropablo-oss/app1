@@ -629,11 +629,11 @@ function drawStack(t){
  const canvas=$('stackCanvas'),video=$('video'),stack=$('framing').value==='stack';
  $('stackBox').classList.toggle('hidden',!stack);
  const p=stackPath,on=stack&&p?.found&&p.start===Number($('start').value)&&p.end===Number($('end').value),wait=!on&&stackPending();
- canvas.hidden=!(on||wait);video.style.opacity=on||wait?'0':'';if(!on&&!wait)return;
+ canvas.hidden=!(on||wait);video.style.opacity=on||wait?'0':'';if(!on&&!wait){paintStackBlur(null);return;}
  const preview=$('preview'),dpr=window.devicePixelRatio||1,w=Math.round(preview.clientWidth*dpr),h=Math.round(preview.clientHeight*dpr);
  if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}
  const ctx=canvas.getContext('2d'),r=w/1080;ctx.fillStyle='#0b0b0b';ctx.fillRect(0,0,w,h);
- if(wait){ctx.fillStyle='#9aa0a6';ctx.font=`${Math.round(34*r)}px Montserrat, sans-serif`;ctx.textAlign='center';ctx.fillText('Preparando «Cámara + juego»…',w/2,h/2);return;}
+ if(wait){paintStackBlur(null);ctx.fillStyle='#9aa0a6';ctx.font=`${Math.round(34*r)}px Montserrat, sans-serif`;ctx.textAlign='center';ctx.fillText('Preparando «Cámara + juego»…',w/2,h/2);return;}
  if(video.readyState<2)return;
  ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
  const cam=p.cam;ctx.drawImage(video,cam.x,cam.y,cam.w,cam.h,0,0,w,p.top*r);
@@ -641,6 +641,21 @@ function drawStack(t){
  const g=p.game,i=Math.max(0,t)*g.fps,a=Math.min(g.left.length-1,Math.floor(i)),b=Math.min(g.left.length-1,a+1);
  const left=g.left[a]+(g.left[b]-g.left[a])*Math.max(0,i-a),x=Math.min(Math.max(0,Math.round(left/2)*2),p.width-g.w);
  ctx.drawImage(video,x,g.y,g.w,g.h,0,(p.top+p.seam)*r,w,p.bottom*r);
+ paintStackBlur(p);
+}
+// E-31: the part of the camera a centred game panel shows is blurred and fades into the game at its inner sides, as
+// layout.filter_graph does in the MP4 (gblur + a feathered alpha mask): a layer with backdrop-filter and a gradient mask.
+function paintStackBlur(p){
+ let el=$('stackBlur');const b=p&&p.game&&p.game.blur;
+ if(!el){el=document.createElement('div');el.id='stackBlur';el.className='stack-blur';$('preview').append(el);}
+ if(!b||$('stackCanvas').hidden){el.hidden=true;return;}
+ const rc=$('preview').clientWidth/1080,f=(b.feather||24)*rc,fade=b.fade||{l:1,t:1,r:1,b:1};
+ const edge=(from,to)=>`linear-gradient(to ${to},${from?'transparent 0':'#000 0'},#000 ${from?f:0}px,#000 calc(100% - ${fade[to==='right'?'r':'b']?f:0}px),${fade[to==='right'?'r':'b']?'transparent':'#000'} 100%)`;
+ const mask=`${edge(fade.l,'right')},${edge(fade.t,'bottom')}`;
+ Object.assign(el.style,{left:`${b.x*rc}px`,top:`${(p.top+p.seam+b.y)*rc}px`,width:`${b.w*rc}px`,height:`${b.h*rc}px`,
+  backdropFilter:`blur(${(b.sigma||14)*rc}px)`,webkitBackdropFilter:`blur(${(b.sigma||14)*rc}px)`,maskImage:mask,webkitMaskImage:mask,
+  maskComposite:'intersect',webkitMaskComposite:'source-in'});
+ el.hidden=false;
 }
 $('game_follow').addEventListener('change',()=>{saveCurrent();loadStackPath().catch(e=>say(e.message));});
 for(const key of ['start','end'])$(key).addEventListener('change',()=>{if($('framing').value==='stack')loadStackPath().catch(e=>say(e.message));});

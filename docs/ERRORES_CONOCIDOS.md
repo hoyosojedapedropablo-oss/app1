@@ -227,7 +227,27 @@ una prueba automática (entre comillas invertidas) que falla si el error vuelve.
   márgenes distintos (relación 1,23 a 1,76), así que cada una se encogía distinto.
 - **Solución:** `styling.ass_scale(fuente)` lee esa relación del propio archivo de la fuente (tablas OS/2 y head, en caché
   por archivo y fecha; sirve para fuentes añadidas después) y `ass_file` multiplica por ella cada tamaño del ASS: el
-  `Fontsize` de `Caption` y `Box`, el `s` de cada frase y el que `caption_styles` repone tras la palabra resaltada
-  (`Caption`, `Box`). El corte de líneas sigue usando el tamaño pedido. Medido: 98-103 % del tamaño de PIL en las 11 fuentes.
+  `Fontsize` de `Caption` y `Box`, el `\fs` de cada frase y el que `caption_styles` repone tras la palabra resaltada
+  (`\rCaption`, `\rBox`). El corte de líneas sigue usando el tamaño pedido. Medido: 98-103 % del tamaño de PIL en las 11 fuentes.
 - **Guardas:** `test_E30_capitals_in_the_mp4_match_the_size_asked_for`, `test_E30_every_size_in_the_ass_is_scaled`
 
+## E-31 · «Cámara + juego» elegido, pero clips con bandas negras, dos líneas de división y el juego descentrado (Epidemic77, nov 2026)
+- **Síntoma:** en un directo de Epidemic77 (GTA RP, cámara arriba a la izquierda) con «Cámara + juego» elegido: algunos
+  clips salieron con bandas negras; en otros, el panel de la cámara traía una franja del juego (dos líneas de división, y el
+  título en la línea de abajo, no en la que se ve); y el personaje quedaba al borde del panel del juego.
+- **Causa raíz (medida en sus 31 momentos):** cada momento busca la cámara por su cuenta. 3 no la encontraron y pasaron a
+  bandas negras; 8 dieron otra caja (450 px de alto en vez de 376, o 412 de ancho en vez de 516); y 5 tomaron una columna del
+  escenario (x = 714) por el borde del juego. Además, el panel del juego se corría a un lado para no mostrar la cámara.
+- **Solución:** `layout.consensus_camera` toma la cámara en la que coinciden los momentos de la sesión (mediana del grupo
+  mayoritario, al menos 3); un momento que no la encuentra o da otra caja usa esa, salvo que en ese momento no haya nadie en
+  el recuadro (intro, pantalla completa), y entonces avisa. Al arrancar, los momentos guardados con la caja equivocada se
+  preparan otra vez. Sin «Seguir la acción del juego» (ahora apagado por defecto) el panel del juego va centrado. La esquina de
+  la cámara que muestra el juego centrado se difumina sin que se note el rectángulo (crop + gblur sigma 14 con 24 px de margen,
+  y una máscara alfa que se funde en 24 px por los lados interiores con geq + alphamerge antes del overlay; `layout.camera_blur`),
+  igual en el MP4, la vista previa del editor y las miniaturas; con «Seguir la acción» el recorte sigue esquivando la cámara.
+  Los proyectos ya abiertos desde un directo toman la cámara de la sesión si su caja es de las equivocadas y no se marcó a mano.
+- **Guardas:** `test_E31_the_box_most_moments_agree_on_wins`, `test_E31_the_game_panel_is_centred_unless_following_the_action`,
+  `test_E31_a_moment_that_missed_the_camera_uses_the_sessions`, `test_E31_a_wrong_box_is_replaced_by_the_sessions`,
+  `test_E31_nobody_in_the_sessions_camera_means_no_camera`, `test_E31_saved_moments_with_a_wrong_box_are_prepared_again`,
+  `test_E31_exports_centre_the_game_by_default`, `test_E31_the_camera_a_centred_game_panel_shows_is_blurred`,
+  `test_E31_an_opened_project_takes_the_sessions_camera_unless_marked_by_hand`, `test_E31_the_blur_fades_into_the_game_without_a_cut`

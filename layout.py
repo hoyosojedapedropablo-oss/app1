@@ -462,6 +462,37 @@ def _border_end(ey, cam):
     return best if best and best > r + 4 else None
 
 
+def iou(a, b):
+    """Overlap of two boxes {x, y, w, h}, 0-1."""
+    x0, y0 = max(a['x'], b['x']), max(a['y'], b['y'])
+    x1, y1 = min(a['x'] + a['w'], b['x'] + b['w']), min(a['y'] + a['h'], b['y'] + b['h'])
+    inter = max(0, x1 - x0) * max(0, y1 - y0)
+    return inter / max(1, a['w'] * a['h'] + b['w'] * b['h'] - inter)
+
+
+def consensus_camera(overlays, least=3, agree=.8):
+    """E-31: the camera of a live session, from the moments already prepared. A streamer's camera stays in one place, but
+    each moment is detected on its own and some miss it or get it wrong (Epidemic77: of 31 moments, 3 found no camera
+    and 8 had another box: 450 px tall instead of 376, so the top panel showed a strip of game and two dividing lines).
+    The box most others agree with (overlap >= `agree`) wins; its members' median is the camera, and the game area is
+    the whole frame unless most of them saw the same sidebar. None until `least` moments agree."""
+    found = [o for o in overlays if o and o.get('found') and not o.get('consensus')]
+    if len(found) < least: return None
+    best = max(found, key=lambda o: sum(iou(o, p) >= agree for p in found))
+    group = [p for p in found if iou(best, p) >= agree]
+    if len(group) < least or len(group) < .5 * len(found): return None
+    med = lambda k: int(round(float(np.median([p[k] for p in group])) / 2) * 2)
+    out = {k: best[k] for k in ('width', 'height', 'kind', 'detector') if k in best}
+    out.update(found=True, consensus=True, x=med('x'), y=med('y'), w=med('w'), h=med('h'), presence=1.0,
+               screen=sum(bool(p.get('screen')) for p in group) > len(group) / 2, agreeing=len(group), of=len(found))
+    faces = [p['face'] for p in group if p.get('face')]
+    if faces: out['face'] = {k: round(float(np.median([f[k] for f in faces])), 1) for k in ('x', 'y', 'w', 'h')}
+    contents = [tuple(sorted((p.get('content') or {}).items())) for p in group]
+    common = max(set(contents), key=contents.count)
+    if common and contents.count(common) > len(group) / 2: out['content'] = dict(common)
+    return out
+
+
 def panels(overlay):
     """Top (camera) panel height and the camera crop, centred on the face, with the panel's shape."""
     cw, ch = overlay['w'], overlay['h']
@@ -558,7 +589,13 @@ def game_path(result, motion='balanced', follow=True, cuts=()):
     xs = np.array(result['motion']['xs'] or [centre], dtype=float)
     duration = len(xs) / GAME_FPS
     n = max(2, int(math.ceil(duration * PATH_FPS)) + 1)
-    if not follow or lo >= hi:
+    if not follow:
+        # E-31: without «Seguir la acción», the game panel is the centre of the game area, where games put the character,
+        # the car or the ball, even if a corner of the camera shows: moving it aside put the character at the panel's edge.
+        middle = c['x'] + c['w'] / 2
+        left = [float(min(max(c['x'], middle - gw / 2), c['x'] + c['w'] - gw))] * n
+        return dict(fps=PATH_FPS, left=[round(v, 2) for v in left], window=gw, height=gh, y=gy, static=True)
+    if lo >= hi:
         left = [float(min(max(lo, centre - gw / 2), max(lo, hi)))] * n
         return dict(fps=PATH_FPS, left=[round(v, 2) for v in left], window=gw, height=gh, y=gy, static=True)
     m = MOTION.get(motion, MOTION['balanced'])
@@ -608,6 +645,40 @@ def analyze(source, start, end, overlay, progress=lambda v: None):
     return result
 
 
+BLUR_SIGMA = 14         # gblur of the camera corner a centred game panel shows
+BLUR_FEATHER = 24       # px over which that blur fades into the game (no visible rectangle)
+
+
+def camera_blur(overlay, bottom, left, top, width, height, margin=24):
+    """E-31: with the game panel centred (no «Seguir la acción»), the part of the camera box that the fixed game crop
+    (left, top, width, height in source px) shows, as {x, y, w, h} in the bottom panel's px (CANVAS_W x bottom), with
+    `margin` px around and even values; None when the crop does not reach the camera. It is blurred, not avoided.
+    `fade`: the sides inside the panel, where the blur fades out over BLUR_FEATHER px (a side on the panel's edge does
+    not fade, or the camera would show sharp there)."""
+    x0, y0 = max(overlay['x'], left), max(overlay['y'], top)
+    x1, y1 = min(overlay['x'] + overlay['w'], left + width), min(overlay['y'] + overlay['h'], top + height)
+    if x1 <= x0 or y1 <= y0: return None
+    sx, sy = CANVAS_W / width, bottom / height
+    bx0 = max(0, int((x0 - left) * sx - margin) // 2 * 2); by0 = max(0, int((y0 - top) * sy - margin) // 2 * 2)
+    bx1 = min(CANVAS_W, -(-int((x1 - left) * sx + margin + 1) // 2) * 2); by1 = min(bottom, -(-int((y1 - top) * sy + margin + 1) // 2) * 2)
+    if bx1 - bx0 < 8 or by1 - by0 < 8: return None
+    fade = dict(l=bx0 > 0, t=by0 > 0, r=bx1 < CANVAS_W, b=by1 < bottom)
+    return dict(x=bx0, y=by0, w=bx1 - bx0, h=by1 - by0, fade=fade, feather=BLUR_FEATHER, sigma=BLUR_SIGMA)
+
+
+def _blur_chain(blur):
+    """The camera part of the game panel: crop + gblur, an alpha mask that is 1 inside and fades to 0 over `feather` px
+    on the sides inside the panel (geq + alphamerge), and overlay: the blur melts into the game, no cut line. The blurred
+    zone is fixed to yuva420p first: merged with the gray mask, it was negotiated to gray and lost its colour."""
+    f = max(1, int(blur.get('feather', BLUR_FEATHER))); fade = blur.get('fade') or dict(l=True, t=True, r=True, b=True)
+    far = '100000'
+    d = [('X' if fade['l'] else far), ('(W-1-X)' if fade['r'] else far), ('Y' if fade['t'] else far), ('(H-1-Y)' if fade['b'] else far)]
+    alpha = f"255*clip(min(min({d[0]},{d[1]}),min({d[2]},{d[3]}))/{f},0,1)"
+    return (f',split[lgs][lgb];[lgb]crop={blur["w"]}:{blur["h"]}:{blur["x"]}:{blur["y"]},gblur=sigma={blur.get("sigma", BLUR_SIGMA)},format=yuva420p,split[lgc][lgm];'
+            f"[lgm]format=gray,geq=lum='{alpha}'[lga];[lgc][lga]alphamerge[lgbl];"
+            f'[lgs][lgbl]overlay={blur["x"]}:{blur["y"]}')
+
+
 def filter_graph(result, cmd_file, duration, fps, motion='balanced', follow=True, sharpen=True):
     """FFmpeg graph fragment for the stacked layout (to be wrapped as [0:v]<graph>[v0])."""
     o, p = result['overlay'], result['panels']; W = o['width']; c = p['cam']
@@ -620,9 +691,12 @@ def filter_graph(result, cmd_file, duration, fps, motion='balanced', follow=True
     Path(cmd_file).write_text('\n'.join(lines), encoding='utf-8')
     sharp = ',unsharp=5:5:0.7:5:5:0.0' if sharpen else ''
     x0 = even(path['left'][0])
+    # E-31: a fixed, centred game crop may show a corner of the camera: that part is blurred (following the action avoids it).
+    blur = None if follow else camera_blur(o, p['bottom'], x0, gy, gw, gh)
     return (f'setpts=PTS-STARTPTS,split[lcam][lgame];'
             f'[lcam]crop={c["w"]}:{c["h"]}:{c["x"]}:{c["y"]},scale={CANVAS_W}:{p["top"]}:flags=lanczos{sharp},setsar=1,pad={CANVAS_W}:{p["top"] + SEAM}:0:0:color=0x0b0b0b[ltop];'
-            f'[lgame]sendcmd=f={Path(cmd_file).name},crop@game={gw}:{gh}:{x0}:{gy},scale={CANVAS_W}:{p["bottom"]}:flags=lanczos,setsar=1[lbottom];'
+            f'[lgame]sendcmd=f={Path(cmd_file).name},crop@game={gw}:{gh}:{x0}:{gy},scale={CANVAS_W}:{p["bottom"]}:flags=lanczos,setsar=1'
+            + (_blur_chain(blur) if blur else '') + '[lbottom];'
             f'[ltop][lbottom]vstack')
 
 
@@ -630,6 +704,8 @@ def preview_path(result, motion='balanced', follow=True):
     """What the editor needs to draw the same picture on a canvas."""
     o, p = result['overlay'], result['panels']
     path = game_path(result, motion, follow)
+    even = lambda v: min(max(0, int(round(v / 2)) * 2), o['width'] - path['window'])
+    blur = None if follow else camera_blur(o, p['bottom'], even(path['left'][0]), path['y'], path['window'], path['height'])
     return dict(found=True, top=p['top'], bottom=p['bottom'], seam=SEAM, cam=p['cam'], width=o['width'], height=o['height'],
-                game=dict(fps=path['fps'], left=path['left'], w=path['window'], h=path['height'], y=path['y'], static=path['static']),
+                game=dict(fps=path['fps'], left=path['left'], w=path['window'], h=path['height'], y=path['y'], static=path['static'], blur=blur),
                 overlay={k: o[k] for k in ('x', 'y', 'w', 'h')}, content=content_of(o), cam_presence=result.get('cam_presence', 1))

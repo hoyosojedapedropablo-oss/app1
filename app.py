@@ -649,7 +649,7 @@ class Export(BaseModel):
  show_subtitles:bool=True
  title_corners:Literal['rounded','square']='square'
  # 'Cámara + juego' (framing='stack'): follow the game's action, and output size (1440 gives YouTube Shorts more bitrate).
- game_follow:bool=True
+ game_follow:bool=False      # E-31: the game panel is centred unless «Seguir la acción del juego» is on
  resolution:Literal[1080,1440]=1080
  preview:bool=False               # «Comprobar MP4»: not an export, not recorded in the library
  mute_words:bool=False            # «Silenciar malas palabras» (the list is in Configuración)
@@ -968,12 +968,28 @@ layout_pool=ThreadPoolExecutor(max_workers=1)
 
 def overlay_file(ident):return DATA/ident/'overlay.json'
 
+_session_cams={}
+def session_camera(job):
+ """E-31: the camera a live session agrees on (layout.consensus_camera), for a project opened from one of its moments."""
+ import layout
+ live_info=job.get('live') or {};session=LIVE.get(live_info.get('session'))
+ if not session or (session.clip_settings or {}).get('framing')!='stack':return None
+ key=(session.id,len(session.moments))
+ if key not in _session_cams:_session_cams.clear();_session_cams[key]=layout.consensus_camera(session._session_overlays(last=len(session.moments)))
+ return _session_cams[key]
+
 def read_overlay(ident):
  path=overlay_file(ident)
  if not path.exists():return None
  try:value=json.loads(path.read_text(encoding='utf-8'))
  except (OSError,ValueError):return None
  import layout
+ # E-31: a project opened from a live moment whose camera was missed or boxed wrong takes the session's (not one marked by hand).
+ job=JOBS.get(ident) or {}
+ if job.get('live') and not value.get('manual') and not value.get('consensus') and not value.get('consensus_absent'):
+  agreed=session_camera(job)
+  if agreed and (not value.get('found') or layout.iou(value,agreed)<.85):
+   value=dict(agreed,status='ready',manual=False,detected={k:value.get(k) for k in ('found','x','y','w','h')});write_overlay(ident,value)
  # An automatic result from an older detector is computed again; a rectangle marked by hand is always kept.
  if not value.get('manual') and value.get('detector',1)<layout.DETECTOR_VERSION:return None
  return value

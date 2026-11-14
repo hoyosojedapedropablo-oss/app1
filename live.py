@@ -696,9 +696,18 @@ class LiveSession:
             base = moment.get('file_start', moment['start'] - PAD_S)
             start, end = max(0.0, moment['start'] - base), moment['end'] - base
             overlay = layout.detect_overlay(target, end + PAD_S, samples=24, prefer=settings.get('framing') == 'stack')
+            # E-31: the camera agreed by the session's other moments replaces a miss or a wrong box of this one.
+            agreed = layout.consensus_camera(self._session_overlays(exclude=moment['id']) + [overlay])
+            if agreed and not overlay.get('manual') and (not overlay.get('found') or layout.iou(overlay, agreed) < .85):
+                overlay = dict(agreed, detected={k: overlay.get(k) for k in ('found', 'x', 'y', 'w', 'h')})
             result = layout.analyze(target, round(start, 3), round(end, 3), overlay)
+            if overlay.get('consensus') and result.get('cam_presence', 1) < .34:
+                # nobody in the session's camera box during this moment (an intro, a full-screen scene): no camera
+                overlay = dict(found=False, kind='none', width=overlay.get('width'), height=overlay.get('height'), consensus_absent=True)
+                result = layout.analyze(target, round(start, 3), round(end, 3), overlay)
             (self.clips / f'{moment["id"]}.layout.json').write_text(json.dumps(result), encoding='utf-8')
             moment.pop('layout_error', None)
+            moment.pop('layout_note', None)       # E-31: a note from an earlier miss goes once the camera is found
             if settings.get('framing') == 'stack' and not overlay.get('found'):
                 # Chosen «Cámara + juego» but no camera in this moment (an intro, full screen): say so, never silently.
                 moment['layout_note'] = 'No se vio la cámara del streamer en este clip: sale con bandas negras. Puedes marcarla a mano en el editor.'
@@ -706,6 +715,15 @@ class LiveSession:
             # Never swallowed again (E-01): recorded, kept on the moment, and retried at the next start.
             import incidents; incidents.record('layout', error, session=self.id, moment=moment['id'])
             moment['layout_error'] = f'{type(error).__name__}: {str(error)[:160]}'
+
+    def _session_overlays(self, exclude=None, last=40):
+        """Cameras detected in the session's latest prepared moments (for layout.consensus_camera)."""
+        out = []
+        for m in self.moments[-last - 1:]:
+            if m['id'] == exclude: continue
+            try: out.append(json.loads((self.clips / f'{m["id"]}.layout.json').read_text(encoding='utf-8')).get('overlay') or {})
+            except (OSError, ValueError): continue
+        return out
 
     def _prepare_follow(self, moment):
         """«Seguimiento facial» on: who is where and who speaks in this moment, computed now (in the background), so its
@@ -737,6 +755,10 @@ class LiveSession:
         the ones never prepared: the newest session's reactions, so they open and export with the camera)."""
         import layout
         redone = 0
+        # E-31: with «Cámara + juego» chosen, moments whose camera was missed or boxed wrong are prepared again with the
+        # camera the rest of the session agrees on.
+        stack = (self.clip_settings or {}).get('framing') == 'stack'
+        agreed = layout.consensus_camera(self._session_overlays(last=len(self.moments))) if stack else None
         for m in list(self.moments):
             f = self.clips / f'{m["id"]}.layout.json'
             if not (self.clips / f'{m["id"]}.mp4').exists(): continue
@@ -746,7 +768,10 @@ class LiveSession:
                 continue
             try: ov = json.loads(f.read_text(encoding='utf-8')).get('overlay') or {}
             except (OSError, ValueError): continue
-            if ov.get('manual') or ov.get('detector', 1) >= layout.DETECTOR_VERSION: continue
+            outlier = agreed and not ov.get('manual') and not ov.get('consensus') and not ov.get('consensus_absent') and \
+                (not ov.get('found') or layout.iou(ov, agreed) < .85)
+            if not outlier and (ov.get('manual') or ov.get('detector', 1) >= layout.DETECTOR_VERSION): continue
+            if m.get('status') == 'discarded': continue
             self._prepare_layout(m); redone += 1
         return redone
 
