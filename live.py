@@ -125,10 +125,15 @@ def stream_names(*texts, tags=(), limit=30):
     (the people in a reality, a game, a team). Measured: «team JLexis» was heard as «Tortón J. Lessie» without them."""
     import re
     found = []
+    # E-28: a single word in capitals is a shout, not a name («EL PESAJE - STREAM FIGHERS 5» gave «PESAJE», and the titles
+    # made it a person: «¿Quién será la primera rival de PESAJE?»). It counts only when the texts or tags also write it
+    # in lower or mixed case («WESTCOL» with «Westcol» in the description), or it is a short acronym (VIP, TEB).
+    written = {w.lower() for t in [*texts, *tags] for w in re.findall(r'[\wáéíóúñÁÉÍÓÚÑ]+', t or '') if not w.isupper()}
     for text in texts:
         for m in re.finditer(r'[@#]([\w.]{3,30})|\b([A-ZÁÉÍÓÚÑ][\wáéíóúñÁÉÍÓÚÑ]{2,24}(?:\s+[A-ZÁÉÍÓÚÑ][\wáéíóúñ]{2,24})?)', text or ''):
             word = (m.group(1) or m.group(2)).strip('._')
             if word.lower() in NAME_STOP or word.isupper() and len(word) > 12 or word.isdigit() or not is_name_like(word): continue
+            if m.group(2) and ' ' not in word and word.isupper() and len(word) > 4 and word.lower() not in written: continue
             found.append(word)
     found += [t for t in tags if 2 < len(t) <= 30 and is_name_like(t)]
     out, seen = [], set()
