@@ -265,3 +265,13 @@ una prueba automática (entre comillas invertidas) que falla si el error vuelve.
 - **Guardas:** `test_E32_a_right_camera_with_a_wrong_game_area_gets_the_sessions`, `test_E32_saved_moments_with_a_wrong_game_area_are_prepared_again`,
   `test_E32_a_restarted_stream_uses_the_channels_last_session`
 
+## E-33 · «En todos» copiaba la fuente de la plantilla pero no su diseño de subtítulos, y la galería no abría (nov 2026)
+- **Síntoma:** al aplicar «Reacción · Resaltador» con «En todos» en un proyecto de 19 clips, los otros 18 quedaban con Poppins
+  Black pero sin resaltador (ni karaoke, ni pop…). Además, «Ver todas las plantillas en vivo» no hacía nada al pulsarlo.
+- **Causa raíz:** la lista `SHARED_STYLE` del servidor (`/api/jobs/{id}/edits/shared`) no tenía `caption_style`,
+  `caption_accent` ni `caption_upper`, que el editor sí envía: el servidor los descartaba en silencio (también en
+  «Aplicar a todos los clips»). La galería llamaba a `h()`, que vive dentro del cierre de `static/shell.js` y no existe en
+  `static/app.js` («h is not defined»).
+- **Solución:** la lista del servidor es la misma que la del editor (una prueba lo compara), y la galería usa su propio
+  ayudante `tplNode()` en `static/app.js`.
+- **Guardas:** `test_E33_apply_to_all_copies_the_subtitle_design_too`, `test_E33_the_template_gallery_uses_app_js_own_helper`

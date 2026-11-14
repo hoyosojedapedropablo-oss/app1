@@ -1381,7 +1381,7 @@ def save_clip_edits(ident:str,clip_id:str,edits:ClipEdits):
 # Each clip keeps its own text, times, subtitles and framing; the vertical title position depends on each clip's format.
 SHARED_STYLE=('logo','logo_width','logo_x','logo_y','title_font','title_size','title_padding_x','title_padding_y','title_bg_color',
  'title_text_color','title_outline_color','title_outline_width','title_corners','title_x','style','font','caption_size','caption_color',
- 'outline_color','outline_width','caption_x','caption_y','show_subtitles','resolution')
+ 'outline_color','outline_width','caption_style','caption_accent','caption_upper','caption_x','caption_y','show_subtitles','resolution')   # E-33: same list as static/app.js
 class SharedEdits(BaseModel):
  settings:dict
 

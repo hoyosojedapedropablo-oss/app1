@@ -230,6 +230,30 @@ class E30SizeAsAsked(unittest.TestCase):
 
 
 class RegistryTests(unittest.TestCase):
+    def test_E33_apply_to_all_copies_the_subtitle_design_too(self):
+        """«En todos» / «Aplicar a todos los clips»: the server keeps every key the editor shares (karaoke, pop… included)."""
+        import app as backend
+        js = (ROOT / 'static' / 'app.js').read_text(encoding='utf-8')
+        editor = re.search(r"const SHARED_STYLE=\[(.*?)\];", js).group(1)
+        self.assertEqual(set(re.findall(r"'(\w+)'", editor)), set(backend.SHARED_STYLE))
+        from fastapi.testclient import TestClient
+        with tempfile.TemporaryDirectory() as tmp:
+            ident = 'b' * 32; (Path(tmp) / ident).mkdir()
+            j = dict(id=ident, name='v.mp4', duration=60, clips=[dict(id='c0', start=0, end=20, title='Uno', text='a'), dict(id='c1', start=30, end=50, title='Dos', text='b')],
+                     clip_edits=dict(c1=dict(title='Dos', start=30, end=50, caption_style='clasico', font='Montserrat')))
+            with patch.object(backend, 'DATA', Path(tmp)), patch.dict(backend.JOBS, {ident: j}, clear=True):
+                look = dict(font='Poppins Black', caption_style='resaltador', caption_accent='#ff3b6b', caption_upper=True)
+                self.assertEqual(TestClient(backend.app).put(f'/api/jobs/{ident}/edits/shared', json=dict(settings=look)).status_code, 200)
+                saved = json.loads((Path(tmp) / ident / 'job.json').read_text(encoding='utf-8'))['clip_edits']
+                for cid in ('c0', 'c1'): self.assertEqual({k: saved[cid][k] for k in look}, look)
+
+    def test_E33_the_template_gallery_uses_app_js_own_helper(self):
+        """shell.js's h() lives inside its closure: app.js code that calls it fails with «h is not defined»."""
+        js = (ROOT / 'static' / 'app.js').read_text(encoding='utf-8')
+        self.assertIn('function tplNode(', js)
+        gallery = js[js.index('let galleryTimer'):]
+        self.assertFalse(re.findall(r'(?<![\w.$])h\(', gallery))
+
     def test_every_known_error_has_a_guard(self):
         """Each E-xx of docs/ERRORES_CONOCIDOS.md names a test that exists."""
         doc = (ROOT / 'docs' / 'ERRORES_CONOCIDOS.md').read_text(encoding='utf-8')

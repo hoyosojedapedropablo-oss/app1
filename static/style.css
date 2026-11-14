@@ -45,3 +45,22 @@
 /* E-31: blur of the camera corner a centred game panel shows (same as the MP4) */
 .preview .stack-blur{position:absolute;pointer-events:none;z-index:2}
 .preview .stack-blur[hidden]{display:none}
+/* Template gallery: each template on a still of the open clip, with the editor preview's caption classes. */
+.tpl-open{width:100%;margin:8px 0 2px;background:#18230e;color:#c6ff5e;border:1px solid #3d5c1c}
+.tpl-gallery{width:min(1080px,94vw);max-height:88vh;overflow:auto}
+.tpl-head{display:flex;align-items:center;justify-content:space-between}
+.tpl-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:14px;margin-top:10px}
+.tpl-card{display:flex;flex-direction:column;gap:4px}.tpl-card b{font-size:12px}.tpl-card small{font-size:10px;color:#95959f}
+.tpl-shot{position:relative;width:158px;aspect-ratio:9/16;background:#000;border-radius:8px;overflow:hidden}
+.tpl-shot img{position:absolute;left:0;width:100%;height:100%;top:0;object-fit:cover}
+.tpl-title{position:absolute;left:50%;transform:translate(-50%,-50%);max-width:86%;font-size:8px;font-weight:700;padding:.25em .5em;text-align:center;line-height:1.2}
+.tpl-cap{position:absolute;left:50%;top:78%;transform:translate(-50%,-50%);width:88%;text-align:center;font-weight:700;line-height:1.15;paint-order:stroke fill}
+.tpl-cap .w{display:inline-block;margin:0 .06em}
+.tpl-cap.cap-karaoke .w.on,.tpl-cap.cap-pop .w.on{color:var(--cap-accent)}
+.tpl-cap.cap-pop .w.on{animation:cap-pop .14s ease-out}
+.tpl-cap.cap-resaltador .w.on{background:var(--cap-accent);color:#111;-webkit-text-stroke:0!important;border-radius:.12em;padding:0 .14em}
+.tpl-cap.cap-palabra_clave .w.key{color:var(--cap-accent);transform:scale(1.15)}
+.tpl-cap.cap-contorno{text-shadow:.07em .07em 0 #000}
+.tpl-cap.cap-karaoke,.tpl-cap.cap-pop,.tpl-cap.cap-palabra_clave{text-shadow:.05em .05em 0 #000}
+.tpl-acts{display:flex;gap:6px}.tpl-acts button{flex:1;padding:7px 4px;font-size:10px}
+
