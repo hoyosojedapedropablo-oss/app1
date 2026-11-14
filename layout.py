@@ -493,6 +493,13 @@ def consensus_camera(overlays, least=3, agree=.8):
     return out
 
 
+def same_content(a, b):
+    """E-32: whether two overlays see the same game area (no content = the whole frame)."""
+    full = lambda o: dict(x=0, y=0, w=o.get('width'), h=o.get('height'))
+    ca = a.get('content') or full(a); cb = b.get('content') or full(b)
+    return all(abs((ca.get(k) or 0) - (cb.get(k) or 0)) <= 16 for k in ('x', 'y', 'w', 'h'))
+
+
 def panels(overlay):
     """Top (camera) panel height and the camera crop, centred on the face, with the panel's shape."""
     cw, ch = overlay['w'], overlay['h']

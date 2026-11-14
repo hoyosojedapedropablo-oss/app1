@@ -143,6 +143,40 @@ class OpenedProjectTests(unittest.TestCase):
                 self.assertEqual(app.read_overlay(ident)['h'], 450)                                               # by hand: kept
 
 
+class GameAreaTests(SessionTests):
+    """E-32: the game area the session agrees on, and a restarted stream that starts from the channel's last session."""
+    def test_E32_a_right_camera_with_a_wrong_game_area_gets_the_sessions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ov = self.prepare(self.session(tmp), box(content=dict(x=544, y=0, w=1376, h=1080)))
+            self.assertNotIn('content', ov); self.assertEqual(ov['detected_content']['x'], 544)
+            o = dict(ov); result = dict(overlay=o, panels=layout.panels(o), motion=dict(xs=[1500.0] * 8))
+            still = layout.game_path(result, 'balanced', follow=False)
+            self.assertAlmostEqual(still['left'][0] + still['window'] / 2, 960, delta=1)     # centred on the frame
+
+    def test_E32_saved_moments_with_a_wrong_game_area_are_prepared_again(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s = self.session(tmp, n=5)
+            for m in s.moments: (s.clips / f"{m['id']}.mp4").write_bytes(b'x')
+            (s.clips / 'm3.layout.json').write_text(json.dumps(dict(overlay=box(content=dict(x=928, y=0, w=992, h=1080)))), encoding='utf-8')
+            (s.clips / 'm4.layout.json').write_text(json.dumps(dict(overlay=box())), encoding='utf-8')
+            done = []
+            with patch.object(s, '_prepare_layout', side_effect=lambda m: done.append(m['id'])):
+                s.refresh_layouts()
+            self.assertEqual(done, ['m3'])
+
+    def test_E32_a_restarted_stream_uses_the_channels_last_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old = self.session(tmp); old.channel = 'Epidemic77'; old.save(force=True)
+            new = live.LiveSession(Path(tmp), 'https://kick.com/epidemic77', minimum=10, maximum=60, buffer_minutes=10)
+            new.clips.mkdir(parents=True); new.clip_settings = {'framing': 'stack'}; new.channel = 'Epidemic77'
+            new.moments = [dict(id='n0', start=5., end=15., file_start=2., status='draft')]
+            ov = self.prepare(new, dict(found=False, kind='none', width=1920, height=1080))
+            self.assertTrue(ov['found']); self.assertEqual((ov['x'], ov['h']), (28, 376))
+            other = live.LiveSession(Path(tmp), 'https://kick.com/otro', minimum=10, maximum=60, buffer_minutes=10)
+            other.channel = 'OtroCanal'; other.clips.mkdir(parents=True); other.moments = []
+            self.assertEqual(other._session_overlays(), [])                                   # another channel: nothing borrowed
+
+
 class ExportDefaultTests(unittest.TestCase):
     def test_E31_exports_centre_the_game_by_default(self):
         import app
