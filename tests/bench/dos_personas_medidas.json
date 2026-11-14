@@ -1,0 +1,286 @@
+{
+ "descripcion": "Fase 4, parte A: tracking.analyze (código instalado, sin cambios, VERSION 3) sobre tests/bench/dos_personas.json. personas_principales: personas de summarize_persons con cara mediana >= tracking.NEAR de la mayor. a_la_vez_pct: muestras con las dos principales en pantalla. habla_pct: muestras con voz en que active es esa persona. separacion_pct: |dx| entre centros / ancho (mediana y mínimo). cambios_de_lado: inversiones del orden izquierda/derecha. boca_mas_activa_ventanas_1s: en ventanas de 1 s con voz, quién mueve más la boca según act (antes de choose_speakers).",
+ "medidas": [
+  {
+   "id": "duo-topboy",
+   "dividir": true,
+   "muestras": 220,
+   "personas_detectadas": 2,
+   "personas_principales": 2,
+   "presencia_principales": {
+    "1": 100,
+    "0": 100
+   },
+   "alto_cara_pct": {
+    "1": 11.7,
+    "0": 11.3
+   },
+   "a_la_vez_pct": 100,
+   "habla_pct": {
+    "1": 0,
+    "0": 100
+   },
+   "voz_pct": 95,
+   "separacion_pct": 52.2,
+   "separacion_min_pct": 50.9,
+   "cortes": 0,
+   "cambios_de_lado": 0,
+   "cambios_de_hablante": 0,
+   "segundos": 4.9,
+   "boca_mas_activa_ventanas_1s": {
+    "izquierda": 7,
+    "derecha": 20,
+    "ventanas": 27
+   }
+  },
+  {
+   "id": "duo-sicarios",
+   "dividir": true,
+   "muestras": 204,
+   "personas_detectadas": 2,
+   "personas_principales": 2,
+   "presencia_principales": {
+    "1": 100,
+    "0": 100
+   },
+   "alto_cara_pct": {
+    "1": 15.2,
+    "0": 15.6
+   },
+   "a_la_vez_pct": 100,
+   "habla_pct": {
+    "1": 20,
+    "0": 80
+   },
+   "voz_pct": 91,
+   "separacion_pct": 47.8,
+   "separacion_min_pct": 45.0,
+   "cortes": 0,
+   "cambios_de_lado": 0,
+   "cambios_de_hablante": 1,
+   "segundos": 4.1,
+   "boca_mas_activa_ventanas_1s": {
+    "izquierda": 4,
+    "derecha": 20,
+    "ventanas": 24
+   }
+  },
+  {
+   "id": "duo-pino",
+   "dividir": true,
+   "muestras": 179,
+   "personas_detectadas": 2,
+   "personas_principales": 2,
+   "presencia_principales": {
+    "1": 100,
+    "0": 100
+   },
+   "alto_cara_pct": {
+    "1": 11.4,
+    "0": 13.6
+   },
+   "a_la_vez_pct": 100,
+   "habla_pct": {
+    "1": 0,
+    "0": 100
+   },
+   "voz_pct": 97,
+   "separacion_pct": 53.9,
+   "separacion_min_pct": 52.1,
+   "cortes": 0,
+   "cambios_de_lado": 0,
+   "cambios_de_hablante": 0,
+   "segundos": 3.8,
+   "boca_mas_activa_ventanas_1s": {
+    "izquierda": 0,
+    "derecha": 22,
+    "ventanas": 22
+   }
+  },
+  {
+   "id": "duo-wakanda",
+   "dividir": true,
+   "muestras": 240,
+   "personas_detectadas": 2,
+   "personas_principales": 2,
+   "presencia_principales": {
+    "1": 95,
+    "0": 100
+   },
+   "alto_cara_pct": {
+    "1": 21.5,
+    "0": 22.7
+   },
+   "a_la_vez_pct": 95,
+   "habla_pct": {
+    "1": 20,
+    "0": 80
+   },
+   "voz_pct": 89,
+   "separacion_pct": 46.5,
+   "separacion_min_pct": 35.5,
+   "cortes": 0,
+   "cambios_de_lado": 0,
+   "cambios_de_hablante": 3,
+   "segundos": 5.6,
+   "boca_mas_activa_ventanas_1s": {
+    "izquierda": 15,
+    "derecha": 12,
+    "ventanas": 27
+   }
+  },
+  {
+   "id": "alternos-topboy",
+   "dividir": false,
+   "muestras": 315,
+   "personas_detectadas": 3,
+   "personas_principales": 1,
+   "presencia_principales": {
+    "0": 82
+   },
+   "alto_cara_pct": {
+    "0": 25.8
+   },
+   "a_la_vez_pct": 0,
+   "habla_pct": {
+    "0": 82
+   },
+   "voz_pct": 100,
+   "separacion_pct": null,
+   "separacion_min_pct": null,
+   "cortes": 3,
+   "cambios_de_lado": 0,
+   "cambios_de_hablante": 0,
+   "segundos": 6.1
+  },
+  {
+   "id": "alternos-sicarios",
+   "dividir": false,
+   "muestras": 256,
+   "personas_detectadas": 1,
+   "personas_principales": 1,
+   "presencia_principales": {
+    "0": 100
+   },
+   "alto_cara_pct": {
+    "0": 48.1
+   },
+   "a_la_vez_pct": 0,
+   "habla_pct": {
+    "0": 100
+   },
+   "voz_pct": 96,
+   "separacion_pct": null,
+   "separacion_min_pct": null,
+   "cortes": 3,
+   "cambios_de_lado": 0,
+   "cambios_de_hablante": 0,
+   "segundos": 5.3
+  },
+  {
+   "id": "uno-davoox",
+   "dividir": false,
+   "muestras": 208,
+   "personas_detectadas": 2,
+   "personas_principales": 1,
+   "presencia_principales": {
+    "0": 100
+   },
+   "alto_cara_pct": {
+    "0": 34.1
+   },
+   "a_la_vez_pct": 0,
+   "habla_pct": {
+    "0": 100
+   },
+   "voz_pct": 97,
+   "separacion_pct": null,
+   "separacion_min_pct": null,
+   "cortes": 0,
+   "cambios_de_lado": 0,
+   "cambios_de_hablante": 0,
+   "segundos": 8.2
+  },
+  {
+   "id": "uno-naim",
+   "dividir": false,
+   "muestras": 338,
+   "personas_detectadas": 3,
+   "personas_principales": 2,
+   "presencia_principales": {
+    "3": 29,
+    "12": 80
+   },
+   "alto_cara_pct": {
+    "3": 34.0,
+    "12": 33.0
+   },
+   "a_la_vez_pct": 10,
+   "habla_pct": {
+    "3": 37,
+    "12": 62
+   },
+   "voz_pct": 61,
+   "separacion_pct": 18.9,
+   "separacion_min_pct": 2.7,
+   "cortes": 0,
+   "cambios_de_lado": 3,
+   "cambios_de_hablante": 2,
+   "segundos": 12.6
+  },
+  {
+   "id": "tres-entrenamiento",
+   "dividir": false,
+   "muestras": 239,
+   "personas_detectadas": 3,
+   "personas_principales": 3,
+   "presencia_principales": {
+    "13": 62,
+    "12": 44,
+    "11": 80
+   },
+   "alto_cara_pct": {
+    "13": 12.9,
+    "12": 11.4,
+    "11": 16.4
+   },
+   "a_la_vez_pct": 54,
+   "habla_pct": {
+    "13": 25,
+    "12": 24,
+    "11": 37
+   },
+   "voz_pct": 100,
+   "separacion_pct": 45.3,
+   "separacion_min_pct": 20.3,
+   "cortes": 13,
+   "cambios_de_lado": 0,
+   "cambios_de_hablante": 1,
+   "segundos": 4.9
+  },
+  {
+   "id": "juego-epidemic",
+   "dividir": false,
+   "muestras": 132,
+   "personas_detectadas": 1,
+   "personas_principales": 1,
+   "presencia_principales": {
+    "0": 100
+   },
+   "alto_cara_pct": {
+    "0": 15.9
+   },
+   "a_la_vez_pct": 0,
+   "habla_pct": {
+    "0": 100
+   },
+   "voz_pct": 99,
+   "separacion_pct": null,
+   "separacion_min_pct": null,
+   "cortes": 0,
+   "cambios_de_lado": 0,
+   "cambios_de_hablante": 0,
+   "segundos": 3.1
+  }
+ ]
+}

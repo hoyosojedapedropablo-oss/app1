@@ -6,7 +6,7 @@ let trackingPoints=[],trackingRange=null,trackingRequest=0;
 let job=null,selected=null,cues=[],cueVersion=0,captionPending=false,captionTimer,pollToken=0;
 const edits=new Map();
 const numeric=['title_padding_x','title_padding_y','title_size','title_outline_width','title_x','title_y','caption_x','caption_y','caption_size','outline_width','focus_x','focus_y','start','end','logo_width','logo_x','logo_y','logo_start','logo_end','resolution'];
-const styleKeys=['mute_words','mute_sound','game_follow','resolution','zoom','tracking_person','tracking_motion','show_subtitles','title_corners','title_padding_x','title_padding_y','title_bg_color','title_text_color','auto_follow','style','font','title_font','title_outline_color','title_size','title_outline_width','title_x','title_y','caption_x','caption_y','caption_size','caption_color','outline_color','outline_width','caption_style','caption_accent','caption_upper','logo','framing','focus_x','focus_y','logo_width','logo_x','logo_y','logo_start','logo_end'];
+const styleKeys=['mute_words','mute_sound','game_follow','resolution','zoom','tracking_person','tracking_motion','show_subtitles','title_corners','title_padding_x','title_padding_y','title_bg_color','title_text_color','auto_follow','style','font','title_font','title_outline_color','title_size','title_outline_width','title_x','title_y','caption_x','caption_y','caption_size','caption_color','outline_color','outline_width','caption_style','caption_accent','caption_upper','logo','framing','focus_x','focus_y','logo_width','logo_x','logo_y','logo_start','logo_end','duo_force'];
 const OFFLINE='ClipStudio no responde: su servidor está cerrado. Abre INICIAR_WINDOWS.bat, deja abierta esa ventana y recarga la página.';
 async function request(url,options={}){let r;try{r=await fetch(url,options);}catch{const e=Error(OFFLINE);e.offline=true;throw e;}if(!r.ok){let e;try{e=await r.json()}catch{e={detail:r.statusText}}throw Error(typeof e.detail==='string'?e.detail:'Revisa los campos y el rango de tiempos.')}return r;}
 const jsonOptions=value=>({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});
@@ -14,7 +14,7 @@ function showView(name){$('analysisView').classList.toggle('hidden',name!=='anal
 $('goAnalyze').onclick=()=>showView('analysis');$('goEditor').onclick=()=>showView('editor');
 for(const button of document.querySelectorAll('[data-tab]'))button.onclick=()=>{for(const b of document.querySelectorAll('[data-tab]')){b.classList.toggle('active',b===button);b.setAttribute('aria-selected',String(b===button));}for(const panel of document.querySelectorAll('.tab-panel'))panel.classList.toggle('hidden',panel.id!=='tab-'+button.dataset.tab);};
 function say(text){$('status').textContent=text;}
-const CHECKS=['auto_follow','show_subtitles','game_follow','mute_words','caption_upper'];
+const CHECKS=['auto_follow','show_subtitles','game_follow','mute_words','caption_upper','duo_force'];
 function styles(){return Object.fromEntries(styleKeys.map(k=>[k,CHECKS.includes(k)?$(k).checked:k==='logo_end'&&!$(k).value?null:numeric.includes(k)?Number($(k).value):$(k).value]));}
 function settings(){return {...styles(),title:$('title').value,subtitles:$('subtitles').value,start:Number($('start').value),end:Number($('end').value),clip_id:selected&&selected.id!=='manual'?selected.id:null,captions:cues.map(c=>({...c}))};}
 let persistTimer=null;
@@ -74,7 +74,7 @@ function paintCaption(cue,t){
 }
 function paintTime(){
  const t=$('video').currentTime-Number($('start').value),duration=Number($('end').value)-Number($('start').value);
- applyTracking(t);drawStack(t);
+ applyTracking(t);drawStack(t);drawDuo(t);
  const editing=$('video').paused&&$('editLayers').checked&&selected;const active=cues.find(c=>t>=c.start&&t<c.end);
  paintCaption($('show_subtitles').checked?(active||(editing?(cues[0]||{start:0,end:1,text:'Subtítulos de ejemplo'}):null)):null,active?t:null);
  $('previewTitle').hidden=!selected||!$('title').value||(!editing&&(t<0||t>=duration));
@@ -139,6 +139,7 @@ function render(){
  const h=document.createElement('h3');h.textContent=c.title;const times=document.createElement('p');times.textContent=`${c.start.toFixed(1)}–${c.end.toFixed(1)} s · ${(c.end-c.start).toFixed(1)} segundos`;
  const reason=document.createElement('p');reason.textContent=c.reason;el.append(score,h,times,reason);el.onclick=()=>choose(c);$('clips').append(el);}
  $('all').classList.toggle('hidden',!job.clips.length);if(job.clips.length)choose(job.clips[0]);
+ checkDuo();
 }
 function choose(c){
  showView('editor');saveCurrent();
@@ -147,14 +148,14 @@ function choose(c){
  const saved=job?.clip_edits?.[c.id];if(saved&&!edits.has(c.id))edits.set(c.id,saved);
  const fresh=!edits.has(c.id)||!!edits.get(c.id).partial;if(fresh)applyProjectToEditor();$('shareAll').checked=shareAllOn();$('tracking_person').value='auto';
  const e=edits.get(c.id)||{title:c.title,subtitles:c.text,start:c.start,end:c.end};for(const [k,v]of Object.entries(e))if($(k)){if(CHECKS.includes(k))$(k).checked=!!v;else $(k).value=v;}
- if($('framing').value==='stack')loadStackPath().catch(e=>say(e.message));else if($('auto_follow').checked)prepareTracking().catch(e=>say(e.message));
+ if($('framing').value==='stack')loadStackPath().catch(e=>say(e.message));else if($('framing').value==='duo')loadDuoPath().catch(e=>say(e.message));else if($('auto_follow').checked)prepareTracking().catch(e=>say(e.message));
  cues=(e.captions||c.captions||[]).map(cue=>({...cue}));$('video').pause();$('video').currentTime=Number($('start').value);$('play').textContent='▶ Reproducir clip';$('export').disabled=false;
  $('titleChoices').replaceChildren();const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent=c.titles?.length?'Elegir otra propuesta':'Sin propuestas automáticas';$('titleChoices').append(placeholder);$('titleChoices').disabled=!(c.titles?.length);for(const title of c.titles||[]){const option=document.createElement('option');option.value=title;option.textContent=title;$('titleChoices').append(option);}
  document.querySelectorAll('.clip').forEach(el=>el.classList.toggle('active',el.dataset.id===c.id));renderCueEditor();paint();saveCurrent();
 }
 async function download(opts){
- const duration=validRange(opts);if(opts.auto_follow&&opts.framing!=='stack')await ensureExportTracking(opts);say(`Exportando ${duration.toFixed(1)} segundos en ${opts.resolution==1440?'1440 × 2560':'1080 × 1920'}…`);
- const r=await request(`/api/jobs/${job.id}/export`,jsonOptions(opts));const blob=await r.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='clip-'+Math.round(opts.start)+'-'+Math.round(duration)+'s.mp4';a.click();setTimeout(()=>URL.revokeObjectURL(url),10000);
+ const duration=validRange(opts);if((opts.auto_follow&&opts.framing!=='stack')||opts.framing==='duo')await ensureExportTracking(opts);say(`Exportando ${duration.toFixed(1)} segundos en ${opts.resolution==1440?'1440 × 2560':'1080 × 1920'}…`);
+ const r=await request(`/api/jobs/${job.id}/export`,jsonOptions(opts));const note=r.headers.get('X-Clip-Note');if(note)setTimeout(()=>say(decodeURIComponent(note)),0);const blob=await r.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='clip-'+Math.round(opts.start)+'-'+Math.round(duration)+'s.mp4';a.click();setTimeout(()=>URL.revokeObjectURL(url),10000);
 }
 $('export').onclick=async()=>{
  $('export').disabled=true;clearTimeout(captionTimer);try{if(captionPending)await refreshCaptions();saveCurrent();await download(settings());say('Clip exportado.');}catch(e){say(e.message);}finally{$('export').disabled=false;}
@@ -390,7 +391,7 @@ $('renderCheck').onclick=async()=>{
  const button=$('renderCheck');button.disabled=true;button.textContent='Renderizando el MP4…';
  try{
   clearTimeout(captionTimer);if(captionPending)await refreshCaptions();saveCurrent();
-  const opts=settings();validRange(opts);if(opts.auto_follow&&opts.framing!=='stack')await ensureExportTracking(opts);
+  const opts=settings();validRange(opts);if((opts.auto_follow&&opts.framing!=='stack')||opts.framing==='duo')await ensureExportTracking(opts);
   const blob=await(await request(`/api/jobs/${job.id}/export`,jsonOptions({...opts,preview:true}))).blob();
   $('video').pause();$('play').textContent='▶ Reproducir clip';
   renderURL=URL.createObjectURL(blob);const r=$('renderVideo');r.src=renderURL;r.hidden=false;$('renderBadge').hidden=false;r.volume=Number($('volume').value);
@@ -471,12 +472,13 @@ function paintConfig(){
 }
 function showConfig(c){
  // "fit" (old big-bands layout) is still available in the editor; the two styles offered here are zoom and full screen.
- setRadio('cfgFraming',['crop','stack'].includes(c.framing)?c.framing:'zoom');$('cfgAutoStack').checked=c.auto_stack!==false;setRadio('cfgResolution',String(c.resolution||1080));setRadio('cfgZoom',c.zoom);$('cfgTracking').checked=!!c.tracking;setRadio('cfgMotion',c.tracking_motion);
+ setRadio('cfgFraming',['crop','stack','duo'].includes(c.framing)?c.framing:'zoom');$('cfgAutoStack').checked=c.auto_stack!==false;setRadio('cfgResolution',String(c.resolution||1080));setRadio('cfgZoom',c.zoom);$('cfgTracking').checked=!!c.tracking;setRadio('cfgMotion',c.tracking_motion);
  setRadio('cfgSubtitles',c.subtitles?'on':'off');setRadio('cfgCorners',c.title_corners);setRadio('cfgMute',c.mute_words?(c.mute_sound==='beep'?'beep':'silence'):'off');paintConfig();
 }
 function applyProjectToEditor(){
  const c=projectConfig,framing=effectiveFraming(c);$('framing').value=framing;$('zoom').value=c.zoom;$('tracking_motion').value=c.tracking_motion;$('resolution').value=String(c.resolution||1080);
  if(framing==='stack')stackDom();
+ if(framing==='duo')duoDom();
  $('show_subtitles').checked=!!c.subtitles;$('title_corners').value=c.title_corners;$('auto_follow').checked=!!c.tracking&&c.framing!=='fit';
  $('mute_words').checked=!!c.mute_words;$('mute_sound').value=c.mute_sound==='beep'?'beep':'silence';
 }
@@ -495,7 +497,8 @@ document.querySelectorAll('#configure input').forEach(input=>input.addEventListe
  projectConfig=readConfig();paintConfig();saveProjectConfig();
  // Applies to every clip of the project, including ones already adjusted in the editor.
  for(const [id,e] of edits)edits.set(id,{...e,framing:effectiveFraming(projectConfig),zoom:projectConfig.zoom,tracking_motion:projectConfig.tracking_motion,show_subtitles:projectConfig.subtitles,title_corners:projectConfig.title_corners,resolution:projectConfig.resolution,mute_words:projectConfig.mute_words,mute_sound:projectConfig.mute_sound});
- if(selected){applyProjectToEditor();saveCurrent();if($('framing').value==='stack')loadStackPath().catch(e=>say(e.message));else if($('auto_follow').checked)prepareTracking().catch(e=>say(e.message));else paint();}
+ if(selected){applyProjectToEditor();saveCurrent();if($('framing').value==='stack')loadStackPath().catch(e=>say(e.message));else if($('framing').value==='duo')loadDuoPath().catch(e=>say(e.message));else if($('auto_follow').checked)prepareTracking().catch(e=>say(e.message));else paint();}
+ checkDuo();
 }));
 // Editor changes to these options also become the project's preference.
 const EDITOR_TO_PROJECT={framing:'framing',zoom:'zoom',tracking_motion:'tracking_motion',show_subtitles:'subtitles',title_corners:'title_corners',auto_follow:'tracking',resolution:'resolution',mute_words:'mute_words',mute_sound:'mute_sound'};
@@ -505,6 +508,8 @@ for(const [id,keyName] of Object.entries(EDITOR_TO_PROJECT))$(id).addEventListen
  if(id==='framing'&&$(id).value!=='stack'&&overlayInfo?.found)projectConfig.auto_stack=false;
  showConfig(projectConfig);saveProjectConfig();saveCurrent();
  if(id==='framing'&&$(id).value==='stack'){stackDom();saveCurrent();loadStackPath().catch(e=>say(e.message));}
+ if(id==='framing'&&$(id).value==='duo'){duoDom();saveCurrent();loadDuoPath().catch(e=>say(e.message));}
+ if(id==='framing')checkDuo();
  if(id==='tracking_motion')loadStackPath().catch(()=>{});
  if(['framing','zoom','tracking_motion'].includes(id))loadTrackingPath().catch(()=>{});
  paint();
@@ -567,7 +572,7 @@ $('cfgStart').onclick=async()=>{
 
 // --- «Cámara + juego»: streamer camera on top, game below ------------------------------------------------------------------
 // The server finds the camera once per video; the preview draws the same two crops the export uses on a canvas.
-function effectiveFraming(c){const cam=!!overlayInfo?.found;if(c.framing==='stack')return cam?'stack':'zoom';if(cam&&overlayInfo.screen&&c.auto_stack!==false&&c.framing!=='fit')return 'stack';return c.framing;}   // the chosen format wins, except a screen reaction (camera over a browser video): camera + the video player
+function effectiveFraming(c){const cam=!!overlayInfo?.found;if(c.framing==='stack')return cam?'stack':'zoom';if(cam&&overlayInfo.screen&&c.auto_stack!==false&&c.framing!=='fit'&&c.framing!=='duo')return 'stack';return c.framing;}   // the chosen format wins, except a screen reaction (camera over a browser video): camera + the video player
 // Centre of the line between camera and game, in % of the height (title_y centres the title there).
 function seamY(){const top=stackPath?.top||Math.min(960,Math.max(768,overlayInfo?.found?Math.round(1080*overlayInfo.h/overlayInfo.w):864));return Math.round((top+3)/19.2*10)/10;}
 // «Cámara + juego» defaults: the title sits on the line; subtitles go low in the game, clear of the centre where the action is.
@@ -783,6 +788,12 @@ function tplBackground(){
   try{ctx.drawImage(video,p.cam.x,p.cam.y,p.cam.w,p.cam.h,0,0,W,p.top*r);const g=p.game,x=Math.min(Math.max(0,Math.round(g.left[0]/2)*2),p.width-g.w);
    ctx.drawImage(video,x,g.y,g.w,g.h,0,(p.top+p.seam)*r,W,p.bottom*r);return {src:c.toDataURL('image/jpeg',.82),stack:true};}catch{}
  }
+ const d=duoPath;
+ if($('framing').value==='duo'&&d?.split&&video.readyState>=2){
+  const W=480,H=854,r=W/1080,c=document.createElement('canvas');c.width=W;c.height=H;const ctx=c.getContext('2d');ctx.fillStyle='#0b0b0b';ctx.fillRect(0,0,W,H);
+  try{const P=d.path,at=duoAt(P,video.currentTime-Number($('start').value));ctx.drawImage(video,at.top[0],at.top[1],P.top.w,P.top.h,0,0,W,P.panel_h*r);
+   ctx.drawImage(video,at.bottom[0],at.bottom[1],P.bottom.w,P.bottom.h,0,(P.panel_h+P.seam)*r,W,P.panel_hb*r);return {src:c.toDataURL('image/jpeg',.82),stack:true};}catch{}
+ }
  return {src:tplStill(),stack:false};
 }
 function templateCard(t,bg,sample,active){
@@ -898,3 +909,92 @@ selBox.addEventListener('pointermove',e=>{
  s.input.dispatchEvent(new Event('input',{bubbles:true}));
 });
 for(const ev of ['pointerup','pointercancel','lostpointercapture'])selBox.addEventListener(ev,()=>{selResize=null;});
+
+// «Dos personas» (docs/fase4-dos-personas.md): the person on the left above, the one on the right below, each crop
+// following its person. The two crops come from the server (tracking.duo_path): the same numbers the export draws. A
+// clip that does not meet the conditions says why and plays with the normal tracking, as it is exported, unless the
+// user forces it here. Only when the user chooses it: it is never switched on (or off) silently.
+var duoPath=null,duoKey='',duoRequest=0,duoCheckToken=0;
+const DUO_CAPTION_Y=86;
+function duoDom(){if([81,85].includes(Number($('caption_y').value)))$('caption_y').value=DUO_CAPTION_Y;}
+async function loadDuoPath(){
+ if(!job||!selected||$('framing').value!=='duo')return;
+ const id=job.id,start=Number($('start').value),end=Number($('end').value),motion=$('tracking_motion').value,force=$('duo_force').checked;
+ const keyText=JSON.stringify([id,selected.id,start,end,motion,force]);if(keyText===duoKey&&duoPath)return;
+ duoKey=keyText;duoPath=null;const token=++duoRequest;
+ $('duoState').textContent='Preparando «Dos personas»: buscando a las dos personas…';paint();
+ let state=await(await request(`/api/jobs/${id}/tracking`,jsonOptions({start,end}))).json();
+ while(state.status!=='ready'){
+  if(token!==duoRequest)return;if(state.status==='error')throw Error(state.message);
+  $('duoState').textContent=`Preparando «Dos personas» · ${state.progress||0}%`;await new Promise(r=>setTimeout(r,800));
+  state=await(await request(`/api/jobs/${id}/tracking/${state.key}`)).json();
+ }
+ const out=await(await request(`/api/jobs/${id}/duo/path`,jsonOptions({start,end,motion,force}))).json();
+ if(token!==duoRequest)return;
+ duoPath={...out,start,end};
+ $('duoForceRow').hidden=out.split&&!out.forced;
+ $('duoState').textContent=out.split?(out.forced?`Forzado en este clip. ${out.reason}`:'Arriba la persona de la izquierda y abajo la de la derecha, cada una centrada en su cara.'):`${out.reason} Este clip sale con el seguimiento normal.`;
+ paintDuoNotes();paint();
+}
+// Where both crops are at t seconds of the clip: interpolated and rounded to even pixels as tracking.duo_at does.
+function duoAt(P,t){
+ const n=P.top.x.length,i=Math.max(0,t)*P.fps,a=Math.min(n-1,Math.floor(i)),b=Math.min(n-1,a+1),f=Math.max(0,Math.min(1,i-a));
+ const ev=(arr)=>Math.floor((arr[a]+(arr[b]-arr[a])*f)/2+.5)*2;
+ return {top:[ev(P.top.x),ev(P.top.y)],bottom:[ev(P.bottom.x),ev(P.bottom.y)]};
+}
+function drawDuo(t){
+ const duo=$('framing').value==='duo';$('duoBox').classList.toggle('hidden',!duo);if(!duo)return;
+ const p=duoPath,on=!!p&&p.start===Number($('start').value)&&p.end===Number($('end').value),canvas=$('stackCanvas'),video=$('video');
+ if(on&&!p.split){      // goes out with the normal tracking: the same path the export follows
+  canvas.hidden=true;video.style.opacity='';const f=p.fallback,i=Math.max(0,t)*f.fps,a=Math.min(f.x.length-1,Math.floor(i)),b=Math.min(f.x.length-1,a+1);
+  video.style.objectPosition=`${f.x[a]+(f.x[b]-f.x[a])*Math.max(0,Math.min(1,i-a))}% 50%`;return;
+ }
+ canvas.hidden=false;video.style.opacity='0';
+ const preview=$('preview'),dpr=window.devicePixelRatio||1,w=Math.round(preview.clientWidth*dpr),h=Math.round(preview.clientHeight*dpr);
+ if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}
+ const ctx=canvas.getContext('2d'),r=w/1080;ctx.fillStyle='#0b0b0b';ctx.fillRect(0,0,w,h);
+ if(!on){ctx.fillStyle='#9aa0a6';ctx.font=`${Math.round(34*r)}px Montserrat, sans-serif`;ctx.textAlign='center';ctx.fillText('Preparando «Dos personas»…',w/2,h/2);return;}
+ if(video.readyState<2)return;
+ const P=p.path,at=duoAt(P,t);ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
+ ctx.drawImage(video,at.top[0],at.top[1],P.top.w,P.top.h,0,0,w,P.panel_h*r);
+ ctx.drawImage(video,at.bottom[0],at.bottom[1],P.bottom.w,P.bottom.h,0,(P.panel_h+P.seam)*r,w,P.panel_hb*r);
+}
+$('duo_force').addEventListener('change',()=>{saveCurrent();loadDuoPath().catch(e=>say(e.message));});
+for(const key of ['start','end'])$(key).addEventListener('change',()=>{if($('framing').value==='duo')loadDuoPath().catch(e=>say(e.message));});
+$('tracking_motion').addEventListener('change',()=>{if($('framing').value==='duo')loadDuoPath().catch(()=>{});});
+// The clip cards say which clips are split and why the others are not; the project suggests «Dos personas» (never
+// turns it on) when most of its first clips meet the conditions.
+function paintDuoNotes(state){
+ const on=projectConfig.framing==='duo';
+ for(const el of document.querySelectorAll('#clips .clip')){
+  let note=el.querySelector('.duo-note');const s=on&&state?.clips?.[el.dataset.id];
+  if(!on){note?.remove();continue;}if(!s)continue;
+  if(!note){note=document.createElement('p');note.className='duo-note';el.append(note);}
+  note.classList.toggle('ok',!!s.split&&!s.forced);note.classList.toggle('pending',!!s.pending);
+  note.textContent=s.pending?'Dos personas · comprobando…':s.split?(s.forced?'Dos personas · forzado en este clip':'Dos personas ✓'):`Seguimiento normal: ${s.reason}`;
+ }
+}
+function duoHintOff(){try{return localStorage.getItem('cs.duoHint.'+job.id)==='off';}catch{return false;}}
+async function checkDuo(){
+ if(!job||!job.clips?.length)return;
+ const token=++duoCheckToken,id=job.id,every=projectConfig.framing==='duo';
+ $('duoHint')?.remove();
+ if(!every&&(projectConfig.framing==='stack'||overlayInfo?.found||job.clips.length<3||duoHintOff()))return;
+ for(let tries=0;tries<60;tries++){
+  let state;try{state=await(await request(`/api/jobs/${id}/duo-check${every?'?every=1':''}`)).json();}catch{return;}
+  if(token!==duoCheckToken||job?.id!==id)return;
+  if(every)paintDuoNotes(state);
+  if(!state.pending){if(!every&&state.suggest&&projectConfig.framing!=='duo')showDuoHint(state);return;}
+  await new Promise(r=>setTimeout(r,5000));
+ }
+}
+function showDuoHint(state){
+ $('duoHint')?.remove();
+ const box=document.createElement('div');box.id='duoHint';box.className='duo-hint';box.setAttribute('role','status');
+ const text=document.createElement('span');text.textContent=`Este video parece un podcast de dos personas (${state.fit} de ${state.checked} clips) · `;
+ const use=document.createElement('button');use.type='button';use.textContent='Usar «Dos personas»';
+ const no=document.createElement('button');no.type='button';no.className='secondary';no.textContent='Ignorar';
+ use.onclick=()=>{box.remove();const r=document.querySelector('input[name="cfgFraming"][value="duo"]');if(r){r.checked=true;r.dispatchEvent(new Event('change',{bubbles:true}));}say('«Dos personas» elegido para este proyecto. Los clips que no lo cumplan saldrán con el seguimiento normal y su tarjeta dirá por qué.');};
+ no.onclick=()=>{box.remove();try{localStorage.setItem('cs.duoHint.'+job.id,'off');}catch{}};
+ box.append(text,use,no);$('clips').before(box);
+}

@@ -753,7 +753,8 @@ class LiveSession:
         """«Seguimiento facial» on: who is where and who speaks in this moment, computed now (in the background), so its
         preview, thumbnail, export and editor follow the person speaking from the start, not the centre of the picture."""
         settings = self.clip_settings or {}
-        if not settings.get('tracking') or settings.get('framing', 'zoom') not in ('crop', 'zoom'): return
+        # «Dos personas» needs it always (who is where); the other formats only with «Seguimiento facial» on
+        if settings.get('framing') != 'duo' and (not settings.get('tracking') or settings.get('framing', 'zoom') not in ('crop', 'zoom')): return
         try:
             import tracking
             prepared = self.clips / f'{moment["id"]}.layout.json'
