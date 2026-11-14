@@ -201,3 +201,12 @@ una prueba automática (entre comillas invertidas) que falla si el error vuelve.
 - **Guardas:** `test_E27_titles_are_distinct_within_a_video`, `test_E27_titles_of_only_abstract_words_are_rejected`,
   `test_E27_multiword_names_keep_their_capitals`, `test_E27_judge_who_is_a_person_in_the_clip`, `test_E27_the_title_model_can_be_chosen`
 
+## E-28 · Una palabra en mayúsculas del título del directo se volvía protagonista de los títulos (nov 2026)
+- **Síntoma:** en el directo «EL PESAJE - STREAM FIGHERS 5» de Westcol, los títulos salían «¿PESAJE realmente subiría a un
+  ring…?», «¿Quién será la primera rival de PESAJE?», «PESAJE: ¿Respeto en el ring…?».
+- **Causa raíz:** `stream_names` toma las palabras con mayúscula del título como nombres del directo; «PESAJE» (el evento,
+  escrito en mayúsculas) entró en la lista de nombres que reciben el transcriptor, el juez y el escritor de títulos.
+- **Solución:** una sola palabra en mayúsculas de más de 4 letras solo cuenta como nombre si los textos o las etiquetas
+  también la escriben en minúsculas o mixta (WESTCOL con «Westcol» en la descripción); las siglas cortas (VIP) siguen.
+- **Guardas:** `test_E28_a_shouted_word_of_the_stream_title_is_not_a_name`
+

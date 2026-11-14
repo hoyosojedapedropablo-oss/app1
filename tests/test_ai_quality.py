@@ -67,6 +67,12 @@ class StreamNamesTests(unittest.TestCase):
         for n in ('JLexis', 'Lupita Villalobos', 'kunno', 'LaMansionVIP', 'hotspanish'): self.assertIn(n, names)
         for n in ('Participantes', 'Sígueme', 'Instagram'): self.assertNotIn(n, names)
 
+    def test_E28_a_shouted_word_of_the_stream_title_is_not_a_name(self):
+        self.assertNotIn('PESAJE', live.stream_names('EL PESAJE - STREAM FIGHERS 5'))
+        names = live.stream_names('WESTCOL vs SPREEN: EL PESAJE', 'Hoy Westcol se pesa en directo', tags=['Spreen'])
+        self.assertIn('WESTCOL', names); self.assertIn('SPREEN', names); self.assertNotIn('PESAJE', names)
+        self.assertIn('VIP', live.stream_names('fiesta VIP con todos'))   # short acronyms still count («Fiesta VIP» is one two-word name)
+
     def test_the_transcriber_is_told_the_names(self):
         import tempfile
         try: from test_live import make_segment
