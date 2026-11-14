@@ -668,12 +668,13 @@ def camera_blur(overlay, bottom, left, top, width, height, margin=24):
 
 def _blur_chain(blur):
     """The camera part of the game panel: crop + gblur, an alpha mask that is 1 inside and fades to 0 over `feather` px
-    on the sides inside the panel (geq + alphamerge), and overlay: the blur melts into the game, no cut line."""
+    on the sides inside the panel (geq + alphamerge), and overlay: the blur melts into the game, no cut line. The blurred
+    zone is fixed to yuva420p first: merged with the gray mask, it was negotiated to gray and lost its colour."""
     f = max(1, int(blur.get('feather', BLUR_FEATHER))); fade = blur.get('fade') or dict(l=True, t=True, r=True, b=True)
     far = '100000'
     d = [('X' if fade['l'] else far), ('(W-1-X)' if fade['r'] else far), ('Y' if fade['t'] else far), ('(H-1-Y)' if fade['b'] else far)]
     alpha = f"255*clip(min(min({d[0]},{d[1]}),min({d[2]},{d[3]}))/{f},0,1)"
-    return (f',split[lgs][lgb];[lgb]crop={blur["w"]}:{blur["h"]}:{blur["x"]}:{blur["y"]},gblur=sigma={blur.get("sigma", BLUR_SIGMA)},split[lgc][lgm];'
+    return (f',split[lgs][lgb];[lgb]crop={blur["w"]}:{blur["h"]}:{blur["x"]}:{blur["y"]},gblur=sigma={blur.get("sigma", BLUR_SIGMA)},format=yuva420p,split[lgc][lgm];'
             f"[lgm]format=gray,geq=lum='{alpha}'[lga];[lgc][lga]alphamerge[lgbl];"
             f'[lgs][lgbl]overlay={blur["x"]}:{blur["y"]}')
 

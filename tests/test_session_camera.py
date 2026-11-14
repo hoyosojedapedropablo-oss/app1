@@ -59,6 +59,16 @@ class ConsensusTests(unittest.TestCase):
         self.assertGreater(lap(a[rows, x1 - 9: x1 - 1]) / lap(a[rows, x1 + 1: x1 + 9]), .5)
         centre = a[y0 + b['y'] + 10: y0 + b['y'] + b['h'] - b['feather'] - 10, b['x'] + 10: x1 - b['feather'] - 10]
         self.assertLess(lap(centre), .2 * lap(a[rows, x1 + 1: x1 + 9]))                    # the camera itself is well blurred
+        with tempfile.TemporaryDirectory() as tmp:                                          # and it keeps its colour (the red camera)
+            tmp = Path(tmp)
+            subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=0x2060C0:size=1920x1080:rate=25', '-t', '0.2', '-vf',
+                            'drawbox=x=28:y=24:w=516:h=376:color=0xC01010:t=fill', '-c:v', 'libx264', '-crf', '8', 'src.mp4'], cwd=tmp, check=True)
+            graph = layout.filter_graph(result, tmp / 'p.cmd', .2, 25, follow=False)
+            subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', 'src.mp4', '-frames:v', '1', '-filter_complex', f'[0:v]{graph}[o]', '-map', '[o]', 'f.png'],
+                           cwd=tmp, check=True)
+            rgb = np.asarray(Image.open(tmp / 'f.png').convert('RGB')).astype(int)
+        spot = rgb[y0 + b['y'] + 40: y0 + b['y'] + 80, b['x'] + 10: b['x'] + 40].reshape(-1, 3).mean(0)
+        self.assertGreater(spot[0] - spot[2], 40, spot)                                       # still red, not gray
 
     def test_E31_the_game_panel_is_centred_unless_following_the_action(self):
         o = box(); result = dict(overlay=o, panels=layout.panels(o), motion=dict(xs=[1500.0] * 40))
