@@ -1181,7 +1181,7 @@ function stepEditorClip(d) {
   const i = list.findIndex((c) => c.id === selected?.id); const next = list[i + d]; if (next) choose(next);
 }
 document.addEventListener('keydown', (e) => {
-  if (current !== 'editor' || document.querySelector('.cs-modal')) return;
+  if (current !== 'editor' || document.querySelector('.cs-modal:not([hidden])')) return;   // E-34: #removeModal is always in the page, hidden
   const typing = e.target instanceof Element && e.target.closest('input[type=text],input[type=search],input[type=number],input[type=checkbox],input:not([type]),textarea,select');
   const k = e.key.toLowerCase(), mod = e.ctrlKey || e.metaKey;
   if (mod && k === 'z' && !e.shiftKey && !typing) { e.preventDefault(); undo(); }

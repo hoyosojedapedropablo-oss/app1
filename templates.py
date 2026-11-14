@@ -1,8 +1,9 @@
-"""Clip templates, like OpusClip's: one click gives every clip of a project the same format, subtitles and title.
+"""Subtitle templates: one click gives a clip (or every clip of a project) the same subtitle look.
 
-A template is a set of editor values. The built-in ones cover the usual niches; the user's own are kept in
-data/templates.json. Applying one (static/app.js) sets the project's format (framing and zoom) and copies the look to
-every clip through «Aplicar a todos los clips»; each clip keeps its text, times and tracking.
+A template is only a subtitle look: font, size, colours, outline, animation, accent, capitals and height. Never the
+format (framing, zoom), the title or the logo: those stay as each project has them. The built-in ones cover the usual
+niches; the user's own are kept in data/templates.json (older ones that also kept a format or a title are read with
+only their subtitle values; the file is not rewritten).
 """
 import json, re, threading, uuid
 from pathlib import Path
@@ -10,36 +11,26 @@ from pathlib import Path
 FILE = Path('data/templates.json')        # app.py points it at DATA
 LOCK = threading.Lock()
 
-# The values a template may carry: format, subtitles and title. Not times, texts or the logo's file (a user template may
-# keep its logo choice).
-KEYS = {'framing', 'zoom', 'style', 'font', 'caption_size', 'caption_color', 'outline_color', 'outline_width', 'caption_style',
-        'caption_accent', 'caption_upper', 'caption_y', 'show_subtitles', 'title_font', 'title_size', 'title_bg_color',
-        'title_text_color', 'title_outline_color', 'title_outline_width', 'title_corners', 'title_padding_x', 'title_padding_y',
-        'logo', 'logo_width', 'logo_x', 'logo_y'}
+# The values a template may carry: the subtitles' look, nothing else.
+KEYS = {'font', 'caption_size', 'caption_color', 'outline_color', 'outline_width', 'caption_style', 'caption_accent',
+        'caption_upper', 'caption_y'}
 
 def _t(ident, name, niche, **values):
     return {'id': ident, 'name': name, 'niche': niche, 'builtin': True, 'values': values}
 
 BUILTIN = [
-    _t('streamer-pop', 'Streamer · Pop', 'Streamers', framing='zoom', zoom='balanced', caption_style='pop', font='Luckiest Guy',
-       caption_size=76, caption_color='#FFFFFF', caption_accent='#FFE14D', caption_upper=True, outline_color='#000000', outline_width=7,
-       title_font='Montserrat', title_bg_color='#FFFFFF', title_text_color='#000000', title_corners='rounded', show_subtitles=True),
-    _t('futbol-contorno', 'Fútbol · Contorno', 'Fútbol', framing='crop', zoom='balanced', caption_style='contorno', font='Bangers',
-       caption_size=88, caption_color='#FFFFFF', caption_accent='#39FF14', caption_upper=True, outline_color='#000000', outline_width=9,
-       title_font='Anton', title_bg_color='#39FF14', title_text_color='#000000', title_corners='square', show_subtitles=True),
-    _t('podcast-karaoke', 'Podcast · Karaoke', 'Podcasts', framing='zoom', zoom='soft', caption_style='karaoke', font='Montserrat Black',
-       caption_size=68, caption_color='#FFFFFF', caption_accent='#FFD400', caption_upper=False, outline_color='#000000', outline_width=6,
-       title_font='Montserrat', title_bg_color='#FFFFFF', title_text_color='#000000', title_corners='rounded', show_subtitles=True),
-    _t('musica-cine', 'Música · Cine', 'Música', framing='zoom', zoom='soft', caption_style='cine', font='Bebas Neue',
-       caption_size=90, caption_color='#FFFFFF', caption_accent='#FFFFFF', caption_upper=True, outline_color='#000000', outline_width=2,
-       title_font='Bebas Neue', title_bg_color='#FFFFFF', title_text_color='#000000', title_corners='square', show_subtitles=True),
-    _t('reaccion-resaltador', 'Reacción · Resaltador', 'Reacciones', framing='zoom', zoom='balanced', caption_style='resaltador',
-       font='Poppins Black', caption_size=70, caption_color='#FFFFFF', caption_accent='#FF3B6B', caption_upper=False,
-       outline_color='#000000', outline_width=5, title_font='Poppins', title_bg_color='#FF3B6B', title_text_color='#FFFFFF',
-       title_corners='rounded', show_subtitles=True),
-    _t('datos-clave', 'Datos · Palabra clave', 'Noticias y datos', framing='crop', zoom='balanced', caption_style='palabra_clave',
-       font='Anton', caption_size=88, caption_color='#FFFFFF', caption_accent='#00E5FF', caption_upper=True, outline_color='#000000',
-       outline_width=6, title_font='Anton', title_bg_color='#00E5FF', title_text_color='#000000', title_corners='square', show_subtitles=True),
+    _t('streamer-pop', 'Streamer · Pop', 'Streamers', caption_style='pop', font='Luckiest Guy', caption_size=76,
+       caption_color='#FFFFFF', caption_accent='#FFE14D', caption_upper=True, outline_color='#000000', outline_width=7),
+    _t('futbol-contorno', 'Fútbol · Contorno', 'Fútbol', caption_style='contorno', font='Bangers', caption_size=88,
+       caption_color='#FFFFFF', caption_accent='#39FF14', caption_upper=True, outline_color='#000000', outline_width=9),
+    _t('podcast-karaoke', 'Podcast · Karaoke', 'Podcasts', caption_style='karaoke', font='Montserrat Black', caption_size=68,
+       caption_color='#FFFFFF', caption_accent='#FFD400', caption_upper=False, outline_color='#000000', outline_width=6),
+    _t('musica-cine', 'Música · Cine', 'Música', caption_style='cine', font='Bebas Neue', caption_size=90,
+       caption_color='#FFFFFF', caption_accent='#FFFFFF', caption_upper=True, outline_color='#000000', outline_width=2),
+    _t('reaccion-resaltador', 'Reacción · Resaltador', 'Reacciones', caption_style='resaltador', font='Poppins Black', caption_size=70,
+       caption_color='#FFFFFF', caption_accent='#FF3B6B', caption_upper=False, outline_color='#000000', outline_width=5),
+    _t('datos-clave', 'Datos · Palabra clave', 'Noticias y datos', caption_style='palabra_clave', font='Anton', caption_size=88,
+       caption_color='#FFFFFF', caption_accent='#00E5FF', caption_upper=True, outline_color='#000000', outline_width=6),
 ]
 
 
@@ -59,7 +50,7 @@ def _load():
 
 
 def all_templates():
-    return BUILTIN + [dict(t, builtin=False) for t in _load()]
+    return BUILTIN + [dict(t, builtin=False, values=clean(t.get('values'))) for t in _load() if isinstance(t, dict)]
 
 
 def save(name, values):
