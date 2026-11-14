@@ -1085,6 +1085,7 @@ choose = window.choose;
 // video (zoom), near the top (full screen). Only a position that is still a default moves; one set by hand stays.
 function titleDefault(framing, zoom) {
   if (framing === 'stack') return seamY();
+  if (framing === 'duo') return 49.9;      // on the line between the two persons (app.default_title_y)
   // zoom: on the edge of the picture; lower when the video itself carries a black bar on top (job.letterbox)
   if (framing === 'zoom') { const band = Math.round(1920 * (ZOOM[zoom] || ZOOM.balanced) / 2) * 2, bar = Number(job?.letterbox?.top) || 0; return Math.round(((1920 - band) / 2 + bar * band) / 19.2 * 10) / 10; }
   if (framing === 'crop') return FULL_TITLE_Y;      // «Pantalla completa»: below TikTok's / Instagram's top bar
@@ -1352,7 +1353,7 @@ function theaterChrome(panel) {
       theaterHost = h('div', { class: 'theater-host', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Vista ampliada del clip', onclick: (e) => { if (e.target === theaterHost) setTheater(false); } });
       theaterHost.append(panel); document.body.append(theaterHost); placeTimelineInTheater(true);
       $('theaterTitle').textContent = $('title').value || selected?.title || 'Clip';
-      $('theaterMeta').textContent = `${(Number($('end').value) - Number($('start').value)).toFixed(1).replace('.', ',')} s · ${({ stack: 'Cámara + juego', zoom: 'Zoom', crop: 'Pantalla completa', fit: 'Ajustado' })[$('framing').value] || ''}`;
+      $('theaterMeta').textContent = `${(Number($('end').value) - Number($('start').value)).toFixed(1).replace('.', ',')} s · ${({ duo: 'Dos personas', stack: 'Cámara + juego', zoom: 'Zoom', crop: 'Pantalla completa', fit: 'Ajustado' })[$('framing').value] || ''}`;
       requestAnimationFrame(() => requestAnimationFrame(() => theaterHost?.classList.add('in')));
     }
     baseSetTheater(on);

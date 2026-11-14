@@ -23,17 +23,37 @@ sin medirlo en clips reales, y el formato que elige el usuario nunca se cambia e
 ## Parte B · Programar
 
 ### Cuándo se divide (función pura, `tracking.duo_plan(result)`)
-Se divide solo si se cumplen **todas** (umbrales iniciales; se ajustan con la tabla de la Parte A):
+Se divide solo si se cumplen **todas**. Umbrales fijados por el usuario con la tabla de la Parte A
+(`tests/bench/dos_personas_medidas.json`):
 - exactamente **2 personas principales** (las demás, más pequeñas que `NEAR` de la mayor, no cuentan);
-- las dos se ven **a la vez** en al menos el 80 % de los fotogramas del clip;
-- **cada una habla** al menos el 20 % del tiempo con voz;
-- sus caras están separadas al menos un 25 % del ancho (si están más juntas, un recorte normal ya las muestra a las dos);
-- **no se cambian de lado** en el clip.
+- las dos se ven **a la vez** en al menos el **80 %** de los fotogramas del clip (los 4 que se dividen: 95–100 %; los
+  demás: 54 % como mucho);
+- separación entre caras **mediana de al menos el 30 %** del ancho y **mínima de al menos el 25 %** (los 4: mediana
+  46–54 %, mínima 35 % o más; si están más juntas, un recorte normal ya las muestra a las dos);
+- **0 cambios de lado** en el clip;
+- **sin criterio de voz**: en una entrevista es normal que en 20–30 s hable solo una (Jose Pino: el presentador no
+  gana ninguna de las 22 ventanas con voz).
 
-Si no se cumple, devuelve `None` y un **motivo legible** («Solo se ve una persona a la vez: el video alterna planos»).
+Si no se cumple, devuelve `None` y un **motivo legible**. Los motivos, en este orden:
+- «No se ve a ninguna persona en este clip.»
+- «Solo se ve una persona a la vez: el video muestra a una persona o alterna planos de una en una.»
+- «Hay N personas en el plano: «Dos personas» es para dos.»
+- «Las dos personas solo se ven a la vez el X % del clip (hace falta el 80 %).»
+- «Las dos personas se cambian de lado durante el clip.»
+- «Las caras están muy juntas (X % del ancho; hace falta el 30 %): un recorte normal ya muestra a las dos.»
+- «En algún momento las caras se acercan demasiado (X % del ancho; el mínimo es el 25 %).»
+
+Pruebas sintéticas al límite (`tests/test_duo.py`):
+- una persona que se va a mitad del clip (60 % a la vez → no);
+- dos caras juntas al 22 % (→ no);
+- dos personas que se cruzan (→ no).
+
+Con el banco real acierta los 10 (`test_the_bench_of_ten_real_clips_is_decided_right`, con el seguimiento de los 10
+clips guardado en `tests/bench/dos_personas_tracking.json.gz`).
 
 ### Composición (igual de medidas que «Cámara + juego»)
-- Lienzo 1080×1920: panel de arriba, línea de 6 px (`layout.SEAM`), panel de abajo.
+- Lienzo 1080×1920: panel de arriba (956 px), línea de 6 px (`layout.SEAM`), panel de abajo (958 px). Alturas pares
+  porque FFmpeg trabaja en yuv420p: con dos paneles de 957 el video salía de 1080×1919 (E-37).
 - **Arriba la persona de la izquierda y abajo la de la derecha**, siempre igual dentro del clip.
 - Cada panel es un recorte del video original con la forma del panel, centrado en la cara de su persona y con la cara
   ocupando un 30–40 % de la altura del panel. Sigue a esa persona con el mismo suavizado de `tracking` (sin saltos) y no

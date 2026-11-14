@@ -650,6 +650,7 @@ class Export(BaseModel):
  title_corners:Literal['rounded','square']='square'
  # 'Cámara + juego' (framing='stack'): follow the game's action, and output size (1440 gives YouTube Shorts more bitrate).
  game_follow:bool=False      # E-31: the game panel is centred unless «Seguir la acción del juego» is on
+ duo_force:bool=False        # «Dos personas» on this clip even when it does not meet the conditions (the editor's choice)
  resolution:Literal[1080,1440]=1080
  preview:bool=False               # «Comprobar MP4»: not an export, not recorded in the library
  mute_words:bool=False            # «Silenciar malas palabras» (the list is in Configuración)
@@ -722,6 +723,54 @@ def tracking_path(ident:str,opts:PathInput):
  result=json.loads(cache.read_text(encoding='utf-8'))
  if 'samples' not in result:raise HTTPException(409,'El seguimiento se calculó con una versión anterior. Vuelve a calcularlo.')
  return dict(tracking.build_path(result,opts.person,opts.motion,opts.framing,opts.zoom,opts.focus_y),persons=result.get('persons',[]))
+
+class DuoInput(TrackingInput):
+ motion:Literal['smooth','balanced','fast']='balanced'
+ force:bool=False
+
+@app.post('/api/jobs/{ident}/duo/path')
+def duo_path_endpoint(ident:str,opts:DuoInput):
+ """«Dos personas» for the editor: whether this clip is split (and why not), and the exact two crops the export uses
+ (or, when it is not split, the normal tracking path it goes out with)."""
+ import tracking
+ if ident not in JOBS:raise HTTPException(404)
+ cache=DATA/ident/f'tracking-{tracking.key(opts.start,opts.end)}.json'
+ if not cache.exists():raise HTTPException(404,'Calcula el seguimiento primero.')
+ result=json.loads(cache.read_text(encoding='utf-8'))
+ if 'samples' not in result:raise HTTPException(409,'El seguimiento se calculó con una versión anterior. Vuelve a calcularlo.')
+ plan,reason=tracking.duo_plan(result,opts.force)
+ if plan:return dict(split=True,forced=bool(plan['forced']),reason=reason,measures=plan,path=tracking.duo_path(result,plan,opts.motion))
+ return dict(split=False,reason=reason,measures=tracking.duo_measures(result),fallback=tracking.build_path(result,'auto',opts.motion,'crop','balanced',50))
+
+_duo_pool=ThreadPoolExecutor(max_workers=1);_duo_queued=set();_duo_faceless=set()
+@app.get('/api/jobs/{ident}/duo-check')
+def duo_check(ident:str,every:bool=False):
+ """Which clips of a project meet «Dos personas» (the clip cards show why not) and whether to suggest it: up to 6 clips
+ are checked (all of them with `every`), their tracking computed in the background at low priority when missing."""
+ import tracking
+ if ident not in JOBS:raise HTTPException(404)
+ job=JOBS[ident];edits=job.get('clip_edits') or {};out={};pending=0
+ for c in (job.get('clips') or [])[:None if every else 6]:
+  e=edits.get(c['id']) or {};start=float(e.get('start',c['start']));end=float(e.get('end',c['end']))
+  if not 0<=start<end<=job.get('duration',end) or end-start>180:continue
+  cache=DATA/ident/f'tracking-{tracking.key(start,end)}.json';memo=(ident,cache.name)
+  if memo in _duo_faceless:out[c['id']]=dict(split=False,reason='No se ve a ninguna persona en este clip.');continue
+  result=tracking_result(DATA/ident/'source',start,end,cache,compute=False)
+  if result is None:
+   pending+=1;out[c['id']]=dict(pending=True)
+   if memo not in _duo_queued:
+    _duo_queued.add(memo)
+    def run(start=start,end=end,cache=cache,memo=memo):
+     try:
+      if tracking_result(DATA/ident/'source',start,end,cache) is None:_duo_faceless.add(memo)
+     except Exception as e:_incidents.record('duo',e,job=ident)
+     finally:_duo_queued.discard(memo)
+    _duo_pool.submit(run)
+   continue
+  plan,reason=tracking.duo_plan(result,bool(e.get('duo_force')))
+  out[c['id']]=dict(split=plan is not None,forced=bool(plan and plan['forced']),reason=reason)
+ done=[v for v in out.values() if not v.get('pending')];fit=sum(1 for v in done if v['split'] and not v['forced'])
+ return dict(clips=out,pending=pending,checked=len(done),fit=fit,suggest=not pending and len(done)>=3 and 2*fit>len(done))
 
 @app.get('/api/jobs/{ident}/tracking/{track_key}')
 def tracking_status(ident:str,track_key:str):
@@ -818,7 +867,7 @@ def title_preview(opts:Export):
 def export(ident:str,opts:Export):
  if ident not in JOBS: raise HTTPException(404)
  if opts.end<=opts.start or opts.end>JOBS[ident]['duration'] or opts.end-opts.start>180: raise HTTPException(400,'El clip debe durar entre 0 y 180 segundos y estar dentro del video.')
- if opts.framing not in ['fit','crop','zoom','stack']: raise HTTPException(400)
+ if opts.framing not in ['fit','crop','zoom','stack','duo']: raise HTTPException(400)
  if not re.fullmatch(r'(none|kick|roobet|rainbet|[a-f0-9]{32})',opts.logo): raise HTTPException(400)
  logo=DATA/f'{opts.logo}.png'
  if opts.logo!='none' and not logo.exists(): raise HTTPException(400,'Primero carga el archivo del logo seleccionado.')
@@ -833,14 +882,18 @@ def export(ident:str,opts:Export):
   image=render_title(opts)
  except ValueError as e:raise HTTPException(400,str(e))
  import tracking
+ note=''
  if opts.framing=='stack':
   try:result=clip_layout(ident,opts.start,opts.end)
   except ValueError as e:raise HTTPException(400,str(e))
   if not result.get('panels'):raise HTTPException(400,'No se encontró la cámara del streamer en este video. Marca el recuadro en «Ajustar recuadro de cámara» o usa otro encuadre.')
   import layout
   geometry=layout.filter_graph(result,folder/f'{token}-layout.cmd',opts.end-opts.start,JOBS[ident].get('fps',30),opts.tracking_motion,opts.game_follow)
+ elif opts.framing=='duo':
+  geometry,note=duo_geometry(folder/'source',opts.start,opts.end,folder/f'tracking-{tracking.key(opts.start,opts.end)}.json',
+                             folder/f'{token}-duo.cmd',opts.end-opts.start,JOBS[ident].get('fps',30),opts.tracking_motion,opts.duo_force)
  else:geometry=tracking.static_filter(opts.framing,opts.zoom,opts.focus_x,opts.focus_y)
- if opts.auto_follow and opts.framing!='stack':
+ if opts.auto_follow and opts.framing not in ('stack','duo'):
   if opts.framing not in ('crop','zoom'):raise HTTPException(400,'El seguimiento necesita el encuadre con zoom o pantalla completa.')
   cache=folder/f'tracking-{tracking.key(opts.start,opts.end)}.json'
   if not cache.exists():raise HTTPException(400,'Calcula el seguimiento del clip en el editor antes de exportarlo.')
@@ -894,7 +947,29 @@ def export(ident:str,opts:Export):
    target=export_target(JOBS[ident],opts.title or 'clip',opts.resolution);os.replace(output,target);output=target;name=target.name
    LIBRARY.record_export(cid,target,opts.resolution);LIBRARY.log('export',f'Clip exportado en {opts.resolution}p · {opts.title or "sin título"}',cid)
   except OSError as e:logging.getLogger('uvicorn.error').warning('Export not moved to the library folder: %s',e)
- return FileResponse(output,media_type='video/mp4',filename=name)
+ # «Dos personas» that went out with the normal tracking (or was forced) says why: never a silent change (E-01)
+ from urllib.parse import quote
+ return FileResponse(output,media_type='video/mp4',filename=name,headers={'X-Clip-Note':quote(note)} if note else None)
+
+def duo_geometry(source,start,end,cache,cmd_file,duration,fps,motion='balanced',force=False,still_at=None,compute=True):
+ """«Dos personas» (docs/fase4-dos-personas.md): (FFmpeg geometry, note). A clip with its two persons is split, the
+ left one above and the right one below (tracking.duo_path); otherwise it goes out with the normal face tracking
+ (pantalla completa following whoever speaks) and the note says why. `still_at`: one frame at that second (a
+ thumbnail). The export, the thumbnails and the library previews all come through here."""
+ import tracking
+ result=tracking_result(source,start,end,cache,compute)
+ if result is None or not result.get('samples'):
+  return tracking.static_filter('crop','balanced',50,50),'No se ve a ninguna persona en este clip: sale en pantalla completa.'
+ plan,reason=tracking.duo_plan(result,force)
+ if plan:
+  path=tracking.duo_path(result,plan,motion)
+  return (tracking.duo_still(path,still_at) if still_at is not None else tracking.duo_commands(path,cmd_file,duration,fps)),reason
+ path=tracking.build_path(result,'auto',motion,'crop','balanced',50)
+ note=reason+' Sale con el seguimiento normal.'
+ if still_at is not None:
+  x=float(np.interp(still_at,np.arange(len(path['x']))/path['fps'],path['x']))
+  return tracking.static_filter('crop','balanced',x,50),note
+ return tracking.commands(path,cmd_file,duration,fps,result['width'],result['height']),note
 
 CPU_VIDEO=['-c:v','libx264','-preset','fast','-crf','18']
 # Measured on a real 1080p60 source (60 s vertical crop, RTX 5060 Ti): x264 CRF18 29 s / 54 MB / SSIM 0.9938,
@@ -933,7 +1008,7 @@ CLIP_DEFAULTS=dict(framing='zoom',zoom='balanced',tracking=True,tracking_motion=
 LEGACY_CLIP_SETTINGS=dict(framing='crop',zoom='balanced',tracking=False,tracking_motion='balanced',subtitles=True,title_corners='square',auto_stack=False,resolution=1080,mute_words=False,mute_sound='silence')
 
 class ClipSettings(BaseModel):
- framing:Literal['zoom','crop','fit','stack']='zoom'
+ framing:Literal['zoom','crop','fit','stack','duo']='zoom'
  zoom:Literal['soft','balanced','close']='balanced'
  tracking:bool=True
  auto_stack:bool=True             # use 'Cámara + juego' automatically when the video has a streamer camera overlay
@@ -1050,7 +1125,7 @@ def reaction_stack(overlay,settings):
  """The one exception to «the chosen format wins»: a reaction on a screen capture (the streamer's camera over a browser
  with a video, the chat and the taskbar) goes to «Cámara + juego» with the video player below, unless the automatic
  switch is turned off. «Pantalla completa» there was a crop of the desktop (user report, Westcol reacting to a video)."""
- return bool(overlay and overlay.get('found') and overlay.get('screen')) and settings.get('auto_stack',True) is not False and settings.get('framing')!='fit'
+ return bool(overlay and overlay.get('found') and overlay.get('screen')) and settings.get('auto_stack',True) is not False and settings.get('framing') not in ('fit','duo')
 
 def layout_cache(ident,start,end,overlay):
  import layout
@@ -1750,6 +1825,7 @@ def default_title_y(framing,zoom,panels,bar=0.0):
  the video itself carries a black bar, `bar` = its share of the height), or near the top."""
  import layout,tracking
  if framing=='stack' and panels:return round((panels['top']+layout.SEAM/2)/19.2,1)
+ if framing=='duo':return round((tracking.DUO_PANEL_H+tracking.DUO_SEAM/2)/19.2,1)
  if framing=='zoom':band=tracking.band_height('zoom',zoom);return round(((1920-band)/2+float(bar or 0)*band)/19.2,1)
  if framing=='crop':return FULL_TITLE_Y
  return 12
@@ -1765,7 +1841,7 @@ def title_position(framing,zoom,panels,saved,manual=None,bar=0.0):
  auto=lambda:default_title_y(framing,zoom,panels,bar=bar)
  if saved is None or manual=='' or manual is False:return auto()
  if manual in ('1',True):return float(saved)
- if framing=='stack':return auto()
+ if framing in ('stack','duo'):return auto()
  v=float(saved)
  if v in (12,FULL_TITLE_Y) or (framing!='stack' and 40<=v<=50.3) or any(abs(v-default_title_y('zoom',z,None,bar=b))<.6 for z in ('soft','balanced','close') for b in {0.0,float(bar or 0)}):
   return auto()
@@ -1791,18 +1867,21 @@ def clip_thumb(cid,render=True):
  ov=spec['overlay'];panels=layout.panels(ov) if ov else None
  title_y=title_position(spec['framing'],spec['zoom'],panels,spec['edits'].get('title_y'),spec['edits'].get('title_manual'),bar=letterbox(spec['source'])['top'])
  focus_x=float(spec['edits'].get('focus_x',50))
- if not ov:      # with face tracking: the person speaking at that moment (when the tracking is ready)
+ duo=spec['framing']=='duo'
+ duo_sig=duo and [Path(spec['tracking_cache']).name,bool(spec['edits'].get('duo_force')),spec['motion']]
+ if not ov and not duo:      # with face tracking: the person speaking at that moment (when the tracking is ready)
   try:
    followed=follow_path(spec)
    if followed:path=followed[1];focus_x=round(float(np.interp(spec['t']-spec['start'],np.arange(len(path['x']))/path['fps'],path['x'])),1)
   except Exception as e:
    if not (isinstance(e,ValueError) and 'rostros' in str(e)):_incidents.record('thumb',e,clip=cid)
- sig=hashlib.sha256(json.dumps([3,spec['title'],spec['framing'],spec['zoom'],title_y,spec['corners'],ov and [ov[k] for k in 'xywh'],round(spec['t'],1),focus_x]).encode()).hexdigest()[:10]
+ sig=hashlib.sha256(json.dumps([3,spec['title'],spec['framing'],spec['zoom'],title_y,spec['corners'],ov and [ov[k] for k in 'xywh'],round(spec['t'],1),focus_x]+([duo_sig] if duo else [])).encode()).hexdigest()[:10]
  target=DATA/'thumbs'/f"{cid.replace(':','_')}-{sig}.jpg"
  if target.exists() or not render:return target if target.exists() else None
  target.parent.mkdir(exist_ok=True)
  with _thumb_gate, tempfile.TemporaryDirectory() as tmp:
   if ov:geometry=layout.filter_graph(dict(overlay=ov,panels=panels,motion=dict(xs=[ov['width']/2])),Path(tmp)/'t.cmd',.04,25,follow=False)
+  elif duo:geometry,_=duo_geometry(spec['source'],spec['start'],spec['end'],spec['tracking_cache'],Path(tmp)/'t.cmd',.04,25,spec['motion'],bool(spec['edits'].get('duo_force')),still_at=spec['t']-spec['start'])
   else:geometry=tracking.static_filter(spec['framing'],spec['zoom'],focus_x,float(spec['edits'].get('focus_y',50)))
   args=['ffmpeg','-v','error','-y','-ss',f"{spec['t']:.2f}",'-i',str(spec['source'])]
   graph=f'[0:v]{geometry},setsar=1[b]';last='b'
@@ -1863,6 +1942,11 @@ def library_preview(cid:str):
   try:followed=follow_path(spec,compute=True)
   except Exception as e:logging.getLogger('uvicorn.error').warning('Preview tracking failed (%s): %s',cid,e)
  follow_sig=followed and [followed[1]['person'],followed[1]['motion'],round(float(np.mean(followed[1]['x'])),1)]
+ duo_cache=None
+ if spec['framing']=='duo':      # the same two crops as the export, over the same range
+  import tracking
+  base=Path(spec['tracking_cache']);duo_cache=base.with_name(base.name.replace(tracking.key(spec['start'],spec['end']),tracking.key(job_start,job_end)))
+  follow_sig=['duo',duo_cache.name,bool(edits.get('duo_force')),spec['motion']]
  mute,mute_sound=preview_mute(r,spec,job_start,job_end)
  sig=hashlib.sha256(json.dumps([2,spec['title'],spec['framing'],spec['zoom'],title_y,spec['corners'],ov and [ov[k] for k in 'xywh'],job_start,job_end,follow_sig,mute,mute_sound]).encode()).hexdigest()[:10]
  target=DATA/'previews'/f"{cid.replace(':','_')}-{sig}.mp4";target.parent.mkdir(exist_ok=True)
@@ -1870,6 +1954,7 @@ def library_preview(cid:str):
   with _previews, tempfile.TemporaryDirectory() as tmp:
    if not target.exists():
     if ov:geometry=layout.filter_graph(dict(overlay=ov,panels=panels,motion=dict(xs=[ov['width']/2])),Path(tmp)/'p.cmd',job_end-job_start,24,follow=False)
+    elif duo_cache:geometry,_=duo_geometry(spec['source'],job_start,job_end,duo_cache,Path(tmp)/'p.cmd',job_end-job_start,24,spec['motion'],bool(edits.get('duo_force')))
     elif followed:geometry=tracking.commands(followed[1],Path(tmp)/'p.cmd',job_end-job_start,24,followed[0]['width'],followed[0]['height'])
     else:geometry=tracking.static_filter(spec['framing'],spec['zoom'],float(edits.get('focus_x',50)),float(edits.get('focus_y',50)))
     args=['ffmpeg','-v','error','-y','-ss',f'{job_start:.2f}','-t',f'{job_end-job_start:.2f}','-i',str(spec['source'])]
@@ -1915,7 +2000,7 @@ def library_export(cid:str,item:LibraryExport):
  settings=clip_settings(job)
  base=dict(start=clip['start'],end=clip['end'],title=clip.get('title') or '',subtitles=clip.get('text') or '',clip_id=ref,
            framing=spec['framing'],zoom=spec['zoom'],title_corners=spec['corners'],show_subtitles=bool(settings.get('subtitles',True)),
-           caption_y=85 if spec['framing']=='stack' else 81,tracking_motion=settings.get('tracking_motion','balanced'),
+           caption_y=85 if spec['framing']=='stack' else 86 if spec['framing']=='duo' else 81,tracking_motion=settings.get('tracking_motion','balanced'),
            mute_words=bool(settings.get('mute_words')),mute_sound=settings.get('mute_sound','silence'))
  values={**base,**{k:v for k,v in edits.items() if k in Export.model_fields},'title_y':title_y,'resolution':item.resolution,'preview':False}
  if values.get('framing')=='stack' and not ov:values['framing']='zoom'

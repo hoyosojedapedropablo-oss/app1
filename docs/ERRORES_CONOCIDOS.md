@@ -305,3 +305,22 @@ una prueba automática (entre comillas invertidas) que falla si el error vuelve.
   `test_E35_the_browser_check_needs_only_what_requirements_txt_installs` (`websockets` está en `requirements.txt`; si
   falta, las pruebas fallan, no se saltan). Solo se saltan en un equipo sin Chrome ni Edge.
 
+## E-36 · ABIERTO · En un plano con dos personas, `active` no sigue a la que habla a la izquierda (TOPBOY, nov 2026)
+- **Síntoma:** en el plano abierto de «TOPBOY Rompe el Silencio» (Sinvergüenza Podcast, 20:31–20:58), la boca de la
+  persona de la izquierda se mueve más que la de la derecha en 7 de las 27 ventanas de 1 s con voz, pero el
+  seguimiento (`active`) se queda los 27,5 s en la de la derecha. Medido en la Parte A de la Fase 4
+  (`tests/bench/dos_personas_medidas.json`).
+- **Causa probable:** `choose_speakers` resuelve el plano entero con un coste por cambiar de persona; con caras pequeñas
+  (11–12 % del alto) el movimiento de boca de la izquierda no compensa ese coste. Sin confirmar.
+- **Estado:** abierto. Se arregla en otra fase; no afecta a «Dos personas», que no usa la voz para decidir.
+- **Guardas:** `test_E36_open_active_follows_the_left_person_when_her_mouth_wins` (marcada como fallo esperado: cuando
+  se arregle pasará, la suite lo señalará y se cerrará esta entrada)
+
+## E-37 · «Dos personas» salía de 1080 × 1919 (nov 2026)
+- **Síntoma:** al probar la primera versión, el MP4 de «Dos personas» medía 1080 × 1919 en vez de 1080 × 1920.
+- **Causa raíz:** los dos paneles medían (1920 − 6) / 2 = 957 px, una altura impar; FFmpeg trabaja en yuv420p, que
+  necesita alturas pares, y uno de los paneles perdía una fila.
+- **Solución:** paneles de alturas pares: arriba 956 px, la línea de 6 px y abajo 958 px (= 1920). El título va en la
+  línea, al 49,9 %.
+- **Guardas:** `test_E37_panels_have_even_heights_and_fill_1920`, `test_the_export_is_split_with_no_note` (mide el MP4)
+

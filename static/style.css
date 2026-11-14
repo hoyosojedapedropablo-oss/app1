@@ -117,3 +117,9 @@ select.fp-native{display:none!important}
 .sel-h.nw{left:0;top:0;cursor:nwse-resize}.sel-h.ne{left:100%;top:0;cursor:nesw-resize}.sel-h.sw{left:0;top:100%;cursor:nesw-resize}.sel-h.se{left:100%;top:100%;cursor:nwse-resize}
 /* «Aplicar a todos los clips»: the first item of the panel's scrolling body (not a header the controls slide under). */
 #editorView .inspector-body > .share-all{display:flex;justify-content:flex-start;align-items:flex-start;margin:0 0 14px;font:inherit;color:inherit;letter-spacing:normal}
+/* «Dos personas»: the fourth format card, the clip cards' note and the suggestion */
+.frame-cards.three.four{grid-template-columns:repeat(2,minmax(0,1fr))}
+.duo-fake{grid-template-rows:1fr 1fr}.duo-fake i,.duo-fake i:last-child{background:radial-gradient(circle at 50% 42%,#8a8aa3 0 16%,transparent 17%),linear-gradient(135deg,#3b3b52,#22222e)}
+.clip .duo-note{margin:6px 0 0;font-size:11px;color:#f3c26b}.clip .duo-note.ok{color:#c6ff5e}.clip .duo-note.pending{color:#95959f}
+.duo-hint{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 10px;padding:10px 12px;border:1px solid #3d5c1c;border-radius:10px;background:#121a0b;font-size:12px}
+.duo-hint button{padding:7px 12px;font-size:12px;border-radius:8px}

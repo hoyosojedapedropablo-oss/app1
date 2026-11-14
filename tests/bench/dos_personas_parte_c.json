@@ -1,0 +1,310 @@
+{
+ "descripcion": "Fase 4, parte C: exportaciones reales de los 10 clips del banco con «Dos personas» (copias de los proyectos; videos solo leídos). decision: lo que hizo la app y su motivo. calidad: medida en el MP4 (YuNet a 8 fps por panel) y en los recortes con los que se dibujó. vista_previa_vs_mp4: diferencia media por píxel (0-255) entre el lienzo del editor y el MP4 en el mismo instante, y la misma medida con los paneles del MP4 cambiados (para ver que distingue recortes). formatos_sin_cambios: «Cámara + juego», zoom y pantalla completa con seguimiento exportados con main y con la rama: fotogramas idénticos (framemd5).",
+ "decision": {
+  "duo-topboy": {
+   "esperado": true,
+   "dividido": true,
+   "acierto": true,
+   "motivo": null
+  },
+  "duo-sicarios": {
+   "esperado": true,
+   "dividido": true,
+   "acierto": true,
+   "motivo": null
+  },
+  "duo-pino": {
+   "esperado": true,
+   "dividido": true,
+   "acierto": true,
+   "motivo": null
+  },
+  "duo-wakanda": {
+   "esperado": true,
+   "dividido": true,
+   "acierto": true,
+   "motivo": null
+  },
+  "alternos-topboy": {
+   "esperado": false,
+   "dividido": false,
+   "acierto": true,
+   "motivo": "Solo se ve una persona a la vez: el video muestra a una persona o alterna planos de una en una."
+  },
+  "alternos-sicarios": {
+   "esperado": false,
+   "dividido": false,
+   "acierto": true,
+   "motivo": "Solo se ve una persona a la vez: el video muestra a una persona o alterna planos de una en una."
+  },
+  "uno-davoox": {
+   "esperado": false,
+   "dividido": false,
+   "acierto": true,
+   "motivo": "Solo se ve una persona a la vez: el video muestra a una persona o alterna planos de una en una."
+  },
+  "uno-naim": {
+   "esperado": false,
+   "dividido": false,
+   "acierto": true,
+   "motivo": "Las dos personas solo se ven a la vez el 10 % del clip (hace falta el 80 %)."
+  },
+  "tres-entrenamiento": {
+   "esperado": false,
+   "dividido": false,
+   "acierto": true,
+   "motivo": "Hay 3 personas en el plano: «Dos personas» es para dos."
+  },
+  "juego-epidemic": {
+   "esperado": false,
+   "dividido": false,
+   "acierto": true,
+   "motivo": "Solo se ve una persona a la vez: el video muestra a una persona o alterna planos de una en una."
+  }
+ },
+ "calidad": {
+  "duo-topboy": {
+   "fotogramas": 220,
+   "cara_completa_pct": {
+    "top": 100.0,
+    "bottom": 100.0
+   },
+   "cara_alto_pct": {
+    "top": [
+     28.6,
+     33.0,
+     35.3
+    ],
+    "bottom": [
+     32.4,
+     33.4,
+     35.2
+    ]
+   },
+   "cara_en_rango_pct": {
+    "top": 100.0,
+    "bottom": 100.0
+   },
+   "identidad": {
+    "muestras": 220,
+    "errores": 0
+   },
+   "movimiento": {
+    "top": {
+     "max_px": 0.0,
+     "limite_px": 12.24,
+     "estatico": true
+    },
+    "bottom": {
+     "max_px": 0.0,
+     "limite_px": 11.76,
+     "estatico": true
+    }
+   }
+  },
+  "duo-sicarios": {
+   "fotogramas": 204,
+   "cara_completa_pct": {
+    "top": 100.0,
+    "bottom": 100.0
+   },
+   "cara_alto_pct": {
+    "top": [
+     26.5,
+     28.4,
+     31.7
+    ],
+    "bottom": [
+     33.6,
+     35.8,
+     38.3
+    ]
+   },
+   "cara_en_rango_pct": {
+    "top": 100.0,
+    "bottom": 100.0
+   },
+   "identidad": {
+    "muestras": 204,
+    "errores": 0
+   },
+   "movimiento": {
+    "top": {
+     "max_px": 1.79,
+     "limite_px": 15.84,
+     "estatico": false
+    },
+    "bottom": {
+     "max_px": 0.0,
+     "limite_px": 16.2,
+     "estatico": true
+    }
+   }
+  },
+  "duo-pino": {
+   "fotogramas": 179,
+   "cara_completa_pct": {
+    "top": 100.0,
+    "bottom": 100.0
+   },
+   "cara_alto_pct": {
+    "top": [
+     30.5,
+     31.9,
+     33.1
+    ],
+    "bottom": [
+     33.2,
+     36.1,
+     38.5
+    ]
+   },
+   "cara_en_rango_pct": {
+    "top": 100.0,
+    "bottom": 100.0
+   },
+   "identidad": {
+    "muestras": 179,
+    "errores": 0
+   },
+   "movimiento": {
+    "top": {
+     "max_px": 1.05,
+     "limite_px": 11.88,
+     "estatico": false
+    },
+    "bottom": {
+     "max_px": 0.0,
+     "limite_px": 14.1,
+     "estatico": true
+    }
+   }
+  },
+  "duo-wakanda": {
+   "fotogramas": 240,
+   "cara_completa_pct": {
+    "top": 95.8,
+    "bottom": 98.3
+   },
+   "cara_alto_pct": {
+    "top": [
+     29.0,
+     33.2,
+     39.0
+    ],
+    "bottom": [
+     33.5,
+     36.8,
+     41.8
+    ]
+   },
+   "cara_en_rango_pct": {
+    "top": 100.0,
+    "bottom": 98.7
+   },
+   "identidad": {
+    "muestras": 228,
+    "errores": 0
+   },
+   "movimiento": {
+    "top": {
+     "max_px": 3.15,
+     "limite_px": 22.38,
+     "estatico": false
+    },
+    "bottom": {
+     "max_px": 2.45,
+     "limite_px": 23.64,
+     "estatico": false
+    }
+   }
+  }
+ },
+ "vista_previa_vs_mp4": {
+  "duo-pino": {
+   "instantes_s": [
+    1,
+    8,
+    15,
+    21
+   ],
+   "diferencia": [
+    2.22,
+    3.17,
+    5.36,
+    2.19
+   ],
+   "con_paneles_cambiados": [
+    68.55,
+    67.34,
+    68.57,
+    71.66
+   ]
+  },
+  "duo-topboy": {
+   "instantes_s": [
+    1,
+    8,
+    15,
+    22
+   ],
+   "diferencia": [
+    2.59,
+    2.57,
+    2.61,
+    2.43
+   ],
+   "con_paneles_cambiados": [
+    51.05,
+    51.88,
+    54.48,
+    51.11
+   ]
+  },
+  "duo-sicarios": {
+   "instantes_s": [
+    1,
+    8,
+    15,
+    22
+   ],
+   "diferencia": [
+    2.13,
+    4.03,
+    2.09,
+    1.9
+   ],
+   "con_paneles_cambiados": [
+    65.3,
+    68.86,
+    66.44,
+    63.54
+   ]
+  },
+  "duo-wakanda": {
+   "instantes_s": [
+    1,
+    8,
+    15,
+    22
+   ],
+   "diferencia": [
+    3.12,
+    5.72,
+    6.62,
+    2.74
+   ],
+   "con_paneles_cambiados": [
+    56.86,
+    54.22,
+    51.86,
+    54.18
+   ]
+  }
+ },
+ "formatos_sin_cambios": {
+  "juego-epidemic · stack": "iguales (491 fotogramas)",
+  "uno-davoox · zoom": "iguales (1558)",
+  "uno-naim · crop con seguimiento": "iguales (2523)"
+ }
+}

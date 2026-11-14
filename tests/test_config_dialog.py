@@ -71,27 +71,53 @@ class ConfigDialogInABrowserTests(unittest.TestCase):
         for _ in range(100):
             try: urllib.request.urlopen(f'http://127.0.0.1:{cls.port}/', timeout=1); break
             except OSError: time.sleep(.1)
+        # A slow start of the browser (seen once in a full suite run) gets a second try; whatever fails is said.
+        problem = None
+        for attempt in range(2):
+            try: cls.start_browser(); break
+            except Exception as error:
+                problem = error; cls.stop_browser()
+        else: raise RuntimeError(f'No arrancó el navegador sin interfaz ({BROWSER}): {problem!r}')
+        cls.ids = 0
+
+    @classmethod
+    def start_browser(cls):
         cls.profile = tempfile.TemporaryDirectory()
         cls.browser = subprocess.Popen([BROWSER, '--headless=new', '--remote-debugging-port=0', f'--user-data-dir={cls.profile.name}',
                                         '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--mute-audio', 'about:blank'],
                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        active = Path(cls.profile.name) / 'DevToolsActivePort'
-        for _ in range(200):
-            if active.exists() and active.read_text().strip(): break
+        active = Path(cls.profile.name) / 'DevToolsActivePort'; page = None
+        for _ in range(300):              # up to 30 s: the port file, then a page in the list
+            try:
+                lines = active.read_text().split() if active.exists() else []
+                if lines:
+                    pages = json.loads(urllib.request.urlopen(f'http://127.0.0.1:{int(lines[0])}/json/list', timeout=2).read())
+                    page = next((p for p in pages if p.get('type') == 'page' and p.get('webSocketDebuggerUrl')), None)
+                    if page: break
+            except (OSError, ValueError): pass
             time.sleep(.1)
-        debug_port = int(active.read_text().split()[0])
-        pages = json.loads(urllib.request.urlopen(f'http://127.0.0.1:{debug_port}/json/list', timeout=5).read())
+        if not page: raise RuntimeError('el navegador no ofreció ninguna pestaña')
         # entered by hand (setUpClass/tearDownClass), as websockets wants connect() used as a context manager
-        cls.conn = connect(next(p for p in pages if p['type'] == 'page')['webSocketDebuggerUrl'], max_size=None, open_timeout=10)
+        cls.conn = connect(page['webSocketDebuggerUrl'], max_size=None, open_timeout=10)
         cls.ws = cls.conn.__enter__()
-        cls.ids = 0
+
+    @classmethod
+    def stop_browser(cls):
+        try:
+            if getattr(cls, 'conn', None): cls.conn.__exit__(None, None, None)
+        except Exception: pass
+        cls.conn = None
+        if getattr(cls, 'browser', None):
+            cls.browser.kill(); cls.browser.wait(10)
+        time.sleep(.3)
+        if getattr(cls, 'profile', None):
+            try: cls.profile.cleanup()
+            except OSError: pass
 
     @classmethod
     def tearDownClass(cls):
-        try: cls.conn.__exit__(None, None, None)
-        finally:
-            cls.browser.kill(); cls.browser.wait(10); cls.server.should_exit = True
-            time.sleep(.3); cls.profile.cleanup()
+        try: cls.stop_browser()
+        finally: cls.server.should_exit = True
 
     @classmethod
     def cdp(cls, method, **params):

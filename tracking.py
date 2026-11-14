@@ -381,3 +381,178 @@ def commands(path, cmd_file, duration, fps, width, height):
     Path(cmd_file).write_text('\n'.join(lines), encoding='utf-8')
     chain = f'setpts=PTS-STARTPTS,sendcmd=f={Path(cmd_file).name},scale={g["sw"]}:{g["sh"]},crop@follow=1080:{g["band"]}:0:{y}'
     return chain if g['band'] == 1920 else chain + f',pad=1080:1920:0:{(1920 - g["band"]) // 2}:color=black'
+
+
+# --- «Dos personas» (Fase 4, docs/fase4-dos-personas.md): one person above, the other below ------------------------
+# The thresholds come from measuring 10 real clips (tests/bench/dos_personas.json, Parte A): the 4 that must split had
+# both persons on screen 95-100 % of the time, faces 46-54 % of the width apart (never under 35 %) and nobody changing
+# sides; the 6 that must not had at most 54 % together. Who speaks is not a criterion: in interviews one person often
+# talks for the whole clip.
+DUO_TOGETHER = .80        # both main persons on screen together in at least this share of the samples
+DUO_SEP_MEDIAN = .30      # median horizontal distance between their faces, as a share of the width
+DUO_SEP_MIN = .25         # and never closer than this
+DUO_FLIPS = 0             # times they may swap sides
+DUO_FACE = .35            # the face takes this share of its panel's height (30-40 %)
+DUO_FACE_Y = .45          # face centre at this height of its panel (a little headroom)
+DUO_SEAM = 6              # = layout.SEAM: the dark line between the panels, as in «Cámara + juego»
+DUO_PANEL_W = 1080
+DUO_PANEL_H = 956                         # top panel; even heights (yuv420p): 956 + seam 6 + 958 = 1920
+DUO_PANEL_HB = 1920 - DUO_PANEL_H - DUO_SEAM   # bottom panel, 958
+
+
+def _duo_main_persons(samples):
+    """Persons seen in >=10 % of the samples whose median face is at least NEAR of the biggest one's (smaller ones are
+    background), most present first; and every face per person."""
+    n = max(1, len(samples)); faces = {}
+    for s in samples:
+        for f in s['faces']: faces.setdefault(f['id'], []).append(f)
+    seen = [i for i, fs in faces.items() if len(fs) >= .1 * n]
+    if not seen: return [], faces
+    height = {i: float(np.median([f['h'] for f in faces[i]])) for i in seen}
+    big = max(height.values())
+    main = [i for i in seen if height[i] >= NEAR * big]
+    return sorted(main, key=lambda i: (-len(faces[i]), i)), faces
+
+
+def duo_measures(result):
+    """The numbers duo_plan decides on (the Parte A table): main persons, share of samples with both on screen,
+    median and minimum distance between their faces (share of the width) and side swaps."""
+    samples = result.get('samples') or []; width = float(result.get('width') or 1); n = len(samples)
+    main, _ = _duo_main_persons(samples)
+    out = dict(samples=n, persons=len(main), together=0.0, sep_median=None, sep_min=None, flips=0, left=None, right=None)
+    if len(main) < 2 or not n: return out
+    a, b = main[:2]; seps = []; xa = []; xb = []; both = 0; prev = None; flips = 0
+    for s in samples:
+        fa = next((f for f in s['faces'] if f['id'] == a), None); fb = next((f for f in s['faces'] if f['id'] == b), None)
+        if fa: xa.append(fa['x'] + fa['w'] / 2)
+        if fb: xb.append(fb['x'] + fb['w'] / 2)
+        if fa and fb:
+            ca, cb = fa['x'] + fa['w'] / 2, fb['x'] + fb['w'] / 2
+            both += 1; seps.append(abs(ca - cb) / width)
+            order = ca < cb
+            if prev is not None and order != prev: flips += 1
+            prev = order
+    left, right = (a, b) if np.median(xa) <= np.median(xb) else (b, a)
+    out.update(together=round(both / n, 4), flips=flips, left=left, right=right,
+               sep_median=round(float(np.median(seps)), 4) if seps else None, sep_min=round(float(np.min(seps)), 4) if seps else None)
+    return out
+
+
+def duo_plan(result, force=False):
+    """Whether this clip can be shown as «Dos personas»: (plan, reason). plan is None when it cannot, and reason says
+    why in words the user understands. With `force` (the user chose it for this clip in the editor) any clip with two
+    persons is split anyway; the reason is kept as a note."""
+    m = duo_measures(result); pct = lambda v: f'{round(100 * v)} %'
+    if m['persons'] == 0: reason = 'No se ve a ninguna persona en este clip.'
+    elif m['persons'] == 1: reason = 'Solo se ve una persona a la vez: el video muestra a una persona o alterna planos de una en una.'
+    elif m['persons'] > 2: reason = f'Hay {m["persons"]} personas en el plano: «Dos personas» es para dos.'
+    elif m['together'] < DUO_TOGETHER: reason = f'Las dos personas solo se ven a la vez el {pct(m["together"])} del clip (hace falta el {pct(DUO_TOGETHER)}).'
+    elif m['flips'] > DUO_FLIPS: reason = 'Las dos personas se cambian de lado durante el clip.'
+    elif m['sep_median'] < DUO_SEP_MEDIAN: reason = f'Las caras están muy juntas ({pct(m["sep_median"])} del ancho; hace falta el {pct(DUO_SEP_MEDIAN)}): un recorte normal ya muestra a las dos.'
+    elif m['sep_min'] < DUO_SEP_MIN: reason = f'En algún momento las caras se acercan demasiado ({pct(m["sep_min"])} del ancho; el mínimo es el {pct(DUO_SEP_MIN)}).'
+    else: reason = ''
+    if reason and not (force and m['left'] is not None): return None, reason
+    return dict(m, forced=bool(reason)), reason
+
+
+def _duo_axis(values, visible, lo, hi, motion, cuts, duration, n):
+    """Centre of one panel's crop along one axis at PATH_FPS: the same dead zone, still-window, smoothing and speed
+    limit as build_path (whose code stays as it is), per shot between scene cuts."""
+    m = MOTION.get(motion, MOTION['balanced'])
+    t_s = np.arange(len(values)) / SAMPLE_FPS; t = np.arange(n) / PATH_FPS
+    bounds = [0.0] + [c for c in cuts if 0 < c < duration] + [duration + 1]
+    out = np.empty(n); limit = m['speed'] * visible / PATH_FPS; static = True
+    for a, b in zip(bounds, bounds[1:]):
+        shot = (t >= a) & (t < b); inside = (t_s >= a) & (t_s < b)
+        if not shot.any(): continue
+        xs = values[inside] if inside.any() else values[[min(len(values) - 1, int(a * SAMPLE_FPS))]]
+        if xs.max() - xs.min() <= visible * STILL:
+            out[shot] = (xs.max() + xs.min()) / 2; continue
+        static = False
+        held = np.empty(len(xs)); c = xs[0]
+        for i, x in enumerate(xs):
+            if abs(x - c) > m['dead'] * visible: c = x
+            held[i] = c
+        part = np.interp(t[shot], t_s[inside] if inside.any() else [a], held)
+        part = _smooth(part, m['tau'], PATH_FPS)
+        for i in range(1, len(part)): part[i] = part[i - 1] + max(-limit, min(limit, part[i] - part[i - 1]))
+        out[shot] = _smooth(part, .08, PATH_FPS)
+    return np.clip(out, lo, hi), static
+
+
+def _held(values):
+    """Positions with the gaps (the person not detected) holding the last known one: the panel stays still, it never
+    jumps to someone else. Before the first sighting, the first known position."""
+    known = [v for v in values if v is not None]
+    if not known: return None
+    last = known[0]; out = []
+    for v in values:
+        if v is not None: last = v
+        out.append(last)
+    return np.array(out, dtype=float)
+
+
+def duo_path(result, plan, motion='balanced'):
+    """The two crops of «Dos personas» at PATH_FPS: the left person in the top panel and the right person in the
+    bottom one, always the same within the clip. Each crop has the panel's shape, the face takes DUO_FACE of its height
+    (one size for the whole clip: no zoom pumping) and it never leaves the picture. The export, the preview, the
+    thumbnails and the library all draw from these numbers."""
+    W, H = float(result['width']), float(result['height'])
+    samples = result['samples']; duration = len(samples) / SAMPLE_FPS
+    n = max(2, int(math.ceil(duration * PATH_FPS)) + 1)
+    cuts = result.get('cuts') or []
+    out = dict(fps=PATH_FPS, panel_w=DUO_PANEL_W, panel_h=DUO_PANEL_H, panel_hb=DUO_PANEL_HB, seam=DUO_SEAM, width=W, height=H, motion=motion,
+               forced=bool(plan.get('forced')))
+    for key, person, ph in (('top', plan['left'], DUO_PANEL_H), ('bottom', plan['right'], DUO_PANEL_HB)):
+        faces = [next((f for f in s['faces'] if f['id'] == person), None) for s in samples]
+        heights = [f['h'] for f in faces if f]
+        ch = float(np.median(heights)) / DUO_FACE; cw = ch * DUO_PANEL_W / ph
+        if cw > W: cw = W; ch = cw * ph / DUO_PANEL_W
+        if ch > H: ch = H; cw = ch * DUO_PANEL_W / ph
+        cw = max(16, int(cw // 2) * 2); ch = max(16, int(ch // 2) * 2)
+        cx = _held([f['x'] + f['w'] / 2 if f else None for f in faces])
+        cy = _held([f['y'] + f['h'] / 2 if f else None for f in faces])
+        # the crop's centre: on the face horizontally, the face a little above the middle vertically
+        xs, sx = _duo_axis(cx, cw, cw / 2, W - cw / 2, motion, cuts, duration, n)
+        ys, sy = _duo_axis(cy + ch * (.5 - DUO_FACE_Y), ch, ch / 2, H - ch / 2, motion, cuts, duration, n)
+        out[key] = dict(id=person, w=cw, h=ch, static=bool(sx and sy),
+                        x=[round(float(v), 2) for v in np.clip(xs - cw / 2, 0, W - cw)],
+                        y=[round(float(v), 2) for v in np.clip(ys - ch / 2, 0, H - ch)])
+    return out
+
+
+def _even(v):
+    """Nearest even pixel, rounding halves up (as the editor's Math.round): FFmpeg crops yuv420p at even offsets."""
+    return int(math.floor(v / 2 + .5)) * 2
+
+
+def duo_at(path, t):
+    """Both crops' top-left corners (even px) at t seconds of the clip, interpolated as the export does it."""
+    src = np.arange(len(path['top']['x'])) / path['fps']
+    return {k: (_even(float(np.interp(t, src, path[k]['x']))), _even(float(np.interp(t, src, path[k]['y'])))) for k in ('top', 'bottom')}
+
+
+def _duo_graph(path, at, sendcmd=None):
+    tw, th, bw, bh = path['top']['w'], path['top']['h'], path['bottom']['w'], path['bottom']['h']
+    (tx, ty), (bx, by) = at['top'], at['bottom']
+    pw, ph, phb = path['panel_w'], path['panel_h'], path['panel_hb']
+    head = f'setpts=PTS-STARTPTS,sendcmd=f={sendcmd},' if sendcmd else 'setpts=PTS-STARTPTS,'
+    return (head + 'split[duot][duob];'
+            f'[duot]crop@dtop={tw}:{th}:{tx}:{ty},scale={pw}:{ph}:flags=lanczos,setsar=1,pad={pw}:{ph + path["seam"]}:0:0:color=0x0b0b0b[duotp];'
+            f'[duob]crop@dbot={bw}:{bh}:{bx}:{by},scale={pw}:{phb}:flags=lanczos,setsar=1[duobp];'
+            '[duotp][duobp]vstack')
+
+
+def duo_commands(path, cmd_file, duration, fps):
+    """FFmpeg geometry of «Dos personas»: one sendcmd line per output frame moves both crops (like «Cámara + juego»)."""
+    lines = []
+    for t in np.arange(0, duration, 1 / fps):
+        at = duo_at(path, float(t))
+        lines.append(f'{t:.6f} crop@dtop x {at["top"][0]}, crop@dtop y {at["top"][1]}, crop@dbot x {at["bottom"][0]}, crop@dbot y {at["bottom"][1]};')
+    Path(cmd_file).write_text('\n'.join(lines), encoding='utf-8')
+    return _duo_graph(path, duo_at(path, 0.0), Path(cmd_file).name)
+
+
+def duo_still(path, t):
+    """The same geometry fixed at t (a thumbnail: one frame, no sendcmd)."""
+    return _duo_graph(path, duo_at(path, t))
