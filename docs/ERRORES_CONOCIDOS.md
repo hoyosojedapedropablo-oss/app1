@@ -275,3 +275,14 @@ una prueba automática (entre comillas invertidas) que falla si el error vuelve.
 - **Solución:** la lista del servidor es la misma que la del editor (una prueba lo compara), y la galería usa su propio
   ayudante `tplNode()` en `static/app.js`.
 - **Guardas:** `test_E33_apply_to_all_copies_the_subtitle_design_too`, `test_E33_the_template_gallery_uses_app_js_own_helper`
+
+## E-34 · Los atajos de teclado del editor no funcionaban nunca (nov 2026)
+- **Síntoma:** en el editor, Ctrl+Z / Ctrl+Y (deshacer y rehacer), Ctrl+E (descargar), espacio (reproducir), «?» (ayuda) y
+  «[» / «]» (clip anterior y siguiente) no hacían nada. Apareció al probar que Escape quitara el recuadro de tamaño de la
+  vista previa, que tampoco respondía.
+- **Causa raíz:** antes de atender una tecla, `static/shell.js` miraba si había una ventana abierta con
+  `document.querySelector('.cs-modal')`. La ventana «Quitar de la biblioteca» (`#removeModal`) está siempre en la página,
+  oculta con `hidden`, así que la respuesta era siempre «sí» y todas las teclas se ignoraban.
+- **Solución:** una ventana abierta es una `.cs-modal:not([hidden])`, en `shell.js` y en `app.js` (como ya hacía Alt+←).
+- **Guardas:** `test_E34_an_open_dialog_is_one_not_hidden`
+

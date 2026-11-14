@@ -44,7 +44,7 @@ function paint(){
  const framing=$('framing').value,band=framing==='zoom'?ZOOM[$('zoom').value]:1;$('zoomRow')?.classList.toggle('hidden',framing!=='zoom');
  $('video').style.objectFit=framing==='fit'?'contain':'cover';$('video').style.height=(band*100)+'%';$('video').style.top=((1-band)*50)+'%';
  $('video').style.objectPosition=`${$('focus_x').value}% ${$('focus_y').value}%`;
- paintLogo();
+ paintLogo();if(fontPickers)for(const sync of fontPickers)sync();paintTemplateCard();
  if(job&&selected){const duration=Number($('end').value)-Number($('start').value);$('duration').textContent=`${duration.toFixed(1)} s · formato 9:16`;$('seek').max=Math.max(0,duration);}
  paintTime();
 }
@@ -292,14 +292,14 @@ function refreshTitleImage(ratio){
  const fields=['title','title_font','title_size','title_padding_x','title_padding_y','title_bg_color','title_text_color','title_outline_color','title_outline_width','title_corners'];
  const appearance=Object.fromEntries(fields.map(key=>[key,numeric.includes(key)?Number($(key).value):$(key).value]));
  const signature=JSON.stringify(appearance),node=$('previewTitle');
- const image=node.querySelector('img');if(image)image.style.width=(image.naturalWidth*ratio)+'px';
+ const image=node.querySelector('img');if(image)image.style.width=(image.naturalWidth*ratio*Number($('title_size').value)/Number(image.dataset.size||$('title_size').value))+'px';
  if(signature===titleImageSignature)return;titleImageSignature=signature;const version=++titleImageVersion;clearTimeout(titleImageTimer);
  if(!appearance.title.trim()){node.replaceChildren();return;}
  titleImageTimer=setTimeout(async()=>{try{
   const response=await request('/api/title-preview',jsonOptions({...appearance,start:0,end:1,subtitles:''}));
   const blob=await response.blob();if(version!==titleImageVersion)return;
   if(titleImageURL)URL.revokeObjectURL(titleImageURL);titleImageURL=URL.createObjectURL(blob);
-  const img=new Image();img.style.width='0px';img.alt=appearance.title;img.src=titleImageURL;img.onload=()=>{if(version===titleImageVersion)img.style.width=(img.naturalWidth*$('preview').clientWidth/1080)+'px';};node.replaceChildren(img);
+  const img=new Image();img.style.width='0px';img.alt=appearance.title;img.dataset.size=appearance.title_size;img.src=titleImageURL;img.onload=()=>{if(version===titleImageVersion)img.style.width=(img.naturalWidth*$('preview').clientWidth/1080)+'px';};node.replaceChildren(img);
  }catch(e){if(version===titleImageVersion){node.replaceChildren();titleImageSignature='';say(e.message);}}},100);
 }
 
@@ -715,95 +715,186 @@ function applyMute(){
 requestAnimationFrame(applyMute);
 for(const id of ['mute_words','start','end'])$(id).addEventListener('change',()=>{muteKey='';loadMuteRanges();});
 setInterval(loadMuteRanges,1500);
-// Templates (templates.py): the project's format plus the look of subtitles and title, for every clip in one click.
-let clipTemplates=[];
-async function loadTemplates(keep){
- try{clipTemplates=(await(await request('/api/templates')).json()).templates||[];}catch{clipTemplates=[];}
- const sel=$('templateSelect'),groups={};sel.replaceChildren(new Option('Elige una plantilla…',''));
- for(const t of clipTemplates){const g=t.builtin?'Listas para usar':'Mis plantillas';(groups[g]||=Object.assign(document.createElement('optgroup'),{label:g})).append(new Option(t.builtin?`${t.name} · ${t.niche}`:t.name,t.id));}
- for(const g of ['Listas para usar','Mis plantillas'])if(groups[g])sel.append(groups[g]);
- sel.value=keep||'';paintTemplateButtons();
-}
-function paintTemplateButtons(){const t=clipTemplates.find(x=>x.id===$('templateSelect').value);$('templateApply').disabled=!t||!job;$('templateDelete').hidden=!t||t.builtin;}
-function applyTemplate(t,scope='all'){
- // scope 'clip': only the open clip (what choosing a template shows at once); 'all': every clip of the project.
- if(!job||!t)return;const v=t.values||{},skipped=[];
- // A project in «Cámara + juego» keeps it: a template changes the look, never the format the user chose (E-07, E-31).
- const keepStack=projectConfig.framing==='stack'||$('framing').value==='stack';
- const format=keepStack?{}:{...(v.framing?{framing:v.framing}:{}),...(v.zoom?{zoom:v.zoom}:{})};
- const before=$('framing').value;
- if(scope==='all'&&(Object.keys(format).length||v.show_subtitles!==undefined)){
-  projectConfig={...projectConfig,...format,...(v.show_subtitles!==undefined?{subtitles:!!v.show_subtitles}:{})};
-  showConfig(projectConfig);saveProjectConfig();
-  for(const [id,e] of edits)edits.set(id,{...e,framing:effectiveFraming(projectConfig),zoom:projectConfig.zoom,show_subtitles:projectConfig.subtitles});
-  if(selected)applyProjectToEditor();
- }else if(scope==='clip'&&selected){
-  if(format.framing)$('framing').value=effectiveFraming({...projectConfig,...format});
-  if(format.zoom)$('zoom').value=format.zoom;
-  if(v.show_subtitles!==undefined)$('show_subtitles').checked=!!v.show_subtitles;
- }
- for(const [k,val] of Object.entries(v)){
-  if(['framing','zoom','show_subtitles'].includes(k))continue;const el=$(k);if(!el)continue;
-  if(el.tagName==='SELECT'&&![...el.options].some(o=>o.value===String(val))){skipped.push(String(val));continue;}   // a font not installed
-  if(CHECKS.includes(k))el.checked=!!val;else el.value=val;
- }
- captionKey='';paint();saveCurrent();
- if(scope==='all'){shareSent='';shareStyle(true);}
- if($('framing').value!==before||scope==='all'){if($('framing').value==='stack')loadStackPath().catch(e=>say(e.message));else if($('auto_follow').checked)prepareTracking().catch(e=>say(e.message));}
- const where=scope==='all'?`a los ${job.clips.length} clips`:'a este clip';
- say(`Plantilla «${t.name}» aplicada ${where}.`+(keepStack&&(v.framing||v.zoom)?' Se mantuvo «Cámara + juego».':'')+(skipped.length?` Falta instalar: ${skipped.join(', ')} (se dejó la fuente actual).`:''));
-}
-$('templateSelect').onchange=()=>{paintTemplateButtons();const t=clipTemplates.find(x=>x.id===$('templateSelect').value);if(t)applyTemplate(t,'clip');};
-$('templateApply').onclick=()=>{const t=clipTemplates.find(x=>x.id===$('templateSelect').value);if(t)applyTemplate(t,'all');};
-$('templateSave').onclick=async()=>{
- const name=$('templateName').value.trim();if(!name){say('Escribe un nombre para la plantilla.');$('templateName').focus();return;}
- const look=styles(),values={framing:projectConfig.framing,zoom:projectConfig.zoom};
- for(const k of ['style','font','caption_size','caption_color','outline_color','outline_width','caption_style','caption_accent','caption_upper','caption_y','show_subtitles','title_font','title_size','title_bg_color','title_text_color','title_outline_color','title_outline_width','title_corners','title_padding_x','title_padding_y','logo','logo_width','logo_x','logo_y'])if(k in look)values[k]=look[k];
- try{const t=await(await request('/api/templates',jsonOptions({name,values}))).json();$('templateName').value='';await loadTemplates(t.id);say(`Plantilla «${t.name}» guardada.`);}catch(e){say(e.message);}
-};
-$('templateDelete').onclick=async()=>{const t=clipTemplates.find(x=>x.id===$('templateSelect').value);if(!t||t.builtin)return;
- try{await request(`/api/templates/${t.id}`,{method:'DELETE'});await loadTemplates();say(`Plantilla «${t.name}» borrada.`);}catch(e){say(e.message);}};
-loadTemplates();
-// «Ver todas las plantillas en vivo»: each template on a still of the open clip, with its title and its subtitles moving
-// as they will in the MP4 (same classes as the editor preview).
-let galleryTimer=null;
+// Subtitle templates (templates.py): only the subtitles' look — font, size, colours, outline, animation, accent, capitals
+// and height. «Este clip» shows one on the open clip at once; «Todos» copies it to every clip of the project. The format
+// («Cámara + juego» included), the title and the logo never change.
+const TPL_CARD_W=236;   // a card of the template window, px (3 a row; style.css .tpl-grid)
+const TPL_KEYS=['font','caption_size','caption_color','outline_color','outline_width','caption_style','caption_accent','caption_upper','caption_y'];
+var clipTemplates=[],galleryTimer=null,galleryTab='builtin',tplCardSig='',tplMiniStep=0,tplLastId='';
+async function loadTemplates(){try{clipTemplates=(await(await request('/api/templates')).json()).templates||[];}catch{clipTemplates=[];}tplCardSig='';paintTemplateCard();}
 // app.js's own element helper (the one in shell.js is private to its closure): attributes, on* listeners, text, children.
 function tplNode(tag,attrs={},...kids){const node=document.createElement(tag);
  for(const [k,v] of Object.entries(attrs||{})){if(v==null||v===false)continue;if(k==='class')node.className=v;else if(k==='style')node.style.cssText=v;
   else if(k.startsWith('on'))node.addEventListener(k.slice(2),v);else if(k==='text')node.textContent=v;else node.setAttribute(k,v===true?'':v);}
  for(const kid of kids.flat())if(kid!=null&&kid!==false)node.append(kid.nodeType?kid:document.createTextNode(String(kid)));return node;}
-function templateCard(t,still,sample,title){
- const v=t.values||{},W=158,r=W/1080,z=ZOOM[v.zoom]||ZOOM.balanced;
- const keepStack=projectConfig.framing==='stack'||$('framing').value==='stack';
- const framing=keepStack?'stack':(v.framing||'zoom');
- const shot=tplNode('div',{class:'tpl-shot'+(framing==='zoom'?' zoom':'')});
- if(still)shot.append(tplNode('img',{src:still,alt:'',style:framing==='zoom'?`height:${z*100}%;top:${(1-z)*50}%`:''}));
- const fontOk=f=>[...$('font').options].some(o=>o.value===f);
- if(title)shot.append(tplNode('span',{class:'tpl-title',text:title,style:`font-family:'${v.title_font||'Montserrat'}';background:${v.title_bg_color||'#fff'};color:${v.title_text_color||'#000'};border-radius:${v.title_corners==='square'?'0':'.35em'};top:${framing==='zoom'?(1-z)*50:12}%`}));
- const words=(v.caption_upper?sample.toUpperCase():sample).split(/\s+/).filter(Boolean).slice(0,6);
- const cap=tplNode('span',{class:'tpl-cap cap-'+(v.caption_style||'clasico'),style:`font-family:'${fontOk(v.font)?v.font:'Montserrat'}';font-size:${Math.round((v.caption_size||64)*r*1.15)}px;color:${v.caption_color||'#fff'};-webkit-text-stroke:${Math.max(.6,(v.outline_width||4)*r)}px ${v.outline_color||'#000'};--cap-accent:${v.caption_accent||'#FFE14D'}`});
+function sameValue(a,b){if(typeof a==='boolean'||typeof b==='boolean')return !!a===!!b;if(typeof a==='number'||typeof b==='number')return Number(a)===Number(b);return String(a??'').toLowerCase()===String(b??'').toLowerCase();}
+function currentLook(){const s=styles();return Object.fromEntries(TPL_KEYS.map(k=>[k,s[k]]));}
+// The templates the open clip has now (every value they set matches); the card names the last one applied or saved
+// when it is among them, else the first; none: «Personalizado».
+function activeTemplates(){const look=currentLook();return (clipTemplates||[]).filter(t=>{const v=t.values||{},keys=Object.keys(v).filter(k=>TPL_KEYS.includes(k));return keys.length&&keys.every(k=>sameValue(v[k],look[k]));});}
+function activeTemplate(){const all=activeTemplates();return all.find(t=>t.id===tplLastId)||all[0]||null;}
+function fontInstalled(f){return [...$('font').options].some(o=>o.value===f);}
+// A caption in a template's look (the editor preview's classes): `px` is the width it is drawn at (1080 = the MP4).
+function tplCaption(v,sample,px,min=0){
+ const r=px/1080,words=(v.caption_upper?sample.toUpperCase():sample).split(/\s+/).filter(Boolean).slice(0,6);
+ const font=fontInstalled(v.font)?v.font:'Montserrat',size=Math.max(min,(v.caption_size||64)*r*1.15),stroke=Math.max(.5,(v.outline_width??4)*r*1.4);
+ const cap=tplNode('span',{class:'tpl-cap cap-'+(v.caption_style||'clasico'),style:`font-family:'${font}';font-size:${size.toFixed(1)}px;color:${v.caption_color||'#fff'};-webkit-text-stroke:${stroke.toFixed(2)}px ${v.outline_color||'#000'};--cap-accent:${v.caption_accent||'#ffe14d'};top:${v.caption_y??78}%`});
  const keys=v.caption_style==='palabra_clave'?keyWords(words):new Set();
  words.forEach((w,i)=>{cap.append(tplNode('span',{class:'w'+(keys.has(i)?' key':''),text:w}));if(i<words.length-1)cap.append(document.createTextNode(' '));});
- shot.append(cap);
- const card=tplNode('div',{class:'tpl-card'},shot,tplNode('b',{text:t.name}),tplNode('small',{text:(t.builtin?t.niche:'Mis plantillas')+(keepStack&&v.framing&&v.framing!=='stack'?' · mantiene Cámara + juego':'')}),
-  tplNode('div',{class:'tpl-acts'},tplNode('button',{type:'button',class:'secondary',text:'En este clip',onclick:()=>{$('templateSelect').value=t.id;paintTemplateButtons();applyTemplate(t,'clip');}}),
-   tplNode('button',{type:'button',text:'En todos',onclick:()=>{$('templateSelect').value=t.id;paintTemplateButtons();applyTemplate(t,'all');closeGallery();}})));
- return card;
+ return cap;
 }
-function closeGallery(){clearInterval(galleryTimer);galleryTimer=null;$('tplGallery')?.remove();}
-$('templateGallery').onclick=async()=>{
- if(!clipTemplates.length)await loadTemplates($('templateSelect').value);
- closeGallery();
- const still=job&&selected?`/api/jobs/${job.id}/frame?t=${((selected.start+selected.end)/2).toFixed(1)}`:'';
- const sample=(cues.find(c=>c.text&&c.text.split(/\s+/).length>=3)?.text)||'Así se van a ver tus subtítulos';
- const title=($('title').value||'Así se verá el título de tu clip').slice(0,70);
- const grid=tplNode('div',{class:'tpl-grid'},clipTemplates.map(t=>templateCard(t,still,sample,title)));
- const modal=tplNode('div',{id:'tplGallery',class:'cs-modal',role:'dialog','aria-modal':'true','aria-label':'Plantillas',onclick:e=>{if(e.target===modal)closeGallery();}},
-  tplNode('div',{class:'box tpl-gallery'},tplNode('div',{class:'tpl-head'},tplNode('h2',{text:'Plantillas'}),tplNode('button',{type:'button',class:'secondary',text:'Cerrar',onclick:closeGallery})),
-   tplNode('p',{class:'muted',text:'Así se vería este clip con cada plantilla. «En este clip» la prueba aquí; «En todos» la copia a todos los clips del proyecto.'}),grid));
+function tplSample(){return (cues.find(c=>c.text&&c.text.split(/\s+/).length>=3)?.text)||'Así se van a ver tus subtítulos';}
+function tplStill(){return job&&selected?`/api/jobs/${job.id}/frame?t=${((selected.start+selected.end)/2).toFixed(1)}`:'';}
+// The word being said moves along, as in the MP4 (karaoke, pop, resaltador).
+function tplStep(root,step){for(const cap of root.querySelectorAll('.tpl-cap')){if(!/cap-(karaoke|pop|resaltador)/.test(cap.className))continue;const ws=[...cap.querySelectorAll('.w')];ws.forEach((w,i)=>w.classList.toggle('on',i===step%ws.length));}}
+// The card in the Subtítulos tab: a 9:16 thumbnail with the clip's phrase in the look it has now, the template's name.
+function paintTemplateCard(){
+ const card=$('tplCard');if(!card||!clipTemplates)return;
+ const look=currentLook(),still=tplStill(),sig=JSON.stringify([look,still,clipTemplates.length,tplSample(),tplLastId]);if(sig===tplCardSig)return;tplCardSig=sig;
+ const t=activeTemplate();$('tplActive').textContent=t?t.name:'Personalizado';$('tplNiche').textContent=t?(t.builtin?t.niche:'Mis plantillas'):'El estilo de este clip';
+ const mini=$('tplMini');mini.style.backgroundImage=still?`url("${still}")`:'';mini.replaceChildren(tplCaption(look,tplSample().split(/\s+/).slice(0,3).join(' '),54,6.5));
+ card.disabled=!job||!selected;
+}
+setInterval(()=>{const m=$('tplMini');if(m&&m.offsetParent)tplStep(m,++tplMiniStep);},420);
+function applyTemplate(t,scope='clip'){
+ if(!job||!selected||!t)return;const v=t.values||{},skipped=[],set=[];
+ for(const [k,val] of Object.entries(v)){
+  if(!TPL_KEYS.includes(k))continue;const el=$(k);if(!el)continue;
+  if(el.tagName==='SELECT'&&![...el.options].some(o=>o.value===String(val))){skipped.push(String(val));continue;}   // a font not installed
+  if(CHECKS.includes(k))el.checked=!!val;else el.value=val;set.push(k);
+ }
+ tplLastId=t.id;captionKey='';paint();saveCurrent();
+ const missing=skipped.length?` Falta instalar: ${skipped.join(', ')} (se dejó la fuente actual).`:'';
+ if(scope==='all')shareSubtitles(set).then(()=>say(`Plantilla «${t.name}» aplicada a los ${job.clips.length} clips. El formato, el título y el logo no cambian.`+missing)).catch(e=>say(e.message));
+ else say(`Plantilla «${t.name}» aplicada a este clip.`+missing);
+}
+// «Todos»: only the subtitle values the template set, through the same endpoint as «Aplicar a todos los clips».
+async function shareSubtitles(keys){
+ const look=currentLook(),value=Object.fromEntries(keys.map(k=>[k,look[k]])),jobId=job.id;
+ const r=await(await request(`/api/jobs/${jobId}/edits/shared`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({settings:value})})).json();
+ if(job?.id!==jobId)return;job.clip_edits=r.clip_edits;for(const [id,e] of edits)if(job.clips.some(c=>c.id===id))Object.assign(e,value);
+}
+// The window: «Incluidas» / «Mis plantillas», each template on the open clip (in «Cámara + juego», camera above and game
+// below, as the editor draws it), the active one marked; «Este clip» / «Todos» when hovering; «Guardar mi estilo actual».
+function tplBackground(){
+ const p=stackPath,video=$('video');
+ if($('framing').value==='stack'&&p?.found&&video.readyState>=2){
+  const W=480,H=854,r=W/1080,c=document.createElement('canvas');c.width=W;c.height=H;const ctx=c.getContext('2d');ctx.fillStyle='#0b0b0b';ctx.fillRect(0,0,W,H);
+  try{ctx.drawImage(video,p.cam.x,p.cam.y,p.cam.w,p.cam.h,0,0,W,p.top*r);const g=p.game,x=Math.min(Math.max(0,Math.round(g.left[0]/2)*2),p.width-g.w);
+   ctx.drawImage(video,x,g.y,g.w,g.h,0,(p.top+p.seam)*r,W,p.bottom*r);return {src:c.toDataURL('image/jpeg',.82),stack:true};}catch{}
+ }
+ return {src:tplStill(),stack:false};
+}
+function templateCard(t,bg,sample,active){
+ const v=t.values||{},framing=$('framing').value,z=ZOOM[$('zoom').value]||ZOOM.balanced;
+ const apply=scope=>{applyTemplate(t,scope);if(scope==='all')closeGallery();else paintGallery();};
+ const shot=tplNode('div',{class:'tpl-shot'+(!bg.stack&&framing==='zoom'?' zoom':''),role:'button',tabindex:'0','aria-label':`Probar «${t.name}» en este clip`});
+ shot.onclick=e=>{if(!e.target.closest('button'))apply('clip');};
+ shot.onkeydown=e=>{if(e.key==='Enter'&&e.target===shot){e.preventDefault();apply('clip');}};
+ if(bg.src)shot.append(tplNode('img',{src:bg.src,alt:'',style:!bg.stack&&framing==='zoom'?`height:${z*100}%;top:${(1-z)*50}%`:''}));
+ shot.append(tplCaption(v,sample,TPL_CARD_W));
+ if(active)shot.append(tplNode('span',{class:'tpl-check','aria-label':'Plantilla activa',text:'✓'}));
+ shot.append(tplNode('div',{class:'tpl-hover'},tplNode('button',{type:'button',class:'secondary',text:'Este clip',onclick:()=>apply('clip')}),tplNode('button',{type:'button',text:'Todos',onclick:()=>apply('all')})));
+ const meta=tplNode('div',{class:'tpl-meta'},tplNode('b',{text:t.name}),tplNode('small',{text:t.builtin?t.niche:'Mis plantillas'}));
+ if(!t.builtin){const del=tplNode('button',{type:'button',class:'tpl-del',text:'Borrar',title:'Borrar esta plantilla'});
+  del.onclick=async()=>{if(!del.classList.contains('sure')){del.classList.add('sure');del.textContent='¿Borrar?';setTimeout(()=>{del.classList.remove('sure');del.textContent='Borrar';},3000);return;}
+   try{await request(`/api/templates/${t.id}`,{method:'DELETE'});await loadTemplates();paintGallery();say(`Plantilla «${t.name}» borrada.`);}catch(e){say(e.message);}};meta.append(del);}
+ return tplNode('div',{class:'tpl-card'+(active?' active':'')},shot,meta);
+}
+function closeGallery(){const open=!!$('tplGallery');clearInterval(galleryTimer);galleryTimer=null;$('tplGallery')?.remove();if(open)$('tplCard')?.focus();}
+function paintGallery(){
+ const g=$('tplGallery');if(!g)return;const active=new Set(activeTemplates().map(t=>t.id)),bg=tplBackground(),sample=tplSample();
+ const mine=clipTemplates.filter(t=>!t.builtin),list=galleryTab==='mine'?mine:clipTemplates.filter(t=>t.builtin);
+ for(const b of g.querySelectorAll('.tpl-tab'))b.setAttribute('aria-selected',String(b.dataset.tab===galleryTab));
+ g.querySelector('[data-tab=mine] em').textContent=mine.length;
+ g.querySelector('.tpl-grid').replaceChildren(...(list.length?list.map(t=>templateCard(t,bg,sample,active.has(t.id))):[tplNode('p',{class:'tpl-empty muted',text:'Aún no tienes plantillas propias. Ajusta los subtítulos de este clip y pulsa «Guardar mi estilo actual».'})]));
+}
+function openGallery(){
+ if(!job||!selected)return;closeGallery();
+ const name=tplNode('input',{maxlength:'40',placeholder:'Nombre de tu plantilla','aria-label':'Nombre de tu plantilla'}),err=tplNode('span',{class:'tpl-err'});
+ const saveBtn=tplNode('button',{type:'button',class:'tpl-savebtn',text:'＋ Guardar mi estilo actual'});
+ const form=tplNode('form',{class:'tpl-saveform',hidden:true},name,tplNode('button',{type:'submit',text:'Guardar'}),tplNode('button',{type:'button',class:'secondary',text:'Cancelar',onclick:()=>{form.hidden=true;saveBtn.hidden=false;saveBtn.focus();}}),err);
+ saveBtn.onclick=()=>{form.hidden=false;saveBtn.hidden=true;err.textContent='';name.value='';name.focus();};
+ form.onsubmit=async e=>{e.preventDefault();const n=name.value.trim();if(!n){err.textContent='Escribe un nombre.';name.focus();return;}
+  try{const t=await(await request('/api/templates',jsonOptions({name:n,values:currentLook()}))).json();tplLastId=t.id;await loadTemplates();galleryTab='mine';form.hidden=true;saveBtn.hidden=false;paintGallery();say(`Plantilla «${t.name}» guardada.`);}catch(x){err.textContent=x.message;}};
+ name.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();form.hidden=true;saveBtn.hidden=false;saveBtn.focus();}});
+ const tab=(id,label)=>tplNode('button',{type:'button',role:'tab',class:'tpl-tab','data-tab':id,onclick:()=>{galleryTab=id;paintGallery();}},label,id==='mine'?tplNode('em',{text:'0'}):null);
+ const modal=tplNode('div',{id:'tplGallery',class:'cs-modal',role:'dialog','aria-modal':'true','aria-label':'Plantillas de subtítulos'},
+  tplNode('div',{class:'box tpl-gallery'},
+   tplNode('div',{class:'tpl-head'},tplNode('h2',{text:'Plantillas de subtítulos'}),tplNode('button',{type:'button',class:'tpl-x','aria-label':'Cerrar',text:'×',onclick:closeGallery})),
+   tplNode('div',{class:'tpl-bar'},tplNode('div',{class:'tpl-tabs',role:'tablist'},tab('builtin','Incluidas'),tab('mine','Mis plantillas ')),saveBtn),form,
+   tplNode('p',{class:'muted tpl-note',text:'Así se verían los subtítulos de este clip. Pulsa una para probarla aquí, o «Todos» para copiarla a todos los clips. El formato, el título y el logo no cambian.'}),
+   tplNode('div',{class:'tpl-grid'})));
+ modal.onclick=e=>{if(e.target===modal)closeGallery();};
  modal.addEventListener('keydown',e=>{if(e.key==='Escape')closeGallery();});
- modal.tabIndex=-1;document.body.append(modal);modal.focus();
- // the word being said moves along, as in the MP4 (karaoke, pop, resaltador)
- let step=0;galleryTimer=setInterval(()=>{step++;for(const cap of grid.querySelectorAll('.tpl-cap')){
-  if(!/cap-(karaoke|pop|resaltador)/.test(cap.className))continue;const ws=[...cap.querySelectorAll('.w')];ws.forEach((w,i)=>w.classList.toggle('on',i===step%ws.length));}},420);
-};
+ modal.tabIndex=-1;document.body.append(modal);paintGallery();modal.focus();
+ let step=0;galleryTimer=setInterval(()=>tplStep(modal,++step),420);
+}
+$('tplCard').onclick=async()=>{if(!clipTemplates.length)await loadTemplates();openGallery();};
+loadTemplates();
+
+// Font picker (like CapCut): each font written in its own letters. The original <select> stays, hidden and in sync, so
+// styles(), saving and «Aplicar a todos» work as before; picking one fires the same 'input' event the select does.
+var fontPickers=[];
+function fontPicker(id){
+ const sel=$(id);if(!sel||sel.dataset.picker)return;sel.dataset.picker='1';sel.classList.add('fp-native');sel.tabIndex=-1;sel.setAttribute('aria-hidden','true');
+ const label=sel.previousElementSibling?.tagName==='LABEL'?sel.previousElementSibling.textContent:'Fuente';
+ const name=tplNode('span',{class:'fp-name'}),btn=tplNode('button',{type:'button',class:'fp-btn','aria-haspopup':'listbox','aria-expanded':'false','aria-label':label},name,tplNode('span',{class:'fp-chev','aria-hidden':'true'}));
+ const list=tplNode('div',{class:'fp-list',role:'listbox',tabindex:'-1','aria-label':label,hidden:true}),wrap=tplNode('div',{class:'fp'},btn,list);sel.after(wrap);
+ let idx=0;const opts=()=>[...sel.options];
+ const sync=()=>{if(name.textContent!==sel.value){name.textContent=sel.value;name.style.fontFamily=`'${sel.value}'`;}};
+ const mark=i=>{idx=Math.max(0,Math.min(opts().length-1,i));[...list.children].forEach((n,j)=>n.classList.toggle('kb',j===idx));const n=list.children[idx];if(n){n.scrollIntoView({block:'nearest'});list.setAttribute('aria-activedescendant',n.id);}};
+ const close=focus=>{if(list.hidden)return;list.hidden=true;btn.setAttribute('aria-expanded','false');wrap.classList.remove('open');if(focus)btn.focus();};
+ const pick=i=>{const o=opts()[i];if(!o)return;if(sel.value!==o.value){sel.value=o.value;sel.dispatchEvent(new Event('input',{bubbles:true}));sel.dispatchEvent(new Event('change',{bubbles:true}));}sync();close(true);};
+ const open=()=>{list.replaceChildren(...opts().map((o,i)=>tplNode('div',{role:'option',id:`${id}-fp-${i}`,class:'fp-opt'+(o.value===sel.value?' on':''),'aria-selected':String(o.value===sel.value),style:`font-family:'${o.value}'`,onclick:()=>pick(i)},tplNode('span',{text:o.textContent}),tplNode('i',{class:'fp-check','aria-hidden':'true',text:'✓'}))));
+  list.hidden=false;btn.setAttribute('aria-expanded','true');wrap.classList.add('open');
+  // opens upwards when the panel that scrolls it has no room below (and has it above), else scrolls it into view
+  const box=wrap.closest('.inspector-body')||document.documentElement,b=box.getBoundingClientRect(),r=btn.getBoundingClientRect(),need=list.offsetHeight+8;
+  wrap.classList.toggle('up',b.bottom-r.bottom<need&&r.top-b.top>=need);if(!wrap.classList.contains('up'))list.scrollIntoView({block:'nearest'});mark(opts().findIndex(o=>o.value===sel.value));list.focus({preventScroll:true});};
+ btn.onclick=()=>list.hidden?open():close(true);
+ btn.onkeydown=e=>{if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();open();}};
+ list.onkeydown=e=>{const k=e.key;if(k==='ArrowDown'||k==='ArrowUp'||k==='Home'||k==='End'){e.preventDefault();mark(k==='Home'?0:k==='End'?opts().length-1:idx+(k==='ArrowDown'?1:-1));}
+  else if(k==='Enter'||k===' '){e.preventDefault();pick(idx);}else if(k==='Escape'){e.preventDefault();e.stopPropagation();close(true);}else if(k==='Tab')close(false);};
+ document.addEventListener('pointerdown',e=>{if(!wrap.contains(e.target))close(false);});
+ sel.addEventListener('input',sync);sel.addEventListener('change',sync);fontPickers.push(sync);sync();
+ // the list shows every font in its own letters: load them now (local files), not on the first open
+ if(document.fonts)for(const o of opts())document.fonts.load(`18px '${o.value}'`).catch(()=>{});
+}
+fontPicker('font');fontPicker('title_font');
+
+// Size from the preview (like CapCut): a click on the title, the subtitles or the logo selects it, with a box and four
+// corner handles. Dragging a handle scales it from its centre and sets title_size / caption_size / logo_width within the
+// slider's limits, through the slider's own 'input' event (saveCurrent, and «Aplicar a todos» when it is on). Dragging
+// the element itself still moves it. The box is only in the page: the MP4 is drawn by the server and never has it.
+var selTarget=null,selResize=null;
+const SEL_KEYS={previewTitle:'title_size',previewCaption:'caption_size',previewLogo:'logo_width'};
+const selBox=tplNode('div',{id:'selBox',class:'sel-box',hidden:true},...['nw','ne','sw','se'].map(c=>tplNode('span',{class:'sel-h '+c,'data-corner':c})));
+$('preview').append(selBox);
+function selRect(id){const n=$(id);if(!n||n.hidden)return null;const r=(id==='previewTitle'&&n.querySelector('img')||n).getBoundingClientRect();return r.width>2&&r.height>2?r:null;}
+function placeSel(){
+ if(!selTarget){selBox.hidden=true;return;}
+ const r=selRect(selTarget);if(!r||!$('renderVideo').hidden||!selected){selBox.hidden=true;return;}
+ const p=$('preview').getBoundingClientRect(),pad=4;
+ Object.assign(selBox.style,{left:`${r.left-p.left-pad}px`,top:`${r.top-p.top-pad}px`,width:`${r.width+pad*2}px`,height:`${r.height+pad*2}px`});selBox.hidden=false;
+}
+function selLoop(){if(!selTarget){selBox.hidden=true;return;}placeSel();requestAnimationFrame(selLoop);}
+function selectPreview(id){const was=selTarget;selTarget=id;if(id&&!was)requestAnimationFrame(selLoop);else placeSel();}
+for(const id of Object.keys(SEL_KEYS))$(id).addEventListener('pointerdown',()=>{if(selected)selectPreview(id);});
+document.addEventListener('pointerdown',e=>{if(selTarget&&!selBox.contains(e.target)&&!Object.keys(SEL_KEYS).some(id=>$(id).contains(e.target)))selectPreview(null);},true);
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&selTarget&&!document.querySelector('.cs-modal:not([hidden])'))selectPreview(null);});
+selBox.addEventListener('pointerdown',e=>{
+ const h=e.target.closest('.sel-h');if(!h||!selTarget||!selected)return;e.preventDefault();e.stopPropagation();$('video').pause();
+ const r=selRect(selTarget);if(!r)return;const key=SEL_KEYS[selTarget],input=$(key),cx=r.left+r.width/2,cy=r.top+r.height/2;
+ selResize={key,input,cx,cy,d0:Math.max(6,Math.hypot(e.clientX-cx,e.clientY-cy)),v0:Number(input.value),min:Number(input.min),max:Number(input.max)};try{h.setPointerCapture(e.pointerId);}catch{}
+});
+selBox.addEventListener('pointermove',e=>{
+ const s=selResize;if(!s)return;let v=Math.round(s.v0*Math.hypot(e.clientX-s.cx,e.clientY-s.cy)/s.d0);v=Math.max(s.min,Math.min(s.max,v));
+ if(String(v)===s.input.value)return;s.input.value=v;
+ if(s.key==='logo_width'){   // the logo is placed by its corner: keep its centre where it was
+  const img=$('previewLogo'),pv=$('preview').getBoundingClientRect(),W=pv.width,H=pv.height,ar=img.naturalWidth?img.naturalHeight/img.naturalWidth:1;
+  const w=Math.min(W*v/100,img.naturalHeight?H*.75/ar:Infinity),hh=w*ar,cx=s.cx-pv.left,cy=s.cy-pv.top;
+  $('logo_x').value=Math.max(0,Math.min(100,(cx-w/2)/Math.max(1,W-w)*100));$('logo_y').value=Math.max(0,Math.min(100,(cy-hh/2)/Math.max(1,H-hh)*100));
+ }
+ s.input.dispatchEvent(new Event('input',{bubbles:true}));
+});
+for(const ev of ['pointerup','pointercancel','lostpointercapture'])selBox.addEventListener(ev,()=>{selResize=null;});

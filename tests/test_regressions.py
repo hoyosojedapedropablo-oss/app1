@@ -251,8 +251,16 @@ class RegistryTests(unittest.TestCase):
         """shell.js's h() lives inside its closure: app.js code that calls it fails with «h is not defined»."""
         js = (ROOT / 'static' / 'app.js').read_text(encoding='utf-8')
         self.assertIn('function tplNode(', js)
-        gallery = js[js.index('let galleryTimer'):]
+        gallery = js[js.index('// Subtitle templates (templates.py)'):]
         self.assertFalse(re.findall(r'(?<![\w.$])h\(', gallery))
+
+    def test_E34_an_open_dialog_is_one_not_hidden(self):
+        """#removeModal is always in the page (hidden): «is a dialog open?» must skip hidden ones, or the editor's keys
+        (Ctrl+Z, Ctrl+E, space, ?, [ ]) and Escape on the preview selection never work."""
+        for name in ('app.js', 'shell.js'):
+            js = (ROOT / 'static' / name).read_text(encoding='utf-8')
+            self.assertFalse(re.findall(r"querySelector\((['\"])\.cs-modal\1\)", js), name)
+        self.assertRegex((ROOT / 'static' / 'index.html').read_text(encoding='utf-8'), r'id="removeModal" class="cs-modal"[^>]* hidden')
 
     def test_every_known_error_has_a_guard(self):
         """Each E-xx of docs/ERRORES_CONOCIDOS.md names a test that exists."""
