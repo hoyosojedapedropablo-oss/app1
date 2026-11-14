@@ -3,8 +3,8 @@
 The app is served on a free local port and a headless Chrome or Edge (whichever is installed) opens it through the
 DevTools protocol, at 770x910, 1280x720, 1366x768 and 1920x1080, in live and video mode. For each it checks that the
 header is inside the window, that the buttons are inside the window and at the very end of the card (no empty area
-under them), and that the options body scrolls to its top and to its bottom. Skipped when there is no Chrome/Edge or
-no `websockets` package (it needs nothing else: no paid or new dependency).
+under them), and that the options body scrolls to its top and to its bottom. `websockets` is in requirements.txt: if
+it is missing the tests fail (they never skip for it). Only a machine with neither Chrome nor Edge skips them.
 """
 import json, os, shutil, socket, subprocess, tempfile, threading, time, unittest, urllib.request
 from pathlib import Path
@@ -15,10 +15,7 @@ CANDIDATES = [os.environ.get('CLIPSTUDIO_BROWSER', ''),
               r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe', r'C:\Program Files\Microsoft\Edge\Application\msedge.exe',
               shutil.which('google-chrome') or '', shutil.which('chromium') or '', shutil.which('chromium-browser') or '', shutil.which('msedge') or '']
 BROWSER = next((c for c in CANDIDATES if c and Path(c).exists()), None)
-try:
-    from websockets.sync.client import connect
-except ImportError:          # pragma: no cover - the check is skipped
-    connect = None
+from websockets.sync.client import connect      # in requirements.txt: missing it is an error, not a skip
 
 # Opens the dialog in `mode` and measures it, as the user sees it (the visible area excludes scrollbars).
 MEASURE = r"""
@@ -57,7 +54,13 @@ def free_port():
         s.bind(('127.0.0.1', 0)); return s.getsockname()[1]
 
 
-@unittest.skipUnless(BROWSER and connect, 'needs Chrome or Edge and the websockets package')
+class ConfigDialogRequirementsTests(unittest.TestCase):
+    def test_E35_the_browser_check_needs_only_what_requirements_txt_installs(self):
+        reqs = (Path(__file__).resolve().parents[1] / 'requirements.txt').read_text(encoding='utf-8')
+        self.assertRegex(reqs, r'(?m)^websockets\b')
+
+
+@unittest.skipUnless(BROWSER, 'needs Chrome or Edge installed (set CLIPSTUDIO_BROWSER to its path)')
 class ConfigDialogInABrowserTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -78,12 +81,14 @@ class ConfigDialogInABrowserTests(unittest.TestCase):
             time.sleep(.1)
         debug_port = int(active.read_text().split()[0])
         pages = json.loads(urllib.request.urlopen(f'http://127.0.0.1:{debug_port}/json/list', timeout=5).read())
-        cls.ws = connect(next(p for p in pages if p['type'] == 'page')['webSocketDebuggerUrl'], max_size=None, open_timeout=10)
+        # entered by hand (setUpClass/tearDownClass), as websockets wants connect() used as a context manager
+        cls.conn = connect(next(p for p in pages if p['type'] == 'page')['webSocketDebuggerUrl'], max_size=None, open_timeout=10)
+        cls.ws = cls.conn.__enter__()
         cls.ids = 0
 
     @classmethod
     def tearDownClass(cls):
-        try: cls.ws.close()
+        try: cls.conn.__exit__(None, None, None)
         finally:
             cls.browser.kill(); cls.browser.wait(10); cls.server.should_exit = True
             time.sleep(.3); cls.profile.cleanup()

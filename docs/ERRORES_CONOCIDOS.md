@@ -301,6 +301,7 @@ una prueba automática (entre comillas invertidas) que falla si el error vuelve.
 - **Guardas:** `test_E35_configure_dialog_fits_every_window_in_live_and_video_mode` (Chrome o Edge real, sin interfaz:
   770×910, 1280×720, 1366×768 y 1920×1080, directo y video: encabezado y botones dentro de la pantalla, botones al final
   de la tarjeta, cuerpo desplazable hasta arriba y abajo), `test_E35_the_card_fits_a_dialog_layer_shorter_than_100vh`
-  (la capa 300 px más baja que la ventana: con el CSS anterior el encabezado quedaba en −282 px). Se saltan si no hay
-  Chrome/Edge o el paquete `websockets`.
+  (la capa 300 px más baja que la ventana: con el CSS anterior el encabezado quedaba en −282 px),
+  `test_E35_the_browser_check_needs_only_what_requirements_txt_installs` (`websockets` está en `requirements.txt`; si
+  falta, las pruebas fallan, no se saltan). Solo se saltan en un equipo sin Chrome ni Edge.
 
