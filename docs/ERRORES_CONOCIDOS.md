@@ -251,3 +251,17 @@ una prueba automática (entre comillas invertidas) que falla si el error vuelve.
   `test_E31_nobody_in_the_sessions_camera_means_no_camera`, `test_E31_saved_moments_with_a_wrong_box_are_prepared_again`,
   `test_E31_exports_centre_the_game_by_default`, `test_E31_the_camera_a_centred_game_panel_shows_is_blurred`,
   `test_E31_an_opened_project_takes_the_sessions_camera_unless_marked_by_hand`, `test_E31_the_blur_fades_into_the_game_without_a_cut`
+
+## E-32 · Con la cámara bien encontrada, el panel del juego seguía descentrado y cortaba a los personajes (Epidemic77, nov 2026)
+- **Síntoma:** «¿Podrás tocarla sin que se asuste?» y «¡Vico se amarra…!» (directo reanudado a las 23:01): los personajes
+  salían cortados en el borde izquierdo del panel del juego.
+- **Causa raíz:** E-31 solo cambiaba la caja de la cámara cuando era distinta de la de la sesión; el área del juego de cada
+  momento seguía siendo la suya, y la detección toma a veces el borde de la cámara o una columna del escenario por el borde
+  del juego (x = 544 y x = 928 en esos clips). El juego se centraba en esa área falsa. Además, la sesión reanudada empezó
+  sin ningún momento con el que comparar.
+- **Solución:** el área del juego en la que coincide la sesión (aquí, el cuadro entero) reemplaza la de cada momento aunque su
+  caja sea buena, y al arrancar se rehacen los momentos con el área equivocada. Mientras la sesión tiene menos de 3 momentos
+  con cámara, cuentan también las dos sesiones anteriores del mismo canal.
+- **Guardas:** `test_E32_a_right_camera_with_a_wrong_game_area_gets_the_sessions`, `test_E32_saved_moments_with_a_wrong_game_area_are_prepared_again`,
+  `test_E32_a_restarted_stream_uses_the_channels_last_session`
+

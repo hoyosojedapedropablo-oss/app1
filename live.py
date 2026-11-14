@@ -700,6 +700,12 @@ class LiveSession:
             agreed = layout.consensus_camera(self._session_overlays(exclude=moment['id']) + [overlay])
             if agreed and not overlay.get('manual') and (not overlay.get('found') or layout.iou(overlay, agreed) < .85):
                 overlay = dict(agreed, detected={k: overlay.get(k) for k in ('found', 'x', 'y', 'w', 'h')})
+            elif agreed and not overlay.get('manual') and not layout.same_content(overlay, agreed):
+                # E-32: the camera box was right but the game area was not: each moment may take a column of the scene or
+                # the camera's own edge for a sidebar (Epidemic77: x = 544, 714, 928), and the centred game panel moved
+                # with it, cutting the characters. The game area the session agrees on (the whole frame there) wins.
+                overlay = dict(overlay, detected_content=overlay.get('content')); overlay.pop('content', None)
+                if agreed.get('content'): overlay['content'] = agreed['content']
             result = layout.analyze(target, round(start, 3), round(end, 3), overlay)
             if overlay.get('consensus') and result.get('cam_presence', 1) < .34:
                 # nobody in the session's camera box during this moment (an intro, a full-screen scene): no camera
@@ -717,12 +723,30 @@ class LiveSession:
             moment['layout_error'] = f'{type(error).__name__}: {str(error)[:160]}'
 
     def _session_overlays(self, exclude=None, last=40):
-        """Cameras detected in the session's latest prepared moments (for layout.consensus_camera)."""
+        """Cameras detected in the session's latest prepared moments (for layout.consensus_camera). E-32: while the
+        session has fewer than 3, the channel's two previous sessions count too: a streamer keeps their layout, and a
+        resumed or restarted stream (Epidemic77 at 23:01) started again from nothing."""
         out = []
         for m in self.moments[-last - 1:]:
             if m['id'] == exclude: continue
             try: out.append(json.loads((self.clips / f'{m["id"]}.layout.json').read_text(encoding='utf-8')).get('overlay') or {})
             except (OSError, ValueError): continue
+        if sum(1 for o in out if o.get('found')) < 3 and self.channel:
+            out += self._channel_overlays(last)
+        return out
+
+    def _channel_overlays(self, last=40, sessions=2):
+        """Cameras of the latest prepared moments of the same channel's previous sessions (newest first)."""
+        out, others = [], []
+        for state in self.root.parent.glob('*/state.json'):
+            if state.parent == self.root: continue
+            try: data = json.loads(state.read_text(encoding='utf-8'))
+            except (OSError, ValueError): continue
+            if (data.get('channel') or '').lower() == self.channel.lower(): others.append((state.stat().st_mtime, state.parent, data))
+        for _, folder, data in sorted(others, key=lambda t: -t[0])[:sessions]:
+            for m in (data.get('moments') or [])[-last:]:
+                try: out.append(json.loads((folder / 'moments' / f'{m["id"]}.layout.json').read_text(encoding='utf-8')).get('overlay') or {})
+                except (OSError, ValueError): continue
         return out
 
     def _prepare_follow(self, moment):
@@ -769,7 +793,7 @@ class LiveSession:
             try: ov = json.loads(f.read_text(encoding='utf-8')).get('overlay') or {}
             except (OSError, ValueError): continue
             outlier = agreed and not ov.get('manual') and not ov.get('consensus') and not ov.get('consensus_absent') and \
-                (not ov.get('found') or layout.iou(ov, agreed) < .85)
+                (not ov.get('found') or layout.iou(ov, agreed) < .85 or not layout.same_content(ov, agreed))
             if not outlier and (ov.get('manual') or ov.get('detector', 1) >= layout.DETECTOR_VERSION): continue
             if m.get('status') == 'discarded': continue
             self._prepare_layout(m); redone += 1
