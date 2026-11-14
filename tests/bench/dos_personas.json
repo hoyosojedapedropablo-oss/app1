@@ -1,0 +1,25 @@
+{
+ "descripcion": "Banco de la Fase 4 «Dos personas» (docs/fase4-dos-personas.md, Parte A). Solo referencias a proyectos del usuario: id, inicio y fin en segundos del video del proyecto, y lo que se espera, marcado a mano mirando el video. Los tramos de dos personas y de planos alternos están dentro de una toma (o entre cortes medidos con tracking.scene_cuts).",
+ "clips": [
+  {"id": "duo-topboy", "proyecto": "f196e46c30b848b7845fe39e4a674177", "inicio": 1231.0, "fin": 1258.5, "dividir": true,
+   "tipo": "dos personas a la vez", "nota": "TOPBOY · Sinvergüenza Podcast. Plano abierto (toma 20:30.75–20:58.75): TOPBOY a la izquierda y Kerry Kambell a la derecha, sentados, los dos en todo el tramo."},
+  {"id": "duo-sicarios", "proyecto": "1caab117831b4f0a9756b23b3a35c597", "inicio": 1341.0, "fin": 1366.5, "dividir": true,
+   "tipo": "dos personas a la vez", "nota": "«Así se contratan sicarios» · Más Allá del Silencio. Plano abierto (toma 22:20.55–22:46.87): el entrevistador a la izquierda (de perfil) y el invitado a la derecha."},
+  {"id": "duo-pino", "proyecto": "9469ccc7134e4767ace89407b0c69708", "inicio": 632.0, "fin": 654.3, "dividir": true,
+   "tipo": "dos personas a la vez", "nota": "«El niño que hackeó Harvard…» (Jose Pino). Plano abierto (toma 10:31.71–10:54.53): presentador a la izquierda, Jose Pino a la derecha, a los lados de la mesa."},
+  {"id": "duo-wakanda", "proyecto": "921ec6f65cfa4c27a2e335ecd57a8747", "inicio": 4650.0, "fin": 4680.0, "dividir": true,
+   "tipo": "dos personas a la vez", "nota": "yosoywakanda · «Parchando en el barrio con Jhay P» (directo IRL, sin cortes). Wakanda a la izquierda y Jhay P a la derecha, lado a lado, cámara en mano; Jhay P a menudo de perfil. Sustituye a Reboll333, que no está entre los proyectos."},
+  {"id": "alternos-topboy", "proyecto": "f196e46c30b848b7845fe39e4a674177", "inicio": 1113.5, "fin": 1152.8, "dividir": false,
+   "tipo": "planos alternos", "nota": "TOPBOY · Sinvergüenza Podcast. Primeros planos alternos: TOPBOY (18:33–18:50), un instante de plano abierto (18:50–18:52), Kerry Kambell (18:52–18:59) y TOPBOY otra vez (18:59–19:13)."},
+  {"id": "alternos-sicarios", "proyecto": "1caab117831b4f0a9756b23b3a35c597", "inicio": 903.0, "fin": 935.0, "dividir": false,
+   "tipo": "planos alternos", "nota": "«Así se contratan sicarios». Primer plano del entrevistador (15:02–15:15) y luego del invitado (15:15–15:35): una persona por plano."},
+  {"id": "uno-davoox", "proyecto": "65eb99d5535549c7bb697065875ecaab", "inicio": 3.0, "fin": 28.98, "dividir": false,
+   "tipo": "una persona", "nota": "Davoox, streamer a cámara con auriculares; detrás, un póster con la cara de un futbolista (posible cara falsa)."},
+  {"id": "uno-naim", "proyecto": "4dfc268421b44dd1a89b7cfc2b620ff4", "inicio": 3.0, "fin": 45.215, "dividir": false,
+   "tipo": "una persona", "nota": "NaimDarrechi IRL en un centro comercial, de perfil o tres cuartos, con gente de fondo. No hay un clip de Westcol IRL en el que salga solo."},
+  {"id": "tres-entrenamiento", "proyecto": "a06f34d02ca7441c98fe18805feac849", "inicio": 75.6, "fin": 105.5, "dividir": false,
+   "tipo": "tres o más personas", "nota": "«Sobreviví a un Entrenamiento Táctico con Westcol»: Westcol, Ulises (Ibai) y el instructor juntos, con cortes cada 2–3 s."},
+  {"id": "juego-epidemic", "proyecto": "70f5bc669aef4dd7a1af7ba5c58cd276", "inicio": 3.0, "fin": 19.509, "dividir": false,
+   "tipo": "juego con cámara", "nota": "Epidemic77 · «Me dejo caer como lluvia» (directo, «Cámara + juego»): la cámara del streamer en una esquina y el juego (GTA RP) con personajes."}
+ ]
+}
