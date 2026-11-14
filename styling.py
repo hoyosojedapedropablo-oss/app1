@@ -3,7 +3,12 @@ import re,math
 from pathlib import Path
 from PIL import ImageFont
 ROOT=Path(__file__).parent
-FONTS={'Montserrat':'montserrat.ttf','Poppins':'poppins.ttf','Anton':'anton.ttf','Bebas Neue':'bebasneue.ttf','Oswald':'oswald.ttf','Barlow Condensed':'barlowcondensed.ttf'}
+ALL_FONTS={'Montserrat':'montserrat.ttf','Poppins':'poppins.ttf','Anton':'anton.ttf','Bebas Neue':'bebasneue.ttf','Oswald':'oswald.ttf','Barlow Condensed':'barlowcondensed.ttf',
+           # Fase 3: heavy display faces for the animated subtitle styles (caption_styles.STYLE_FONT)
+           'Montserrat ExtraBold':'montserrat-extrabold.ttf','Montserrat Black':'montserrat-black.ttf','Poppins Black':'poppins-black.ttf',
+           'Luckiest Guy':'luckiestguy.ttf','Bangers':'bangers.ttf'}
+# Only the faces whose file is installed: a missing download falls back to Montserrat instead of failing an export.
+FONTS={name:file for name,file in ALL_FONTS.items() if (ROOT/'static/fonts'/file).exists()}
 
 def ass_color(hex_color):
     value=hex_color.lstrip('#')

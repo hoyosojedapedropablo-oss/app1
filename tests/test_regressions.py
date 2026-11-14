@@ -159,6 +159,38 @@ class E19ResumedSessionGap(unittest.TestCase):
             self.assertEqual(incidents.recent(), [])
 
 
+class E29FontsReachLibass(unittest.TestCase):
+    """E-29 (Nov 2026): montserrat.ttf kept the names «Montserrat Thin» of its variable source and libass drew every
+    Montserrat subtitle in Arial; and a project copied static/fonts only on its first export, so new faces never reached it."""
+    HEAD = ('[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, '
+            'PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, '
+            'Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n')
+    EVENT = ('[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n'
+             'Dialogue: 0,0:00:00.00,0:00:01.00,C,,0,0,0,,Hola\n')
+
+    def test_E29_every_offered_face_is_drawn_with_its_own_file(self):
+        import subprocess, shutil, styling
+        with tempfile.TemporaryDirectory() as tmp:
+            shutil.copytree(ROOT / 'static' / 'fonts', Path(tmp) / 'fonts')
+            for family, file in styling.FONTS.items():
+                style = f'Style: C,{family},64,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,4,0,2,10,10,10,1\n'
+                (Path(tmp) / 'c.ass').write_text(self.HEAD + style + self.EVENT, encoding='utf-8')
+                log = subprocess.run(['ffmpeg', '-v', 'verbose', '-y', '-f', 'lavfi', '-i', 'color=size=320x180:d=0.1', '-frames:v', '1',
+                                      '-vf', 'ass=c.ass:fontsdir=fonts', 'o.png'], cwd=tmp, capture_output=True, text=True).stderr
+                chosen = next((l.split('->')[1] for l in log.splitlines() if 'fontselect:' in l), '')
+                self.assertTrue(chosen, f'{family}: no font selected')
+                self.assertNotIn('Arial', chosen, f'{family} ({file}) falls back: {chosen}')
+
+    def test_E29_an_old_project_gets_the_new_faces(self):
+        import app
+        with tempfile.TemporaryDirectory() as tmp:
+            fonts = Path(tmp) / 'fonts'; fonts.mkdir()
+            (fonts / 'montserrat.ttf').write_bytes(b'old')                                  # an old copy, different
+            app.sync_fonts(fonts)
+            for p in (ROOT / 'static' / 'fonts').glob('*.ttf'):
+                self.assertEqual((fonts / p.name).read_bytes(), p.read_bytes(), p.name)
+
+
 class RegistryTests(unittest.TestCase):
     def test_every_known_error_has_a_guard(self):
         """Each E-xx of docs/ERRORES_CONOCIDOS.md names a test that exists."""

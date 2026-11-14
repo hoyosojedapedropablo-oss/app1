@@ -210,3 +210,12 @@ una prueba automática (entre comillas invertidas) que falla si el error vuelve.
   también la escriben en minúsculas o mixta (WESTCOL con «Westcol» en la descripción); las siglas cortas (VIP) siguen.
 - **Guardas:** `test_E28_a_shouted_word_of_the_stream_title_is_not_a_name`
 
+## E-29 · Los subtítulos en Montserrat salían en Arial, y las fuentes nuevas no llegaban a los proyectos (nov 2026)
+- **Síntoma:** al preparar las fuentes de Fase 3, libass dibujaba «Montserrat» (la fuente por defecto de los subtítulos)
+  con Arial Bold; y un proyecto ya exportado no tenía las fuentes nuevas (Luckiest Guy, Bangers…), que también caían en Arial.
+- **Causa raíz:** `montserrat.ttf` es una instancia 700 de la Montserrat variable, pero conservó los nombres internos
+  «Montserrat Thin»; y `export` copiaba `static/fonts` al proyecto solo si su carpeta no existía.
+- **Solución:** `montserrat.ttf` lleva los nombres «Montserrat» Bold (los dibujos no cambian); `sync_fonts` añade o
+  actualiza en cada exportación las fuentes que falten o hayan cambiado, sin borrar nada.
+- **Guardas:** `test_E29_every_offered_face_is_drawn_with_its_own_file`, `test_E29_an_old_project_gets_the_new_faces`
+
