@@ -462,6 +462,37 @@ def _border_end(ey, cam):
     return best if best and best > r + 4 else None
 
 
+def iou(a, b):
+    """Overlap of two boxes {x, y, w, h}, 0-1."""
+    x0, y0 = max(a['x'], b['x']), max(a['y'], b['y'])
+    x1, y1 = min(a['x'] + a['w'], b['x'] + b['w']), min(a['y'] + a['h'], b['y'] + b['h'])
+    inter = max(0, x1 - x0) * max(0, y1 - y0)
+    return inter / max(1, a['w'] * a['h'] + b['w'] * b['h'] - inter)
+
+
+def consensus_camera(overlays, least=3, agree=.8):
+    """E-31: the camera of a live session, from the moments already prepared. A streamer's camera stays in one place, but
+    each moment is detected on its own and some miss it or get it wrong (Epidemic77: of 31 moments, 3 found no camera
+    and 8 had another box: 450 px tall instead of 376, so the top panel showed a strip of game and two dividing lines).
+    The box most others agree with (overlap >= `agree`) wins; its members' median is the camera, and the game area is
+    the whole frame unless most of them saw the same sidebar. None until `least` moments agree."""
+    found = [o for o in overlays if o and o.get('found') and not o.get('consensus')]
+    if len(found) < least: return None
+    best = max(found, key=lambda o: sum(iou(o, p) >= agree for p in found))
+    group = [p for p in found if iou(best, p) >= agree]
+    if len(group) < least or len(group) < .5 * len(found): return None
+    med = lambda k: int(round(float(np.median([p[k] for p in group])) / 2) * 2)
+    out = {k: best[k] for k in ('width', 'height', 'kind', 'detector') if k in best}
+    out.update(found=True, consensus=True, x=med('x'), y=med('y'), w=med('w'), h=med('h'), presence=1.0,
+               screen=sum(bool(p.get('screen')) for p in group) > len(group) / 2, agreeing=len(group), of=len(found))
+    faces = [p['face'] for p in group if p.get('face')]
+    if faces: out['face'] = {k: round(float(np.median([f[k] for f in faces])), 1) for k in ('x', 'y', 'w', 'h')}
+    contents = [tuple(sorted((p.get('content') or {}).items())) for p in group]
+    common = max(set(contents), key=contents.count)
+    if common and contents.count(common) > len(group) / 2: out['content'] = dict(common)
+    return out
+
+
 def panels(overlay):
     """Top (camera) panel height and the camera crop, centred on the face, with the panel's shape."""
     cw, ch = overlay['w'], overlay['h']
@@ -558,7 +589,13 @@ def game_path(result, motion='balanced', follow=True, cuts=()):
     xs = np.array(result['motion']['xs'] or [centre], dtype=float)
     duration = len(xs) / GAME_FPS
     n = max(2, int(math.ceil(duration * PATH_FPS)) + 1)
-    if not follow or lo >= hi:
+    if not follow:
+        # E-31: without «Seguir la acción», the game panel is the centre of the game area, where games put the character,
+        # the car or the ball, even if a corner of the camera shows: moving it aside put the character at the panel's edge.
+        middle = c['x'] + c['w'] / 2
+        left = [float(min(max(c['x'], middle - gw / 2), c['x'] + c['w'] - gw))] * n
+        return dict(fps=PATH_FPS, left=[round(v, 2) for v in left], window=gw, height=gh, y=gy, static=True)
+    if lo >= hi:
         left = [float(min(max(lo, centre - gw / 2), max(lo, hi)))] * n
         return dict(fps=PATH_FPS, left=[round(v, 2) for v in left], window=gw, height=gh, y=gy, static=True)
     m = MOTION.get(motion, MOTION['balanced'])

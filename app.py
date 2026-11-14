@@ -649,7 +649,7 @@ class Export(BaseModel):
  show_subtitles:bool=True
  title_corners:Literal['rounded','square']='square'
  # 'Cámara + juego' (framing='stack'): follow the game's action, and output size (1440 gives YouTube Shorts more bitrate).
- game_follow:bool=True
+ game_follow:bool=False      # E-31: the game panel is centred unless «Seguir la acción del juego» is on
  resolution:Literal[1080,1440]=1080
  preview:bool=False               # «Comprobar MP4»: not an export, not recorded in the library
  mute_words:bool=False            # «Silenciar malas palabras» (the list is in Configuración)
